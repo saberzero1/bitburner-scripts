@@ -65,6 +65,7 @@ export async function main(ns) {
     // [2024-03-11 09:53:42] Game currently active: 
     log(ns, `Game currently active: `, goGameActive)
 
+    // https://github.com/saberzero1/bitburner-scripts/blob/ipvgo/image.png
     
     // [2024-03-11 09:53:42] [[null,0,0,0,0,0,null,1,1,2,3,null,null],[null,0,0,0,4,2,2,2,2,2,2,2,2],[null,0,4,4,4,2,4,2,5,2,6,2,7],[null,0,0,0,4,4,4,4,5,4,2,2,2],[null,0,0,0,4,0,0,4,4,4,4,2,8],[null,0,9,0,0,0,0,4,2,2,2,2,2],[null,0,0,0,0,0,0,0,0,2,0,2,0],[null,0,0,10,0,0,11,2,2,2,0,0,0],[null,0,0,0,12,0,2,2,0,0,0,13,0],[null,0,0,0,0,0,0,2,0,14,14,0,0],[null,0,0,0,0,15,0,0,0,0,14,0,0],[null,0,0,15,15,15,15,15,0,0,0,0,0],[null,0,0,0,0,0,0,0,0,0,0,0,0]]
     log(ns, ns.go.analysis.getChains())
