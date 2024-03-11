@@ -29,6 +29,17 @@ const goOpponents = ["Netburners", "Slum Snakes", "The Black Hand", "Daedalus", 
 // https://github.com/bitburner-official/bitburner-src/blob/4d5401f62e5c7a8080c6ddbbc74d0a2259759fdb/src/Go/effects/effect.ts#L112-L123
 // Optimal strategy seems to be to get a 8 loss streak, then get a 8 win streak.
 
+// https://github.com/bitburner-official/bitburner-src/tree/dev/src/Go/boardAnalysis
+// First option: grab the game's board analysis and always grab the best move.
+// Possibly check all moves and play the most optimal, if performance allows it.
+
+// Check if there is a cap to winning bonus.
+// If there is, stop playing after a max bonus.
+// If there is not, keep playing.
+
+// Determine what the optimal opponent is based on current bonuses.
+// Possibly keep track of current winstreak per opponent.
+
 export function autocomplete(data, args) {
     data.flags(argsSchema);
     return [];
