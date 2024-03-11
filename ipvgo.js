@@ -24,7 +24,11 @@ const argsSchema = [
     ['reputation-threshold', 0.2], // By default, if we are this close to the rep needed for an unowned stanek upgrade (e.g. "Stanek's Gift - Serenity"), we will keep charging despite the 'max-charges' setting
 ];
 
+const interval = 1000; // Update (tick) this often to check on game and make a move.
 const goOpponents = ["Netburners", "Slum Snakes", "The Black Hand", "Daedalus", "Illuminati", "w0r1d_d43m0n"];
+let goWinStreak = [0, 0, 0, 0, 0, 0];
+
+let goGameActive = false;
 
 // https://github.com/bitburner-official/bitburner-src/blob/4d5401f62e5c7a8080c6ddbbc74d0a2259759fdb/src/Go/effects/effect.ts#L112-L123
 // Optimal strategy seems to be to get a 8 loss streak, then get a 8 win streak.
@@ -54,6 +58,46 @@ export async function main(ns) {
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     disableLogs(ns, ['sleep', 'run', 'getServerMaxRam', 'getServerUsedRam'])
 
+    goGameActive = ns.go.getBoardState().previousPlayer !== null;
+    
+    // Seems like the boards are transposed 90 degrees clockwise.
+
+    // [2024-03-11 09:53:42] Game currently active: 
+    log(ns, `Game currently active: `, goGameActive)
+
+    
+    // [2024-03-11 09:53:42] [[null,0,0,0,0,0,null,1,1,2,3,null,null],[null,0,0,0,4,2,2,2,2,2,2,2,2],[null,0,4,4,4,2,4,2,5,2,6,2,7],[null,0,0,0,4,4,4,4,5,4,2,2,2],[null,0,0,0,4,0,0,4,4,4,4,2,8],[null,0,9,0,0,0,0,4,2,2,2,2,2],[null,0,0,0,0,0,0,0,0,2,0,2,0],[null,0,0,10,0,0,11,2,2,2,0,0,0],[null,0,0,0,12,0,2,2,0,0,0,13,0],[null,0,0,0,0,0,0,2,0,14,14,0,0],[null,0,0,0,0,15,0,0,0,0,14,0,0],[null,0,0,15,15,15,15,15,0,0,0,0,0],[null,0,0,0,0,0,0,0,0,0,0,0,0]]
+    log(ns, ns.go.analysis.getChains())
+
+    // [2024-03-11 09:53:42] [[-1,-1,-1,-1,-1,-1,-1,-1,-1,20,-1,-1,-1],[-1,-1,-1,-1,13,20,20,20,20,20,20,20,20],[-1,-1,13,13,13,20,13,20,-1,20,-1,20,-1],[-1,-1,-1,-1,13,13,13,13,-1,13,20,20,20],[-1,-1,-1,-1,13,-1,-1,13,13,13,13,20,-1],[-1,-1,4,-1,-1,-1,-1,13,20,20,20,20,20],[-1,-1,-1,-1,-1,-1,-1,-1,-1,20,-1,20,-1],[-1,-1,-1,4,-1,-1,2,20,20,20,-1,-1,-1],[-1,-1,-1,-1,4,-1,20,20,-1,-1,-1,4,-1],[-1,-1,-1,-1,-1,-1,-1,20,-1,7,7,-1,-1],[-1,-1,-1,-1,-1,12,-1,-1,-1,-1,7,-1,-1],[-1,-1,-1,12,12,12,12,12,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1]]
+    log(ns, ns.go.analysis.getLiberties())
+
+    // [2024-03-11 09:53:42] ["#?????#XX.X##","#???.........","#?......?.X.X","#???....?....","#???.??.....X","#?.????......","#????????.?.?","#??.??....???","#???.?..???.?","#??????.?..??","#????.????.??","#??.....?????","#????????????"]
+    log(ns, ns.go.analysis.getControlledEmptyNodes())
+
+    // Start the main loop
+    while (true) {
+        try { 
+            if (goGameActive) {
+                await playGo(ns); 
+            }
+            else {
+                ns.go.resetBoardState(goOpponents[0], 13);
+                goGameActive = true;
+            }
+        }
+        catch (err) {
+            log(ns, `WARNING: ipvgo.js Caught (and suppressed) an unexpected error in the main loop:\n` +
+                (err?.stack || '') + (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
+        }
+        await ns.sleep(interval);
+    }
+}
+
+/**
+ * Play the game
+ */
+async function playGo(ns) {
     let result;
 
     do {
@@ -79,7 +123,11 @@ export async function main(ns) {
 
     // After the opponent passes, end the game by passing as well
     await ns.go.passTurn();
+
+    // Game is over
+    goGameActive = false;
 }
+
 
 /**
  * Choose one of the empty points on the board at random to play
