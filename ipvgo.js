@@ -68,8 +68,7 @@ export function autocomplete(data, args) {
 
 let options, currentServer, sf4Level;
 
-const ownedSourceFiles = await getActiveSourceFiles(ns, false);
-let CHEATS = (ownedSourceFiles[13] || 0) >= 2;
+let CHEATS = false;
 let STYLE = 0;
 const REPEAT = true;
 let currentValidMovesTurn = 0; //The turn count that the currentValidMoves is valid for
@@ -84,6 +83,12 @@ export async function main(ns) {
 	/*ns.write("goLog.txt","Starting log at "+Date.now()+"\n","w")
 	  ns.tail()
 	  ns.disableLog("ALL")*/
+	const ownedSourceFiles = await getActiveSourceFiles(ns, false);
+	CHEATS = (ownedSourceFiles[14] || 0) >= 2;
+	if (CHEATS)
+		ns.print("IPvGO Cheating Enabled!")
+	else
+		ns.print("IPvGO Cheating Disabled!")
 	const startBoard = ns.go.getBoardState();
 	let inProgress = false;
 	turn = 0;
