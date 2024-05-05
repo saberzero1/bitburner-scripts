@@ -1644,24 +1644,27 @@ export async function main(ns) {
 		} // end of turn >= 3
 
 		if (results?.type === "gameOver") {
-			let finalResult = ns.go.getGameState();
+			/*let finalResult = ns.go.getGameState();
 			let playerWonGoGame = finalResult.whiteScore < finalResult.blackScore;
 			let printGameResultString = playerWonGoGame
 				? `Player won against ${ns.go.getOpponent()} with score ${finalResult.blackScore} vs ${finalResult.whiteScore}.`
-				: `Player lost against ${ns.go.getOpponent()} with score ${finalResult.blackScore} vs ${finalResult.whiteScore}.`;
-			log(ns, printGameResultString, true, playerWonGoGame ? "success", "warning");
+				: `Player lost against ${ns.go.getOpponent()} with score ${finalResult.blackScore} vs ${finalResult.whiteScore}.`;*/
+			let nextOpponent;
 			if (!REPEAT) return;
 			try {
+				nextOpponent = opponent2[Math.floor(Math.random() * opponent2.length)];
 				ns.go.resetBoardState(
-					opponent2[Math.floor(Math.random() * opponent2.length)],
+					nextOpponent,
 					13
 				);
 			} catch {
+				nextOpponent = opponent[Math.floor(Math.random() * opponent.length)];
 				ns.go.resetBoardState(
-					opponent[Math.floor(Math.random() * opponent.length)],
+					nextOpponent,
 					13
 				);
 			}
+			log(ns, `Finished IPvGO game. Starting new game versus ${nextOpponent}`, true, "success");
 			inProgress = false;
 			turn = 0;
 			ns.clearLog();
