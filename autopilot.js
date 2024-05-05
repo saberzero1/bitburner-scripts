@@ -390,8 +390,8 @@ async function checkOnRunningScripts(ns, player) {
     let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
     if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
         goLaunched = true;
-        const goArgs = ['--reserved-ram', 32 * 4, "--no-tail", false]
-        if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
+        const goArgs = ["--reserved-ram", 128, "--no-tail", false]
+        //if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
         launchScriptHelper(ns, 'ipvgo.js', goArgs);
         goRunning = true;
     }
