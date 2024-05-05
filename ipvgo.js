@@ -19,6 +19,7 @@ const defaultCompletionScript = getFilePath("daemon.js");
 const defaultCompletionArgs = [];
 
 const argsSchema = [
+	["enable-cheats", true] // Enable cheats.
 	["reserved-ram", 32], // Don't use this RAM
 	["reserved-ram-ideal", 64], // Leave this amount of RAM free if it represents less than 5% of available RAM
 	//['max-charges', 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
@@ -67,7 +68,8 @@ export function autocomplete(data, args) {
 
 let options, currentServer, sf4Level;
 
-let CHEATS = false;
+const ownedSourceFiles = await getActiveSourceFiles(ns, false);
+let CHEATS = (ownedSourceFiles[13] || 0) >= 2;
 let STYLE = 0;
 const REPEAT = true;
 let currentValidMovesTurn = 0; //The turn count that the currentValidMoves is valid for
@@ -3235,7 +3237,6 @@ async function movePiece(
 	const [x, y] = coords;
 	if (x === undefined) return undefined;
 	if (CHEATS) {
-		/*
 			try {
 				const chance = ns.go.cheat.getCheatSuccessChance()
 				if (chance < .7) return ns.go.makeMove(x, y)
@@ -3254,7 +3255,7 @@ async function movePiece(
 			}
 			catch {
 				return await ns.go.makeMove(x, y)
-			}*/
+			}
 	}
 	//else return await ns.go.makeMove(x, y)
 	else {
