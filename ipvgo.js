@@ -19,7 +19,7 @@ const defaultCompletionScript = getFilePath("daemon.js");
 const defaultCompletionArgs = [];
 
 const argsSchema = [
-	["enable-cheats", true] // Enable cheats.
+	//["enable-cheats", true] // Enable cheats.
 	["reserved-ram", 128], // Don't use this RAM
 	["reserved-ram-ideal", 256], // Leave this amount of RAM free if it represents less than 5% of available RAM
 	['max-charges', 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
@@ -1644,6 +1644,12 @@ export async function main(ns) {
 		} // end of turn >= 3
 
 		if (results?.type === "gameOver") {
+			let finalResult = ns.go.getGameState();
+			let playerWonGoGame = finalResult.whiteScore < finalResult.blackScore;
+			let printGameResultString = playerWonGoGame
+				? `Player won against ${ns.go.getOpponent()} with score ${finalResult.blackScore} vs ${finalResult.whiteScore}.`
+				: `Player lost against ${ns.go.getOpponent()} with score ${finalResult.blackScore} vs ${finalResult.whiteScore}.`;
+			log(ns, printGameResultString, true, playerWonGoGame ? "success", "warning");
 			if (!REPEAT) return;
 			try {
 				ns.go.resetBoardState(
