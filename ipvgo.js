@@ -20,8 +20,8 @@ const defaultCompletionArgs = [];
 
 const argsSchema = [
 	["enable-cheats", true] // Enable cheats.
-	["reserved-ram", 32], // Don't use this RAM
-	["reserved-ram-ideal", 64], // Leave this amount of RAM free if it represents less than 5% of available RAM
+	["reserved-ram", 128], // Don't use this RAM
+	["reserved-ram-ideal", 256], // Leave this amount of RAM free if it represents less than 5% of available RAM
 	['max-charges', 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
 	// By default, starting an augmentation with stanek.js will still spawn daemon.js, but will instruct it not to schedule any hack cycles against home by 'reserving' all its RAM
 	// TODO: Set these defaults in some way that the user can explicitly specify that they want to run **no** startup script and **no** completion script
