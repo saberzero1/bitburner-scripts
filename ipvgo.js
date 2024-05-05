@@ -83,6 +83,7 @@ export async function main(ns) {
 	/*ns.write("goLog.txt","Starting log at "+Date.now()+"\n","w")
 	  ns.tail()
 	  ns.disableLog("ALL")*/
+	if (!options['no-tail']) ns.tail();
 	const ownedSourceFiles = await getActiveSourceFiles(ns, false);
 	CHEATS = (ownedSourceFiles[14] || 0) >= 2;
 	if (CHEATS)
