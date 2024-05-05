@@ -578,8 +578,9 @@ async function maybeInstallAugmentations(ns, player) {
     // Kick off ascend.js
     let errLog;
     const ascendArgs = ['--install-augmentations', true, '--on-reset-script', ns.getScriptName()]
-    if (affordableAugCount == 0) // If we know we have 0 augs, but still wish to reset, we must enable soft resetting
-        ascendArgs.push("--allow-soft-reset")
+    //if (affordableAugCount == 0) // If we know we have 0 augs, but still wish to reset, we must enable soft resetting
+    //    ascendArgs.push("--allow-soft-reset")
+    ascendArgs.push("--allow-soft-reset")
     let pid = launchScriptHelper(ns, 'ascend.js', ascendArgs);
     if (pid) {
         await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down (Ascend should get killed as it does, since the BN will be rebooting)
