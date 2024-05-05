@@ -87,9 +87,9 @@ export async function main(ns) {
 	const ownedSourceFiles = await getActiveSourceFiles(ns, false);
 	CHEATS = (ownedSourceFiles[14] || 0) >= 2;
 	if (CHEATS)
-		log(ns, "IPvGO Cheating Enabled!")
+		log(ns, "IPvGO Cheating Enabled!", true, 'warning')
 	else
-		log(ns, "IPvGO Cheating Disabled!")
+		log(ns, "IPvGO Cheating Disabled!", true, 'warning')
 	const startBoard = ns.go.getBoardState();
 	let inProgress = false;
 	turn = 0;
