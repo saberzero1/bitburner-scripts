@@ -375,8 +375,6 @@ async function checkOnRunningScripts(ns, player) {
     // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
     if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
         daemonArgs.push('--reserved-ram', 32 * (unlockedSFs[4] == 2 ? 4 : 16));
-    else // IPvGO
-        daemonArgs.push('--reserved-ram', 32 * 4);
 
     // Once stanek's gift is accepted, launch it once per reset (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
     let stanekRunning = (13 in unlockedSFs) && findScript('stanek.js') !== undefined;
@@ -392,7 +390,7 @@ async function checkOnRunningScripts(ns, player) {
     let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
     if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
         goLaunched = true;
-        const goArgs = ["", getFilePath('deamon.js')]
+        const goArgs = ['--reserved-ram', 32 * 4]
         if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
         launchScriptHelper(ns, 'ipvgo.js', goArgs);
         goRunning = true;
