@@ -390,7 +390,7 @@ async function checkOnRunningScripts(ns, player) {
     let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
     if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
         goLaunched = true;
-        const goArgs = ["--reserved-ram", 128, "--no-tail", false]
+        const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
         if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
         launchScriptHelper(ns, 'ipvgo.js', goArgs);
         goRunning = true;
