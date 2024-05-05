@@ -7,7 +7,7 @@ import {
 const persistentLog = "log.autopilot.txt";
 const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produced by faction manager with status information
 const casinoFlagFile = "/Temp/ran-casino.txt";
-const defaultBnOrder = [4.3, 1.3, 5.1, 9.2, 10.1, 2.1, 8.2, 10.3, 9.3, 11.3, 13.3, 5.3, 7.1, 6.3, 7.3, 2.3, 8.3, 3.3, 13.3, 12.999];
+const defaultBnOrder = [4.3, 1.3, 5.1, 9.2, 10.1, 2.1, 8.2, 10.3, 9.3, 11.3, 13.3, 14.3, 5.3, 7.1, 6.3, 7.3, 2.3, 8.3, 3.3, 12.999];
 
 let options; // The options used at construction time
 const argsSchema = [ // The set of all command line arguments
@@ -48,7 +48,7 @@ let reserveForDaedalus = false, daedalusUnavailable = false; // Flags to indicat
 let lastScriptsCheck = 0; // Last time we got a listing of all running scripts
 let killScripts = []; // A list of scripts flagged to be restarted due to changes in priority
 let dictOwnedSourceFiles = [], unlockedSFs = [], bitnodeMults, nextBn = 0; // Info for the current bitnode
-let installedAugmentations = [], playerInstalledAugCount = 0, stanekLaunched = false; // Info for the current ascend
+let installedAugmentations = [], playerInstalledAugCount = 0, stanekLaunched = false, goLaunched = false; // Info for the current ascend
 let daemonStartTime = 0; // The time we personally launched daemon.
 let installCountdown = 0; // Start of a countdown before we install augmentations.
 let bnCompletionSuppressed = false; // Flag if we've detected that we've won the BN, but are suppressing a restart
@@ -94,7 +94,7 @@ async function startUp(ns) {
 
     // Reset global state
     playerInGang = rushGang = playerInBladeburner = ranCasino = reserveForDaedalus = daedalusUnavailable =
-        bnCompletionSuppressed = stanekLaunched = false;
+        bnCompletionSuppressed = stanekLaunched = goLaunched = false;
     playerInstalledAugCount = wdHack = null;
     installCountdown = daemonStartTime = lastScriptsCheck = reservedPurchase = 0;
     lastStatusLog = "";
@@ -384,6 +384,16 @@ async function checkOnRunningScripts(ns, player) {
         if (daemonArgs.length >= 0) stanekArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs)); // Pass in all the args we wanted to run daemon.js with
         launchScriptHelper(ns, 'stanek.js', stanekArgs);
         stanekRunning = true;
+    }
+
+    // IPvGO 
+    let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
+    if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
+        goLaunched = true;
+        const goArgs = ["", getFilePath('deamon.js')]
+        if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
+        launchScriptHelper(ns, 'ipvgo.js', goArgs);
+        goRunning = true;
     }
 
     // Launch daemon with the desired arguments (or re-launch if we recently decided to switch to looping mode) - so long as stanek isn't charging
