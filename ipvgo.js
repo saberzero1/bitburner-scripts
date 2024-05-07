@@ -3577,14 +3577,16 @@ const expand7 = [
 
 // Original
 const opponent = [
-  /*"Netburners", */ "Slum Snakes",
+ "Netburners",
+ "Slum Snakes",
 	"The Black Hand",
 	"Tetrads",
 	"Daedalus",
 	"Illuminati",
 ];
 const opponent2 = [
-  /*"Netburners", */ "Slum Snakes",
+ "Netburners",
+ "Slum Snakes",
 	"The Black Hand",
 	"Tetrads",
 	"Daedalus",
