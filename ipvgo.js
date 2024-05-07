@@ -74,6 +74,7 @@ const REPEAT = true;
 let currentValidMovesTurn = 0; //The turn count that the currentValidMoves is valid for
 let currentValidMoves; //All valid moves for this turn
 let turn = 0;
+let resolveStuck = 0; //To check for stuck board
 /** @param {NS} ns */
 export async function main(ns) {
 	const runOptions = getConfiguration(ns, argsSchema);
@@ -93,6 +94,7 @@ export async function main(ns) {
 	const startBoard = ns.go.getBoardState();
 	let inProgress = false;
 	turn = 0;
+	resolveStuck = 0;
 	for (let x = 0; x < startBoard[0].length; x++) {
 		for (let y = 0; y < startBoard[0].length; y++) {
 			if (startBoard[x][y] === "X") {
@@ -108,6 +110,7 @@ export async function main(ns) {
 	while (true) {
 		await ns.sleep(1);
 		turn++;
+		resolveStuck++;
 		const board = ns.go.getBoardState();
 		const contested = ns.go.analysis.getControlledEmptyNodes();
 		const validMove = ns.go.analysis.getValidMoves();
@@ -1667,6 +1670,7 @@ export async function main(ns) {
 			log(ns, `Finished IPvGO game. Starting new game versus ${nextOpponent}`, true, "success");
 			inProgress = false;
 			turn = 0;
+			resolveStuck = 0;
 			ns.clearLog();
 			getStyle(ns);
 		}
@@ -3254,7 +3258,7 @@ async function movePiece(
 	if (CHEATS) {
 			try {
 				const chance = ns.go.cheat.getCheatSuccessChance()
-				if (chance < .7) return ns.go.makeMove(x, y)
+				if (chance < .7 && resolveStuck < 255) return ns.go.makeMove(x, y)
 				//let [rndx, rndy] = getRandomBolster(ns, board, validMove, validLibMoves, contested, chains, 2, 1)
 				//if (rndx === undefined || (rndx === x && rndy === y)) [rndx, rndy] = getRandomBolster(ns, board, validMove, validLibMoves, contested, chains, 3, 1)
 				let [rndx, rndy] = getRandomAttack(ns, board, validMove, validLibMoves, contested, 2, 2)
@@ -3263,6 +3267,7 @@ async function movePiece(
 				if (rndx === undefined || (rndx === x && rndy === y)) [rndx, rndy] = getExpandPattern(ns, board, testBoard, validLibMoves, validMove, contested)
 				if (rndx === undefined || (rndx === x && rndy === y)) [rndx, rndy] = getRandomExpand(ns, board, validMove, validLibMoves, contested)
 				if (rndx !== undefined && (rndx !== x && rndy !== y)) {
+					if (resolveStuck >= 255) return ns.go.makeMove(rndx, rndy)
 					ns.print("Cheater!")
 					return await ns.go.cheat.playTwoMoves(x, y, rndx, rndy)
 				}
