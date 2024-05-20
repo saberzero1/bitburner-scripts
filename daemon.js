@@ -281,7 +281,7 @@ export async function main(ns) {
     asynchronousHelpers = [
         { name: "stats.js", shouldRun: () => reqRam(64) }, // Adds stats not usually in the HUD
         { name: "stockmaster.js", shouldRun: () => reqRam(64), args: openTailWindows ? ["--show-market-summary"] : [], tail: openTailWindows }, // Start our stockmaster
-        { name: "hacknet-upgrade-manager.js", shouldRun: () => reqRam(64), args: ["-c", "--max-payoff-time", "1h"] }, // Kickstart hash income by buying everything with up to 1h payoff time immediately
+        { name: "hacknet-upgrade-manager.js", shouldRun: () => reqRam(64), args: ["-c", "--max-payoff-time", "168h"] }, // Was 1h,  Kickstart hash income by buying everything with up to 1h payoff time immediately
         { name: "spend-hacknet-hashes.js", args: [], shouldRun: () => reqRam(64) && 9 in dictSourceFiles }, // Always have this running to make sure hashes aren't wasted
         { name: "sleeve.js", tail: openTailWindows, shouldRun: () => 10 in dictSourceFiles }, // Script to create manage our sleeves for us
         { name: "gangs.js", tail: openTailWindows, shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
@@ -310,8 +310,8 @@ export async function main(ns) {
         { interval: 26000, name: "/Tasks/program-manager.js", shouldRun: () => 4 in dictSourceFiles && ownedCracks.length != 5 },
         { interval: 27000, name: "/Tasks/contractor.js", requiredServer: "home" }, // Periodically look for coding contracts that need solving
         // Buy every hacknet upgrade with up to 4h payoff if it is less than 10% of our current money or 8h if it is less than 1% of our current money.
-        { interval: 28000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "4h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.1] },
-        { interval: 28500, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "8h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.01] },
+        { interval: 28000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "1E100h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.1] },
+        { interval: 28500, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "1E100h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.01] },
         // Buy upgrades regardless of payoff if they cost less than 0.1% of our money
         { interval: 29000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "1E100h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.001] },
         {
