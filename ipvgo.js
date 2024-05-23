@@ -3589,7 +3589,8 @@ const opponent = [
 	"Daedalus",
 	"Illuminati",
 ];
-const opponent2 = [
+const opponent2 = (Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo()')).lastNodeReset) > (2 * 60 * 60 * 1000)
+? [
  "Netburners",
  "Slum Snakes",
 	"The Black Hand",
@@ -3597,4 +3598,5 @@ const opponent2 = [
 	"Daedalus",
 	"Illuminati",
 	"????????????",
-];
+]
+: ["Tetrads"];
