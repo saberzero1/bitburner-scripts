@@ -1,8 +1,9 @@
 import { log, getConfiguration, instanceCount, disableLogs, getActiveSourceFiles, getNsDataThroughFile, runCommand, formatMoney, formatDuration } from './helpers.js'
 
 const argsSchema = [
+    ['min-shock-recovery-before-gang', 95], // Minimum shock recovery before gangs are unlocked.
     ['min-shock-recovery', 0], //97// Minimum shock recovery before attempting to train or do crime (Set to 100 to disable, 0 to recover fully)
-    ['shock-recovery', 0.05], // Set to a number between 0 and 1 to devote that ratio of time to periodic shock recovery (until shock is at 0)
+    ['shock-recovery', 0.20], //0.05// Set to a number between 0 and 1 to devote that ratio of time to periodic shock recovery (until shock is at 0)
     ['crime', null], // If specified, sleeves will perform only this crime regardless of stats
     ['homicide-chance-threshold', 0.5], // Sleeves on crime will automatically start homicide once their chance of success exceeds this ratio
     ['disable-gang-homicide-priority', false], // By default, sleeves will do homicide to farm Karma until we're in a gang. Set this flag to disable this priority.
@@ -215,7 +216,9 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     if (sleeve.sync < 100)
         return ["synchronize", `ns.sleeve.setToSynchronize(ns.args[0])`, [i], `syncing... ${sleeve.sync.toFixed(2)}%`];
     // Opt to do shock recovery if above the --min-shock-recovery threshold
-    if (sleeve.shock > options['min-shock-recovery'])
+    if (sleeve.shock > options['min-shock-recovery-before-gang'])
+        return shockRecoveryTask(sleeve, i, `shock is above ${options['min-shock-recovery-before-gang'].toFixed(0)}% (--min-shock-recovery-before-gang)`);
+    if (sleeve.shock > options['min-shock-recovery'] && !(!playerInGang && !options['disable-gang-homicide-priority'] && (2 in ownedSourceFiles) && ns.heart.break() > -54000))
         return shockRecoveryTask(sleeve, i, `shock is above ${options['min-shock-recovery'].toFixed(0)}% (--min-shock-recovery)`);
     // To time-balance between being useful and recovering from shock more quickly - sleeves have a random chance to be put
     // on shock recovery. To avoid frequently interrupting tasks that take a while to complete, only re-roll every so often.
