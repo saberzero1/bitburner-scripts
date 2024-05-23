@@ -1656,7 +1656,7 @@ export async function main(ns) {
 			if (!REPEAT) return;
 			try {
 				nextOpponent = (Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo()')).lastNodeReset) < (2 * 60 * 60 * 1000)
-				? ["Tetrads"]
+				? "Tetrads"
 				: opponent2[Math.floor(Math.random() * opponent2.length)];
 				ns.go.resetBoardState(
 					nextOpponent,
