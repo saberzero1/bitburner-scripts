@@ -1655,7 +1655,9 @@ export async function main(ns) {
 			let nextOpponent;
 			if (!REPEAT) return;
 			try {
-				nextOpponent = opponent2[Math.floor(Math.random() * opponent2.length)];
+				nextOpponent = (Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo()')).lastNodeReset) < (2 * 60 * 60 * 1000)
+				? ["Tetrads"]
+				: opponent2[Math.floor(Math.random() * opponent2.length)];
 				ns.go.resetBoardState(
 					nextOpponent,
 					13
@@ -3589,8 +3591,7 @@ const opponent = [
 	"Daedalus",
 	"Illuminati",
 ];
-const opponent2 = (Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo()')).lastNodeReset) > (2 * 60 * 60 * 1000)
-? [
+const opponent2 = [
  "Netburners",
  "Slum Snakes",
 	"The Black Hand",
@@ -3598,5 +3599,4 @@ const opponent2 = (Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo
 	"Daedalus",
 	"Illuminati",
 	"????????????",
-]
-: ["Tetrads"];
+];
