@@ -115,7 +115,8 @@ const argsSchema = [
 	["sleep-Between-Infiltration-Time", 5000], // Sleep between Infiltration
 	["getMoney", ""], // Use this to boost Player Money
 	["stock", true], // Use Stockvalue for getMoney
-	["verbose", false], // Print Output to terminal
+	["verbose", true], // Print Output to terminal
+	['click-sleep-time', 1],
 ];
 
 /**
@@ -314,7 +315,7 @@ async function infiltrateForMoney(ns, player, maxMoney, target, stock = true) {
 async function infiltrate(ns, city, target, faction) {
 	let completet = false;
 	if (city) {
-		await getNsDataThroughFile(ns, "ns.singularity.travelToCity(ns.args[0])", "/Temp/travel.txt", [city]);
+		await getNsDataThroughFile(ns, "ns.singularity.travelToCity(ns.args[0])", null, [city]);
 		player = await getPlayerInfo(ns);
 	}
 	try {
@@ -699,6 +700,7 @@ async function click(elem) {
 	await elem[Object.keys(elem)[1]].onClick({
 		isTrusted: true,
 	});
+    	if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
 }
 
 /**
@@ -711,6 +713,7 @@ async function setText(input, text) {
 		isTrusted: true,
 		target: { value: text },
 	});
+    	if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
 }
 
 /**
