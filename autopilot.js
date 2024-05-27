@@ -31,7 +31,7 @@ const argsSchema = [ // The set of all command line arguments
     ['on-completion-script', null], // Spawn this script when we defeat the bitnode
     ['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
     ['enable-casino', false],
-	['enable-infiltration', false],
+    ['enable-infiltration', true],
 ];
 export function autocomplete(data, args) {
     data.flags(argsSchema);
