@@ -1,5 +1,3 @@
-// https://raw.githubusercontent.com/ullbergm/bitburner-scripts/main/infiltrate.js
-
 const state = {
     // Name of the company that's infiltrated.
     company: "",
@@ -64,22 +62,15 @@ const infiltrationGames = [
             for (let i = 0; i < arrowsText.length; i++) {
                 const char = arrowsText[i];
                 switch (char) {
-                    case "↑":
-                        state.game.data.push("w");
-                        break;
-                    case "↓":
-                        state.game.data.push("s");
-                        break;
-                    case "←":
-                        state.game.data.push("a");
-                        break;
-                    case "→":
-                        state.game.data.push("d");
-                        break;
+                    case "↑": state.game.data.push("w"); break;
+                    case "↓": state.game.data.push("s"); break;
+                    case "←": state.game.data.push("a"); break;
+                    case "→": state.game.data.push("d"); break;
                 }
             }
         },
         play: function (screen) {
+
             if (!state.game.data || !state.game.data.length) {
                 delete state.game.data;
                 return;
@@ -128,8 +119,8 @@ const infiltrationGames = [
                 pressKey(" ");
                 state.game.data = "done";
             }
-            // Attack in next frame - instant attack sometimes ends in failure.
-            if ("wait" === state.game.data && -1 !== data.indexOf("Distracted!")) {
+            // Attack in next frame - instant attack sometimes ends in failure.     
+            if ('wait' === state.game.data && -1 !== data.indexOf('Distracted!')) {
                 state.game.data = "attack";
             }
         },
@@ -159,7 +150,7 @@ const infiltrationGames = [
                 "patient",
                 "dynamic",
                 "loyal",
-                "straightforward",
+                "straightforward"
             ];
             const word = getLines(getEl(screen, "h5"))[1];
 
@@ -291,6 +282,7 @@ const infiltrationGames = [
             for (let i = 0; i < gridSize[1]; i++) {
                 keypad[i] = [];
                 for (let y = 0; y < gridSize[0]; y++) {
+
                     keypad[i].push(rows[index]);
                     index += 1;
                 }
@@ -361,7 +353,7 @@ const infiltrationGames = [
                 yellow: [],
             };
             //gather the instructions
-            var instructions = [];
+            var instructions = []
             for (let child of screen.children) instructions.push(child);
             var wiresData = instructions.pop();
             instructions.shift();
