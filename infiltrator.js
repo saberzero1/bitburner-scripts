@@ -700,7 +700,7 @@ async function click(elem) {
 	await elem[Object.keys(elem)[1]].onClick({
 		isTrusted: true,
 	});
-    	if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
+    	if (options['click-sleep-time']) await ns.sleep(options['click-sleep-time']);
 }
 
 /**
@@ -713,7 +713,7 @@ async function setText(input, text) {
 		isTrusted: true,
 		target: { value: text },
 	});
-    	if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
+    	if (options['click-sleep-time']) await ns.sleep(options['click-sleep-time']);
 }
 
 /**
