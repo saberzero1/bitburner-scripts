@@ -339,7 +339,7 @@ async function infiltrate(ns, city, target, faction) {
 			} else {
 				const option = find("//div[@aria-haspopup = 'listbox']");
 				if (option) {
-					await setText(option.nextSibling, faction);
+					await setText(ns, option.nextSibling, faction);
 					const btn = find("//button[contains(text(), 'Trade')]");
 					if (btn) {
 						await click(ns, btn);
