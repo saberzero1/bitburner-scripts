@@ -587,7 +587,7 @@ export async function crimeForKillsKarmaStats(ns, reqKills, reqKarma, reqStats, 
                 ns.tail(); // Force a tail window open to help the user kill this script if they accidentally closed the tail window and don't want to keep doing crime
             }
             let focusArg = shouldFocus === undefined ? false : shouldFocus; // Only undefined if running as imported function
-            crimeTime = await getNsDataThroughFile(ns, 'ns.singularity.commitCrime(ns.args[0], ns.args[1])', '/Temp/commitCrime.txt', [crime, focusArg])
+            crimeTime = await getNsDataThroughFile(ns, 'ns.singularity.commitCrime(ns.args[0], ns.args[1])', null, [crime, focusArg])
             if (shouldFocus) ns.tail(); // Force a tail window open when auto-criming with focus so that the user can more easily kill this script
         }
         // Periodic status update with progress
@@ -1092,7 +1092,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
                 isWorking = false;
                 ns.tail(); // Force a tail window open to help the user kill this script if they accidentally closed the tail window and don't want to keep working
             }
-            if (await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, '/Temp/workForCompany.txt', [companyName, shouldFocus])) {
+            if (await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, shouldFocus])) {
                 isWorking = true;
                 if (shouldFocus) ns.tail(); // Keep a tail window open if we're stealing focus
             } else {

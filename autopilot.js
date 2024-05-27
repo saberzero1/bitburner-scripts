@@ -70,7 +70,7 @@ export async function main(ns) {
 
 	log(ns, "INFO: Auto-pilot engaged...", true, 'info');
 	// The game does not allow boolean flags to be turned "off" via command line, only on. Since this gets saved, notify the user about how they can turn it off.
-	const flagsSet = ['disable-auto-destroy-bn', 'enable-bladeburner', 'disable-wait-for-4s', 'disable-rush-gangs', 'enable-casino', 'enable-infiltration'].filter(f => options[f]);
+	const flagsSet = ['disable-auto-destroy-bn', 'disable-bladeburner', 'disable-wait-for-4s', 'disable-rush-gangs', 'enable-casino', 'enable-infiltration'].filter(f => options[f]);
 	for (const flag of flagsSet)
 		log(ns, `WARNING: You have previously enabled the flag "--${flag}". Because of the way this script saves its run settings, the ` +
 			`only way to now turn this back off will be to manually edit or delete the file ${ns.getScriptName()}.config.txt`, true);
