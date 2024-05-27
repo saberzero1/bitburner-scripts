@@ -116,7 +116,7 @@ const argsSchema = [
 	["getMoney", ""], // Use this to boost Player Money
 	["stock", true], // Use Stockvalue for getMoney
 	["verbose", true], // Print Output to terminal
-	['click-sleep-time', 1],
+	['click-sleep-time', 100],
 ];
 
 /**
