@@ -521,11 +521,11 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 		stack = JSON.parse(stack)
 	}
 
-	if ((player.money + stocksValue) < 3e10 && player.bitNodeN != 8 && bitnodeMults?.InfiltrationMoney > 0.5 && !ranGetMoney){
+	if ((player.money + stocksValue) < 3e10 && player.bitNodeN != 8 && /*bitnodeMults?.InfiltrationMoney > 0.5 &&*/ !ranGetMoney){
 		launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 4]); 
 		ranGetMoney = true
 		// TODO: after Infiltration, if Money is to low run casino?
-	} else if (player.money > 200000 && bitnodeMults?.InfiltrationRep > 0.5 && stack?.length > 0){
+	} else if (player.money > 200000 && /*bitnodeMults?.InfiltrationRep > 0.5 &&*/ stack?.length > 0){
 		launchScriptHelper(ns, 'infiltrator.js');
 	}
 }
