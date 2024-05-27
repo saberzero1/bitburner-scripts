@@ -509,7 +509,7 @@ async function getLocations(ns, display = false) {
 		let location = {
 			name: info.location.name,
 			city: info.location.city,
-			maxClearanceLevel: info.location.infiltrationData.maxClearanceLevel,
+			maxClearanceLevel: info.maxClearanceLevel,
 			reward: info.reward,
 			toString: function () {
 				return (
