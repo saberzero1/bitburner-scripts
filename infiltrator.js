@@ -319,7 +319,7 @@ async function infiltrate(ns, city, target, faction) {
 		player = await getPlayerInfo(ns);
 	}
 	try {
-		await click(await findRetry(ns, "//div[(@role = 'button') and (contains(., 'Travel'))]")); // Workaraound, sometimes click on "City" wil not show the right City
+		//await click(await findRetry(ns, "//div[(@role = 'button') and (contains(., 'Travel'))]")); // Workaraound, sometimes click on "City" wil not show the right City
 		await click(await findRetry(ns, "//div[(@role = 'button') and (contains(., 'City'))]"));
 		await click(await findRetry(ns, `//span[@aria-label = '${target}']`));
 		await click(await findRetry(ns, "//button[contains(text(), 'Infiltrate Company')]"));
