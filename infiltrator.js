@@ -232,7 +232,7 @@ async function infiltrateForFaction(ns, stack) {
 			stack.loop--;
 		}
 
-		await click(btnSaveGame); // Save if we won
+		await click(ns, btnSaveGame); // Save if we won
 		await ns.sleep(10);
 
 		currentReputation = await getFactionReputation(ns, stack.faction);
@@ -298,7 +298,7 @@ async function infiltrateForMoney(ns, player, maxMoney, target, stock = true) {
 			loop++;
 		}
 
-		await click(btnSaveGame);
+		await click(ns, btnSaveGame);
 		await ns.sleep(10);
 
 		player = await getPlayerInfo(ns);
@@ -319,10 +319,10 @@ async function infiltrate(ns, city, target, faction) {
 		player = await getPlayerInfo(ns);
 	}
 	try {
-		//await click(await findRetry(ns, "//div[(@role = 'button') and (contains(., 'Travel'))]")); // Workaraound, sometimes click on "City" wil not show the right City
-		await click(await findRetry(ns, "//div[(@role = 'button') and (contains(., 'City'))]"));
-		await click(await findRetry(ns, `//span[@aria-label = '${target}']`));
-		await click(await findRetry(ns, "//button[contains(text(), 'Infiltrate Company')]"));
+		await click(ns, await findRetry(ns, "//div[(@role = 'button') and (contains(., 'Travel'))]")); // Workaraound, sometimes click on "City" wil not show the right City
+		await click(ns, await findRetry(ns, "//div[(@role = 'button') and (contains(., 'City'))]"));
+		await click(ns, await findRetry(ns, `//span[@aria-label = '${target}']`));
+		await click(ns, await findRetry(ns, "//button[contains(text(), 'Infiltrate Company')]"));
 		//await getNsDataThroughFile(ns, 'ns.singularity.goToLocation(ns.args[0])', null, [target]);
 	} catch (err) {
 		log(ns, `Couldn't find ${city} / ${target}: ${err}`, verbose);
@@ -331,7 +331,7 @@ async function infiltrate(ns, city, target, faction) {
 			if (faction == "none") {
 				const btn = find("//button[contains(text(), 'Sell')]");
 				if (btn) {
-					await click(btn);
+					await click(ns, btn);
 					log(ns, `${btn.innerText}`, verbose);
 					completet = true;
 					break;
@@ -342,7 +342,7 @@ async function infiltrate(ns, city, target, faction) {
 					await setText(option.nextSibling, faction);
 					const btn = find("//button[contains(text(), 'Trade')]");
 					if (btn) {
-						await click(btn);
+						await click(ns, btn);
 						log(ns, `${btn.innerText} with ${faction}`, verbose);
 						completet = true;
 						break;
@@ -694,9 +694,10 @@ async function getFactionReputation(ns, factionName) {
 // TODO: Share instead of copy-paste from casino -->
 /**
  * It clicks on an element
+ * @param {NS} ns
  * @param elem - The element you want to click.
  */
-async function click(elem) {
+async function click(ns, elem) {
 	await elem[Object.keys(elem)[1]].onClick({
 		isTrusted: true,
 	});
@@ -705,10 +706,11 @@ async function click(elem) {
 
 /**
  * It sets the text of an input field
+ * @param {NS} ns
  * @param input - The input field you want to set text to.
  * @param text - The text you want to set the input to.
  */
-async function setText(input, text) {
+async function setText(ns, input, text) {
 	await input[Object.keys(input)[1]].onChange({
 		isTrusted: true,
 		target: { value: text },
