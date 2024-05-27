@@ -27,9 +27,11 @@ const argsSchema = [ // The set of all command line arguments
     ['wait-for-4s-threshold', 0.9], // Set to 0 to not reset until we have 4S. If money is above this ratio of the 4S Tix API cost, don't reset until we buy it.
     ['disable-wait-for-4s', false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
     ['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
-    ['disable-casino', false], // Set to true to disable running the casino.js script automatically
+    ['disable-casino', null], // (Deprecated) Set to true to disable running the casino.js script automatically
     ['on-completion-script', null], // Spawn this script when we defeat the bitnode
     ['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
+    ['enable-casino', false],
+	['enable-infiltration', false],
 ];
 export function autocomplete(data, args) {
     data.flags(argsSchema);
@@ -53,6 +55,8 @@ let daemonStartTime = 0; // The time we personally launched daemon.
 let installCountdown = 0; // Start of a countdown before we install augmentations.
 let bnCompletionSuppressed = false; // Flag if we've detected that we've won the BN, but are suppressing a restart
 let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information about the current bitnode
+let lastInfiltration = 0;
+let ranGetMoney = false;
 
 // Replacements for player properties deprecated since 2.3.0
 function getTimeInAug() { return Date.now() - resetInfo.lastAugReset; }
@@ -64,12 +68,12 @@ export async function main(ns) {
     if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
 
-    log(ns, "INFO: Auto-pilot engaged...", true, 'info');
-    // The game does not allow boolean flags to be turned "off" via command line, only on. Since this gets saved, notify the user about how they can turn it off.
-    const flagsSet = ['disable-auto-destroy-bn', 'disable-bladeburner', 'disable-wait-for-4s', 'disable-rush-gangs'].filter(f => options[f]);
-    for (const flag of flagsSet)
-        log(ns, `WARNING: You have previously enabled the flag "--${flag}". Because of the way this script saves its run settings, the ` +
-            `only way to now turn this back off will be to manually edit or delete the file ${ns.getScriptName()}.config.txt`, true);
+	log(ns, "INFO: Auto-pilot engaged...", true, 'info');
+	// The game does not allow boolean flags to be turned "off" via command line, only on. Since this gets saved, notify the user about how they can turn it off.
+	const flagsSet = ['disable-auto-destroy-bn', 'disable-bladeburner', 'disable-wait-for-4s', 'disable-rush-gangs', 'enable-casino', 'enable-infiltration'].filter(f => options[f]);
+	for (const flag of flagsSet)
+		log(ns, `WARNING: You have previously enabled the flag "--${flag}". Because of the way this script saves its run settings, the ` +
+			`only way to now turn this back off will be to manually edit or delete the file ${ns.getScriptName()}.config.txt`, true);
 
     let startUpRan = false;
     while (true) {
@@ -93,7 +97,7 @@ async function startUp(ns) {
     await persistConfigChanges(ns);
 
     // Reset global state
-    playerInGang = rushGang = playerInBladeburner = ranCasino = reserveForDaedalus = daedalusUnavailable =
+    playerInGang = rushGang = playerInBladeburner = ranCasino = ranGetMoney = reserveForDaedalus = daedalusUnavailable =
         bnCompletionSuppressed = stanekLaunched = goLaunched = false;
     playerInstalledAugCount = wdHack = null;
     installCountdown = daemonStartTime = lastScriptsCheck = reservedPurchase = 0;
@@ -168,12 +172,14 @@ async function mainLoop(ns) {
     await checkIfBnIsComplete(ns, player);
     await checkOnRunningScripts(ns, player);
     await maybeDoCasino(ns, player);
+	await maybeDoInfiltration(ns, player, stocksValue);
     await maybeInstallAugmentations(ns, player);
 }
 
 /** Logic run periodically to if there is anything we can do to speed along earning a Daedalus invite
  * @param {NS} ns
- * @param {Player} player **/
+ * @param {Player} player
+ **/
 async function checkOnDaedalusStatus(ns, player, stocksValue) {
     // Logic below is for rushing a daedalus invite.
     // We do not need to run if we've previously determined that Daedalus cannot be unlocked (insufficient augs), or if we've already got TRP
@@ -289,7 +295,7 @@ async function getRunningScripts(ns) {
 /** Helper to get the first instance of a running script by name.
  * @param {NS} ns 
  * @param {ProcessInfo[]} runningScripts - (optional) Cached list of running scripts to avoid repeating this expensive request
- * @param {(value: ProcessInfo, index: number, array: ProcessInfo[]) => unknown} filter - (optional) Filter the list of processes beyond just matching on the script name */
+ * @param {(value: ProcessInfo, index: number, array: ProcessInfo[]) => unknown} [filter=] - (optional) Filter the list of processes beyond just matching on the script name */
 function findScriptHelper(baseScriptName, runningScripts, filter = null) {
     return runningScripts.filter(s => s.filename == getFilePath(baseScriptName) && (!filter || filter(s)))[0];
 }
@@ -334,7 +340,7 @@ async function checkOnRunningScripts(ns, player) {
     // Launch sleeves and allow them to also ignore the reserve so they can train up to boost gang unlock speed
     if ((10 in unlockedSFs) && (2 in unlockedSFs) && !findScript('sleeve.js')) {
         let sleeveArgs = [];
-        if (!options["disable-casino"] && !ranCasino)
+        if (options["enable-casino"] && !ranCasino)
             sleeveArgs.push("--training-reserve", 300000); // Avoid training away our casino seed money
         if (options["disable-bladeburner"])
             sleeveArgs.push("--disable-bladeburner");
@@ -447,7 +453,7 @@ async function checkOnRunningScripts(ns, player) {
  * @param {NS} ns 
  * @param {Player} player */
 async function maybeDoCasino(ns, player) {
-    if (ranCasino || options['disable-casino']) return;
+	if (!options['enable-casino'] || ranCasino) return;
     const casinoRanFileSet = ns.read(casinoFlagFile);
     const cashRootBought = installedAugmentations.includes(`CashRoot Starter Kit`);
     // If the casino flag file is already set in first 10 minutes of the reset, and we don't have anywhere near the 10B it should give,
@@ -486,6 +492,42 @@ async function maybeDoCasino(ns, player) {
         // Otherwise, something went wrong
         log(ns, `ERROR: Something went wrong. Casino.js ran, but we haven't been killed, and the casino flag file "${casinoFlagFile}" isn't set.`)
     }
+}
+
+/** Logic to do Infiltration
+ * @param {NS} ns 
+ * @param {Player} player 
+ * @param {number} stocksValue */
+async function maybeDoInfiltration(ns, player, stocksValue) {
+	if (!options['enable-infiltration']) return;
+
+	if (player.money < 200000 && player.bitNodeN == 8) 
+		return log(ns, `INFO: Player money is to low (${player.money}) and in this Bitnode is Infiltration Money = 0, maybe do Casino?`);
+
+	if (lastInfiltration > Date.now() - (options['interval-check-scripts'] * 3)) return;
+	lastInfiltration = Date.now();
+
+	let infiltrator = findScriptHelper('infiltrator.js', await getRunningScripts(ns));
+	if (infiltrator) return
+	
+	if (!bitnodeMults) bitnodeMults = await tryGetBitNodeMultipliers(ns);
+
+	let pid = launchScriptHelper(ns, 'infiltrator.js', ['--info'], '', true);
+	if (pid) await waitForProcessToComplete(ns, pid);
+	let stack = ns.read("/Temp/infiltrator.txt")
+	if (!stack) {
+		stack =  null 
+	} else {
+		stack = JSON.parse(stack)
+	}
+
+	if ((player.money + stocksValue) < 3e10 && player.bitNodeN != 8 && bitnodeMults?.InfiltrationMoney > 0.5 && !ranGetMoney){
+		launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 4]); 
+		ranGetMoney = true
+		// TODO: after Infiltration, if Money is to low run casino?
+	} else if (player.money > 200000 && bitnodeMults?.InfiltrationRep > 0.5 && stack?.length > 0){
+		launchScriptHelper(ns, 'infiltrator.js');
+	}
 }
 
 /** Retrieves the last faction manager output file, parses, and types it.
@@ -680,7 +722,9 @@ function launchScriptHelper(ns, baseScriptName, args = [], convertFileName = tru
 let lastStatusLog = ""; // The current or last-assigned long-term status (what this script is waiting to happen)
 
 /** Helper to set a global status and print it if it changes
- * @param {NS} ns */
+ * @param {NS} ns 
+ * @param {string} status
+ * @param {string} uniquePart */
 function setStatus(ns, status, uniquePart = null) {
     uniquePart = uniquePart || status; // Can be used to consider a logs "the same" (not worth re-printing) even if they have some different text
     if (lastStatusLog == uniquePart) return;
@@ -689,7 +733,8 @@ function setStatus(ns, status, uniquePart = null) {
 }
 
 /** Append the specified text (with timestamp) to a persistent log in the home directory
- * @param {NS} ns */
+ * @param {NS} ns
+ * @param {string} text */
 function persist_log(ns, text) {
     ns.write(persistentLog, `${(new Date()).toISOString().substring(0, 19)} ${text}\n`, "a")
 }
