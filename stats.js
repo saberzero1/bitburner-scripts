@@ -14,8 +14,15 @@ export function autocomplete(data, args) {
     return [];
 }
 
-let doc, hook0, hook1;
-let playerInBladeburner = false, nodeMap = {}
+const doc = eval('document'),
+    hook0 = doc.getElementById('overview-extra-hook-0'),
+    hook1 = doc.getElementById('overview-extra-hook-1')
+
+let playerInBladeburner = false,
+    nodeMap = {},
+    fullWidthElements,
+    infiltrationChanged=false,
+    stopInfiltration=false
 
 /** @param {NS} ns **/
 export async function main(ns) {
@@ -27,19 +34,16 @@ export async function main(ns) {
     const bitNode = resetInfo.currentNode;
     disableLogs(ns, ['sleep']);
 
-    // Globals need to reset at startup. Otherwise, they can survive e.g. flumes and new BNs and return stale results
-    playerInBladeburner = false;
-    nodeMap = {};
-    doc = eval('document');
-    hook0 = doc.getElementById('overview-extra-hook-0');
-    hook1 = doc.getElementById('overview-extra-hook-1');
-
     // Hook script exit to clean up after ourselves.
-    ns.atExit(() => hook1.innerHTML = hook0.innerHTML = "")
+    ns.atExit(() => {
+        hook1.innerHTML = hook0.innerHTML = ""
+        fullWidthElements.parentElement.parentElement.remove()
+    })
 
     addCSS(doc);
 
     prepareHudElements(await getHudData(ns, bitNode, dictSourceFiles, options))
+    prepareFullWidthHud(ns)
 
     // Main stats update loop
     while (true) {
@@ -50,6 +54,7 @@ export async function main(ns) {
             for (const [header, show, formattedValue, toolTip] of hudData) {
                 updateHudElement(header, show, formattedValue, toolTip)
             }
+            updateFullWidthHud(ns)
         } catch (err) {
             // Might run out of ram from time to time, since we use it dynamically
             log(ns, `WARNING: stats.js Caught (and suppressed) an unexpected error in the main loop. Update Skipped:\n` +
@@ -287,6 +292,56 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
     }
 
     return hudData
+}
+
+/** @param {NS} ns **/
+function prepareFullWidthHud(ns) {
+    // preparing a full-width entry to keep buttons etc.
+    {
+        const above = hook0.parentElement.parentElement,
+        newNode = above.cloneNode(true)
+
+        newNode.firstChild.remove()
+        newNode.firstChild.remove()
+        fullWidthElements = newNode.firstChild.firstChild
+        fullWidthElements.id="overview-extra-hook-custom"
+        above.insertAdjacentElement("afterend", newNode)
+        fullWidthElements.parentElement.colSpan=2
+        fullWidthElements.parentElement.style["text-align"]="center"
+    }
+
+    const addButton = (hook, text, doc, callback) => {
+        let element = doc.createElement("button")
+        // this will not last, find alternative
+        element.className = "css-fw8wf6"
+//        element.style = ""
+        element.textContent=text
+        element.type="button"
+        hook.appendChild(element)
+        element.addEventListener('click', callback)
+        return element
+    }
+
+    //infiltration start/stop button. callbacks cannot use ns, because they cannot be awaited
+    {
+        stopInfiltration = ns.read("/Temp/stopInfiltration.txt")
+        let element
+        const buttonCallback = () => {
+            infiltrationChanged=true
+            stopInfiltration=!stopInfiltration
+            element.textContent=(stopInfiltration ? "start" : "stop") + " infiltrating"
+        }
+        element = addButton(fullWidthElements, (stopInfiltration ? "start" : "stop") + " infiltrating", doc, buttonCallback)
+    }
+}
+
+/** @param {NS} ns **/
+function updateFullWidthHud(ns) {
+    if (infiltrationChanged) {
+        infiltrationChanged = false
+        if (stopInfiltration) ns.write("/Temp/stopInfiltration.txt", "true")
+        else ns.rm("/Temp/stopInfiltration.txt")
+    }
 }
 
 function formatSixSigFigs(value, minDecimalPlaces = 0, maxDecimalPlaces = 0) {
