@@ -157,10 +157,10 @@ async function mainLoop(ns) {
         bladeburnerCityChaos = await getNsDataThroughFile(ns, `ns.bladeburner.getCityChaos(ns.args[0])`, null, [bladeburnerCity]);
         bladeburnerContractChances = await getNsDataThroughFile(ns,
             // There is currently no way to get sleeve chance, so assume it is the same as player chance for now. (EDIT: This is a terrible assumption)
-            'Object.fromEntries(ns.args.map(c => [c, ns.bladeburner.getActionEstimatedSuccessChance("contract", c)[0]]))',
+            'Object.fromEntries(ns.args.map(c => [c, ns.bladeburner.getActionEstimatedSuccessChance("Contracts", c)[0]]))',
             '/Temp/sleeve-bladeburner-success-chances.txt', sleeveBbContractNames);
         bladeburnerContractCounts = await getNsDataThroughFile(ns,
-            'Object.fromEntries(ns.args.map(c => [c, ns.bladeburner.getActionCountRemaining("contract", c)[0]]))',
+            'Object.fromEntries(ns.args.map(c => [c, ns.bladeburner.getActionCountRemaining("Contracts", c)[0]]))',
             '/Temp/sleeve-bladeburner-contract-counts.txt', sleeveBbContractNames);
     } else
         bladeburnerCityChaos = 0, bladeburnerContractChances = {}, bladeburnerContractCounts = {};
@@ -268,12 +268,12 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         // Hack: Without paying much attention to what's happening in bladeburner, pre-assign a variety of tasks by sleeve index
         const bbTasks = [
             // Note: Sleeve 0 might still be used for faction work (unless --disable-follow-player is set), so don't assign them a 'unique' task
-            /*0*/options['enable-bladeburner-team-building'] ? ["Support main sleeve"] : ["Infiltrate synthoids"],
+            /*0*/options['enable-bladeburner-team-building'] ? ["Support main sleeve", null] : ["Infiltrate synthoids", null],
             // Note: Each contract type can only be performed by one sleeve at a time (similar to working for factions)
             /*1*/["Take on contracts", "Retirement"], /*2*/["Take on contracts", "Bounty Hunter"], /*3*/["Take on contracts", "Tracking"],
             // Other bladeburner work can be duplicated, but tackling a variety is probably useful. Overrides occur below
-            /*4*/["Infiltrate synthoids"], /*5*/["Diplomacy"], /*6*/["Field analysis"],
-            /*7*/options['enable-bladeburner-team-building'] ? ["Recruitment"] : ["Infiltrate synthoids"]
+            /*4*/["Infiltrate synthoids", null], /*5*/["Diplomacy", null], /*6*/["Field analysis", null],
+            /*7*/options['enable-bladeburner-team-building'] ? ["Recruitment", null] : ["Infiltrate synthoids", null]
         ];
         let [action, contractName] = bbTasks[i];
         const contractChance = bladeburnerContractChances[contractName] ?? 1;
@@ -296,11 +296,11 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         }
         // As current city chaos gets progressively bad, assign more and more sleeves to Diplomacy to help get it under control
         if (bladeburnerCityChaos > (10 - i) * 10) // Later sleeves are first to get assigned, sleeve 0 is last at 100 chaos.
-            [action, contractName] = ["Diplomacy"];
+            [action, contractName] = ["Diplomacy", null];
         // If the sleeve is on cooldown ,do not perform their designated bladeburner task
         else if (onCooldown()) { // When on cooldown from a failed task, recover shock if applicable, or else add contracts
             if (sleeve.shock > 0) return shockRecoveryTask(sleeve, i, `bladeburner task is on cooldown`);
-            [action, contractName] = ["Infiltrate synthoids"]; // Fall-back to something long-term useful
+            [action, contractName] = ["Infiltrate synthoids", null]; // Fall-back to something long-term useful
         }
         return [`Bladeburner ${action} ${contractName || ''}`.trimEnd(),
         /*   */ `ns.sleeve.setToBladeburnerAction(ns.args[0], ns.args[1], ns.args[2])`, [i, action, contractName ?? ''],
