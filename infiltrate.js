@@ -52,12 +52,45 @@ const infiltrationGames = [
             pressKey(state.game.data.shift());
         },
     },
-    {
+    /*{
         name: "enter the code",
         init: function (screen) {
             console.log("Script initialized. Awaiting game start...");
             state.game.data = [];
             const arrowsText = getEl(screen, "h4")[1].textContent; // Get arrow sequence from the second <h4>
+            const keyMap = { "↑": "w", "↓": "s", "←": "a", "→": "d" };
+            for (let i = 0; i < arrowsText.length; i++) {
+                const char = arrowsText[i];
+                switch (char) {
+                    case "↑": state.game.data.push("w"); break;
+                    case "↓": state.game.data.push("s"); break;
+                    case "←": state.game.data.push("a"); break;
+                    case "→": state.game.data.push("d"); break;
+                }
+            }
+        },
+        play: function (screen) {
+
+            if (!state.game.data || !state.game.data.length) {
+                delete state.game.data;
+                return;
+            }
+            pressKey(state.game.data.shift());
+        },
+    },*/
+    {
+        name: "enter the code",
+        init: function (screen) {
+            console.log("Script initialized. Awaiting game start...");
+            state.game.data = [];
+            const spans = getEl(screen, "div span");
+            const arrowsText = 
+            spans[
+                spans.length - 1 -
+                    [...Array(spans.length).keys()].filter(
+                        (x) => spans[x].textContent == "?"
+                    ).length
+            ].textContent;; // Get arrow sequence from the second <h4>
             const keyMap = { "↑": "w", "↓": "s", "←": "a", "→": "d" };
             for (let i = 0; i < arrowsText.length; i++) {
                 const char = arrowsText[i];
