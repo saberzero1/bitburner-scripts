@@ -533,7 +533,7 @@ async function getLocations(ns, display = false) {
 }
 
 /** SoA aug check
- * @param {NS } ns
+ * @param {NS} ns
  * @returns {Promise<Boolean>} */
 async function hasSoaAug(ns) {
 	try {
@@ -589,7 +589,7 @@ async function buildInfiltrationStack(ns, ignoreFaction = [], boostFaction = "",
 }
 
 /** Get optimized Target for faction
- * @param {NS } ns
+ * @param {NS} ns
  * @param {Array<{city: string, maxClearanceLevel: number, name: string, reward: {SoARep: number, tradeRep: number, sellCash: number, repScore: number, moneyScore: number}}>} locations - Array of locations
  * @param {[string, {repNeed: number, reputation: number}]} faction - The faction you want to boost.
  * @param {string} [target] - The target to infiltrate.
@@ -657,7 +657,7 @@ function getTarget(ns, locations, faction, target = undefined, loop = 1) {
 }
 
 /** Helper to launch a script and log whether if it succeeded or failed
- * @param {NS } ns  */
+ * @param {NS} ns  */
 function launchScriptHelper(ns, baseScriptName, args = [], convertFileName = true) {
 	ns.tail(); // If we're going to be launching scripts, show our tail window so that we can easily be killed if the user wants to interrupt.
 	const pid = ns.run(convertFileName ? getFilePath(baseScriptName) : baseScriptName, 1, ...args);
@@ -684,7 +684,7 @@ async function getGangInfo(ns) {
 }
 
 /** Ram-dodge getting Faction Reputation.
- * @param {NS } ns
+ * @param {NS} ns
  * @param {string} factionName
  * @returns {Promise<Number>} Current reputation with the specified faction */
 async function getFactionReputation(ns, factionName) {
@@ -729,7 +729,7 @@ function find(xpath) {
  * "Find an element with the given xpath, retrying up to 10 times if it's not found, and throwing an
  * error if it's not found after 10 tries."
  *
- * @param ns
+ * @param {NS} ns
  * @param xpath - The xpath of the element you're looking for
  * @param [expectFailure=false] - If true, the function will throw an error if the element is found.
  * @param [retries=null] - The number of times to retry the function.
