@@ -178,8 +178,7 @@ async function mainLoop(ns) {
 
 /** Logic run periodically to if there is anything we can do to speed along earning a Daedalus invite
  * @param {NS} ns
- * @param {Player} player 
- * @param {number} stocksValue
+ * @param {Player} player
  **/
 async function checkOnDaedalusStatus(ns, player, stocksValue) {
     // Logic below is for rushing a daedalus invite.
@@ -295,7 +294,7 @@ async function getRunningScripts(ns) {
 
 /** Helper to get the first instance of a running script by name.
  * @param {NS} ns 
- * @param {ProcessInfo[]} [runningScripts] - (optional) Cached list of running scripts to avoid repeating this expensive request
+ * @param {ProcessInfo[]} runningScripts - (optional) Cached list of running scripts to avoid repeating this expensive request
  * @param {(value: ProcessInfo, index: number, array: ProcessInfo[]) => unknown} [filter=] - (optional) Filter the list of processes beyond just matching on the script name */
 function findScriptHelper(baseScriptName, runningScripts, filter = null) {
     return runningScripts.filter(s => s.filename == getFilePath(baseScriptName) && (!filter || filter(s)))[0];
@@ -303,8 +302,8 @@ function findScriptHelper(baseScriptName, runningScripts, filter = null) {
 
 /** Helper to kill a running script instance by name
  * @param {NS} ns 
- * @param {ProcessInfo[]} [runningScripts=] - (optional) Cached list of running scripts to avoid repeating this expensive request
- * @param {ProcessInfo} [processInfo=] - (optional) The process to kill, if we've already found it in advance */
+ * @param {ProcessInfo[]} runningScripts - (optional) Cached list of running scripts to avoid repeating this expensive request
+ * @param {ProcessInfo} processInfo - (optional) The process to kill, if we've already found it in advance */
 async function killScript(ns, baseScriptName, runningScripts = null, processInfo = null) {
     processInfo = processInfo || findScriptHelper(baseScriptName, runningScripts || (await getRunningScripts(ns)))
     if (processInfo) {
@@ -725,7 +724,7 @@ let lastStatusLog = ""; // The current or last-assigned long-term status (what t
 /** Helper to set a global status and print it if it changes
  * @param {NS} ns 
  * @param {string} status
- * @param {string} [uniquePart=] */
+ * @param {string} uniquePart */
 function setStatus(ns, status, uniquePart = null) {
     uniquePart = uniquePart || status; // Can be used to consider a logs "the same" (not worth re-printing) even if they have some different text
     if (lastStatusLog == uniquePart) return;
