@@ -115,7 +115,7 @@ const argsSchema = [
 	["sleep-Between-Infiltration-Time", 5000], // Sleep between Infiltration
 	["getMoney", ""], // Use this to boost Player Money
 	["stock", true], // Use Stockvalue for getMoney
-	["verbose", true], // Print Output to terminal
+	["verbose", false], // Print Output to terminal
 	['click-sleep-time', 100],
 ];
 
