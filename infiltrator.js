@@ -107,7 +107,7 @@ let wnd,
 
 const argsSchema = [
 	// The set of all command line arguments
-	["info", false], // get info in output_file: /Temp/infiltrator.txt
+	["info", true], // get info in output_file: /Temp/infiltrator.txt
 	["boost-Faction", ""], // boost one Faction
 	["ignore-Faction", []], // ignored Faction will not boosted
 	["target", ""], // use only this target
@@ -115,7 +115,7 @@ const argsSchema = [
 	["sleep-Between-Infiltration-Time", 5000], // Sleep between Infiltration
 	["getMoney", ""], // Use this to boost Player Money
 	["stock", true], // Use Stockvalue for getMoney
-	["verbose", false], // Print Output to terminal
+	["verbose", true], // Print Output to terminal
 	['click-sleep-time', 100],
 ];
 
