@@ -58,6 +58,8 @@ let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information abou
 let lastInfiltration = 0;
 let ranGetMoney = false;
 
+let resetWindowAfterInfiltrationLoopFlag = false;
+
 // Replacements for player properties deprecated since 2.3.0
 function getTimeInAug() { return Date.now() - resetInfo.lastAugReset; }
 function getTimeInBitnode() { return Date.now() - resetInfo.lastNodeReset; }
@@ -172,8 +174,16 @@ async function mainLoop(ns) {
     await checkIfBnIsComplete(ns, player);
     await checkOnRunningScripts(ns, player);
     await maybeDoCasino(ns, player);
-	await maybeDoInfiltration(ns, player, stocksValue);
+    await maybeDoInfiltration(ns, player, stocksValue);
     await maybeInstallAugmentations(ns, player);
+
+    if (resetWindowAfterInfiltrationLoopFlag) {
+        resetWindowAfterInfiltrationLoopFlag = false;
+        await ns.sleep(1000); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
+        await click(btnSaveGame);
+        await ns.sleep(1000);
+        await reload(ns);
+    }
 }
 
 /** Logic run periodically to if there is anything we can do to speed along earning a Daedalus invite
@@ -528,6 +538,8 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 	} else if (player.money > 200000 && /*bitnodeMults?.InfiltrationRep > 0.5 &&*/ stack?.length > 0){
 		launchScriptHelper(ns, 'infiltrator.js');
 	}
+
+	resetWindowAfterInfiltrationLoopFlag = true;
 }
 
 /** Retrieves the last faction manager output file, parses, and types it.
@@ -737,4 +749,14 @@ function setStatus(ns, status, uniquePart = null) {
  * @param {string} text */
 function persist_log(ns, text) {
     ns.write(persistentLog, `${(new Date()).toISOString().substring(0, 19)} ${text}\n`, "a")
+}
+
+/** Forces the game to reload (without saving). Great for save scumming.
+ * WARNING: Doesn't work if the user last ran the game with "Reload and kill all scripts" 
+ * @param {NS} ns */
+async function reload(ns) {
+    eval("window").onbeforeunload = null; // Disable the unsaved changes warning before reloading
+    await ns.sleep(1000); // Yield execution for an instant incase the game needs to finish a save or something
+    location.reload(); // Force refresh the page without saving           
+    await ns.sleep(10000); // Keep the script alive to be safe. Presumably the page reloads before this completes.
 }
