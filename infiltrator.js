@@ -335,6 +335,9 @@ async function infiltrate(ns, city, target, faction) {
 		await click(ns, await findRetry(ns, "//div[(@role = 'button') and (contains(., 'City'))]"));
 		await click(ns, await findRetry(ns, `//span[@aria-label = '${target}']`));
 		await click(ns, await findRetry(ns, "//button[contains(text(), 'Infiltrate Company')]"));
+		try {
+			await click(ns, await findRetry(ns, "//button[contains(text(), 'Start')]"));
+		} catch (err) { }
 		//await getNsDataThroughFile(ns, 'ns.singularity.goToLocation(ns.args[0])', null, [target]);
 	} catch (err) {
 		log(ns, `Couldn't find ${city} / ${target}: ${err}`, verbose);
