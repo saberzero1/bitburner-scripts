@@ -190,7 +190,7 @@ export async function main(ns) {
 		}
 		else {
 			log(ns, "No Faction need Reputation, grinding money instead", verbose);
-			let maxMoney = parseShortNumber(1000000000000);
+			let maxMoney = parseShortNumber(1E15);
 			let stock = options["stock"];
 			await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
 		}
