@@ -180,7 +180,7 @@ async function mainLoop(ns) {
     if (resetWindowAfterInfiltrationLoopFlag) {
         resetWindowAfterInfiltrationLoopFlag = false;
         await ns.sleep(1000); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
-        await click(btnSaveGame);
+        await click(ns, btnSaveGame);
         await ns.sleep(1000);
         await reload(ns);
     }
@@ -761,3 +761,17 @@ async function reload(ns) {
     location.reload(); // Force refresh the page without saving           
     await ns.sleep(10000); // Keep the script alive to be safe. Presumably the page reloads before this completes.
 }
+
+// TODO: Share instead of copy-paste from casino -->
+/**
+ * It clicks on an element
+ * @param {NS} ns
+ * @param elem - The element you want to click.
+ */
+async function click(ns, elem) {
+	await elem[Object.keys(elem)[1]].onClick({
+		isTrusted: true,
+	});
+    	await ns.sleep(100);
+}
+
