@@ -206,7 +206,7 @@ export async function main(ns) {
 
 	await click(ns, btnSaveGame); // Save if we won
 	await ns.sleep(10);
-	return await reload(ns)
+	await reload(ns)
 }
 
 /**
