@@ -540,6 +540,7 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 	}
 
 	resetWindowAfterInfiltrationLoopFlag = true;
+	return;
 }
 
 /** Retrieves the last faction manager output file, parses, and types it.
