@@ -203,6 +203,10 @@ export async function main(ns) {
 		let stock = options["stock"];
 		await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
 	}
+
+	await click(ns, btnSaveGame); // Save if we won
+	await ns.sleep(10);
+	await reload(ns)
 }
 
 /**
@@ -760,4 +764,13 @@ async function findRetry(ns, xpath, expectFailure = false, retries = null) {
 		if (!expectFailure) throw e;
 	}
 }
-// <--
+
+/** Forces the game to reload (without saving). Great for save scumming.
+ * WARNING: Doesn't work if the user last ran the game with "Reload and kill all scripts" 
+ * @param {NS} ns */
+async function reload(ns) {
+    eval("window").onbeforeunload = null; // Disable the unsaved changes warning before reloading
+    await ns.sleep(1000); // Yield execution for an instant incase the game needs to finish a save or something
+    location.reload(); // Force refresh the page without saving           
+    await ns.sleep(10000); // Keep the script alive to be safe. Presumably the page reloads before this completes.
+}
