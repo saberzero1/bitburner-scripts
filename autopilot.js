@@ -167,6 +167,8 @@ async function initializeNewBitnode(ns, player) {
  * @param {NS} ns */
 async function mainLoop(ns) {
     const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    // Find the button used to save the game
+    const btnSaveGame = await findRetry(ns, "//button[@aria-label = 'save game']");
     let stocksValue = 0;
     try { stocksValue = await getStocksValue(ns); } catch { /* Assume if this fails (insufficient ram) we also have no stocks */ }
     manageReservedMoney(ns, player, stocksValue);
@@ -774,4 +776,25 @@ async function click(ns, elem) {
 	});
     	await ns.sleep(100);
 }
+
+async function setText(ns, input, text) {
+    await input[Object.keys(input)[1]].onChange({ isTrusted: true, target: { value: text } });
+    if (100) await ns.sleep(100);
+}
+
+function find(xpath) {
+    return doc.evaluate(xpath, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+}
+
+async function findRetry(ns, xpath, expectFailure = false, retries = null) {
+    try {
+        return await autoRetry(ns, () => find(xpath), e => e !== undefined,
+            () => expectFailure ? `It's looking like the element with xpath: ${xpath} isn't present...` :
+                `Could not find the element with xpath: ${xpath}\nSomething may have re-routed the UI`,
+            retries != null ? retries : expectFailure ? 3 : 10, 1, 2);
+    } catch (e) {
+        if (!expectFailure) throw e;
+    }
+}
+
 
