@@ -60,6 +60,7 @@ let lastInfiltration = 0;
 let ranGetMoney = false;
 
 let resetWindowAfterInfiltrationLoopFlag = false;
+let lastResetTime = Date.now();
 
 // Replacements for player properties deprecated since 2.3.0
 function getTimeInAug() { return Date.now() - resetInfo.lastAugReset; }
@@ -180,7 +181,7 @@ async function mainLoop(ns) {
     await maybeDoInfiltration(ns, player, stocksValue);
     await maybeInstallAugmentations(ns, player);
 
-    if (resetWindowAfterInfiltrationLoopFlag) {
+    if (resetWindowAfterInfiltrationLoopFlag && (Date.now() - lastResetTime) > (15 * 60 * 1000)) {
         resetWindowAfterInfiltrationLoopFlag = false;
         await ns.sleep(1000); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
         await click(ns, await findRetry(ns, "//button[@aria-label = 'save game']"));
