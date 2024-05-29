@@ -169,7 +169,7 @@ async function initializeNewBitnode(ns, player) {
 async function mainLoop(ns) {
     const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     // Find the button used to save the game
-    const btnSaveGame = await findRetry(ns, "//button[@aria-label = 'save game']");
+    //const btnSaveGame = await findRetry(ns, "//button[@aria-label = 'save game']");
     let stocksValue = 0;
     try { stocksValue = await getStocksValue(ns); } catch { /* Assume if this fails (insufficient ram) we also have no stocks */ }
     manageReservedMoney(ns, player, stocksValue);
@@ -183,7 +183,7 @@ async function mainLoop(ns) {
     if (resetWindowAfterInfiltrationLoopFlag) {
         resetWindowAfterInfiltrationLoopFlag = false;
         await ns.sleep(1000); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
-        await click(ns, btnSaveGame);
+        await click(ns, await findRetry(ns, "//button[@aria-label = 'save game']"););
         await ns.sleep(1000);
         await reload(ns);
     }
