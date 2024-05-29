@@ -517,6 +517,10 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 	if (player.money < 200000 && player.bitNodeN == 8) 
 		return log(ns, `INFO: Player money is to low (${player.money}) and in this Bitnode is Infiltration Money = 0, maybe do Casino?`);
 
+
+	if (player.money < 250000)
+		return; // We need at least 200K (and change) to run casino so we can travel to aevum
+	
 	if (lastInfiltration > Date.now() - (options['interval-check-scripts'] * 3)) return;
 	lastInfiltration = Date.now();
 
