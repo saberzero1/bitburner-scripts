@@ -111,7 +111,7 @@ const argsSchema = [
 	["boost-Faction", ""], // boost one Faction
 	["ignore-Faction", []], // ignored Faction will not boosted
 	["target", ""], // use only this target
-	["max-loop", 5], // Max Loops per Faction
+	["max-loop", 20], //15// Max Loops per Faction
 	["sleep-Between-Infiltration-Time", 120000], //5000// Sleep between Infiltration
 	["getMoney", ""], // Use this to boost Player Money
 	["stock", true], // Use Stockvalue for getMoney
