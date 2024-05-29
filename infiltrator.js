@@ -189,6 +189,7 @@ export async function main(ns) {
 			return log(ns, "No Faction need Reputation", verbose);
 		}
 		else {
+			if (options["info"]) return;
 			log(ns, "No Faction need Reputation, grinding money instead", verbose);
 			let maxMoney = options["getMoney"] == "" ? 1e39 : parseShortNumber(options["getMoney"]);
 			let stock = options["stock"];
