@@ -539,7 +539,7 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 		stack = JSON.parse(stack)
 	}
 
-	if ((player.money + stocksValue) < 5e15 && player.bitNodeN != 8 && /*bitnodeMults?.InfiltrationMoney > 0.5 &&*/ !ranGetMoney){
+	if ((player.money + stocksValue) < 5e15 && player.bitNodeN != 8 && /*bitnodeMults?.InfiltrationMoney > 0.5 && !ranGetMoney*/ && stack?.length === 0){
 		launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 4]); 
 		ranGetMoney = true
 		// TODO: after Infiltration, if Money is to low run casino?
