@@ -195,11 +195,14 @@ export async function main(ns) {
 			await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
 		}*/
 		if (options["info"]) return;
-		if (infiltrationStack.length == 0) {
+		if (infiltrationStack.length != 0) {
 			log(ns, "No Faction need Reputation, grinding money instead", verbose);
 			let maxMoney = options["getMoney"] == "" ? 5e15 : parseShortNumber(options["getMoney"]);
 			let stock = options["stock"];
 			await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
+		}
+		if (infiltrationStack.length == 0) {
+			return log(ns, "No Faction need Reputation", verbose);
 		}
 		for (const stack of infiltrationStack) {
 			await infiltrateForFaction(ns, stack);
