@@ -178,9 +178,7 @@ async function mainLoop(ns) {
     await checkIfBnIsComplete(ns, player);
     await checkOnRunningScripts(ns, player);
     await maybeDoCasino(ns, player);
-    if (!ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
-        await maybeDoInfiltration(ns, player, stocksValue);
-    }
+    await maybeDoInfiltration(ns, player, stocksValue);
     await maybeInstallAugmentations(ns, player);
 
     if (resetWindowAfterInfiltrationLoopFlag && (Date.now() - lastResetTime) > (15 * 60 * 1000) && !player.factions.includes("Daedalus")) {
@@ -541,8 +539,12 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 		stack = JSON.parse(stack)
 	}
 
-	if (player.factions.includes("Daedalus")) {
-		launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus"]); 
+	if (player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
+		if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
+			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus"]);
+		} else {
+			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 10]);
+		}
 	} else if ((player.money + stocksValue) < 5E15 && player.bitNodeN != 8 /*&& bitnodeMults?.InfiltrationMoney > 0.5 && !ranGetMoney*/ && stack?.length === 0){
 		launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 4]); 
 		ranGetMoney = true
