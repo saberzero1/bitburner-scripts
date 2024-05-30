@@ -178,7 +178,9 @@ async function mainLoop(ns) {
     await checkIfBnIsComplete(ns, player);
     await checkOnRunningScripts(ns, player);
     await maybeDoCasino(ns, player);
-    await maybeDoInfiltration(ns, player, stocksValue);
+    if (!ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
+        await maybeDoInfiltration(ns, player, stocksValue);
+    }
     await maybeInstallAugmentations(ns, player);
 
     if (resetWindowAfterInfiltrationLoopFlag && (Date.now() - lastResetTime) > (15 * 60 * 1000) && !player.factions.includes("Daedalus")) {
