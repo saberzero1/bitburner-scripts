@@ -61,8 +61,9 @@ let ranGetMoney = false;
 
 let resetWindowAfterInfiltrationLoopFlag = false;
 let lastResetTime = Date.now();
+let goCheckTime = Date.now()
 
-let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
+let goRunning = false;//(14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
 
 // Replacements for player properties deprecated since 2.3.0
 function getTimeInAug() { return Date.now() - resetInfo.lastAugReset; }
@@ -186,7 +187,6 @@ async function mainLoop(ns) {
 
     if (resetWindowAfterInfiltrationLoopFlag && (Date.now() - lastResetTime) > (15 * 60 * 1000) && !player.factions.includes("Daedalus")) {
         resetWindowAfterInfiltrationLoopFlag = false;
-	goRunning = false;
         await ns.sleep(1000); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
         await click(ns, await findRetry(ns, "//button[@aria-label = 'save game']"));
         await ns.sleep(1000);
@@ -481,8 +481,11 @@ async function maybeDoIPvGO(ns, player) {
     //const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
     //if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
     //launchScriptHelper(ns, 'ipvgo.js', goArgs);
-    launchScriptHelper(ns, 'ipvgo.js');
-    goRunning = true;
+    const pid = (!goRunning || (Date.now() - goCheckTime) > 10 * 60 * 1000) ? launchScriptHelper(ns, 'ipvgo.js') : false;
+    if (pid) {
+        goRunning = true;
+        goCheckTime = Date.now();
+    }
 }
 
 /** Logic to steal 10b from the casino
