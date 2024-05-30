@@ -470,14 +470,12 @@ async function getAllServersInfo(ns) {
 async function maybeDoIPvGO(ns) {
     const servers = await getAllServersInfo(ns);
     const home = servers.find(s => s.hostname == "home")
-    if (home.maxRam < 2 ** 9) return;
-    if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
-        goLaunched = true;
-        const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
-        if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
-        launchScriptHelper(ns, 'ipvgo.js', goArgs);
-        goRunning = true;
-    }
+    if (home.maxRam < 2 ** 9 || !(14 in unlockedSFs)) return;
+    goLaunched = true;
+    const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
+    if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
+    launchScriptHelper(ns, 'ipvgo.js', goArgs);
+    goRunning = true;
 }
 
 /** Logic to steal 10b from the casino
