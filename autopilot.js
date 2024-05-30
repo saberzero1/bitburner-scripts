@@ -183,6 +183,7 @@ async function mainLoop(ns) {
 
     if (resetWindowAfterInfiltrationLoopFlag && (Date.now() - lastResetTime) > (15 * 60 * 1000) && !player.factions.includes("Daedalus")) {
         resetWindowAfterInfiltrationLoopFlag = false;
+	goRunning = false;
         await ns.sleep(1000); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
         await click(ns, await findRetry(ns, "//button[@aria-label = 'save game']"));
         await ns.sleep(1000);
