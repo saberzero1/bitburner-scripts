@@ -62,6 +62,8 @@ let ranGetMoney = false;
 let resetWindowAfterInfiltrationLoopFlag = false;
 let lastResetTime = Date.now();
 
+let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
+
 // Replacements for player properties deprecated since 2.3.0
 function getTimeInAug() { return Date.now() - resetInfo.lastAugReset; }
 function getTimeInBitnode() { return Date.now() - resetInfo.lastNodeReset; }
@@ -408,7 +410,6 @@ async function checkOnRunningScripts(ns, player) {
     }
 
     // IPvGO 
-    let goRunning = (14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
     if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
         goLaunched = true;
         const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
