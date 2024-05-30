@@ -180,6 +180,7 @@ async function mainLoop(ns) {
     await checkIfBnIsComplete(ns, player);
     await checkOnRunningScripts(ns, player);
     await maybeDoCasino(ns, player);
+    await maybeDoIPvGO(ns);
     await maybeDoInfiltration(ns, player, stocksValue);
     await maybeInstallAugmentations(ns, player);
 
@@ -409,15 +410,6 @@ async function checkOnRunningScripts(ns, player) {
         stanekRunning = true;
     }
 
-    // IPvGO 
-    if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
-        goLaunched = true;
-        const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
-        if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
-        launchScriptHelper(ns, 'ipvgo.js', goArgs);
-        goRunning = true;
-    }
-
     // Launch daemon with the desired arguments (or re-launch if we recently decided to switch to looping mode) - so long as stanek isn't charging
     const daemon = findScript('daemon.js');
     if (!stanekRunning && (!daemon || player.skills.hacking >= hackThreshold && !daemon.args.includes("--looping-mode"))) {
@@ -462,6 +454,29 @@ async function checkOnRunningScripts(ns, player) {
         // If we're trying to rush gangs, run in such a way that we will spend most of our time doing crime, reducing Karma (also okay early income)
         // NOTE: Default work-for-factions behaviour is to spend hashes on coding contracts, which suits us fine
         launchScriptHelper(ns, 'work-for-factions.js', rushGang ? rushGangsArgs : workForFactionsArgs);
+    }
+}
+
+/** @param {NS} ns 
+ * @returns {Promise<Server[]>} **/
+async function getAllServersInfo(ns) {
+    const serverNames = await getNsDataThroughFile(ns, 'scanAllServers(ns)');
+    return await getNsDataThroughFile(ns, 'ns.args.map(ns.getServer)', '/Temp/getServers.txt', serverNames);
+}
+
+/** IPVGO
+ * @param {NS} ns 
+ * @param {Player} player */
+async function maybeDoIPvGO(ns) {
+    const servers = await getAllServersInfo(ns);
+    const home = servers.find(s => s.hostname == "home")
+    if (home.maxRam < 2 ** 9) return;
+    if ((14 in unlockedSFs) && !goLaunched && !goRunning) {
+        goLaunched = true;
+        const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
+        if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
+        launchScriptHelper(ns, 'ipvgo.js', goArgs);
+        goRunning = true;
     }
 }
 
