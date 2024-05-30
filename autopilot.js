@@ -180,7 +180,7 @@ async function mainLoop(ns) {
     await checkIfBnIsComplete(ns, player);
     await checkOnRunningScripts(ns, player);
     await maybeDoCasino(ns, player);
-    await maybeDoIPvGO(ns);
+    await maybeDoIPvGO(ns, player);
     await maybeDoInfiltration(ns, player, stocksValue);
     await maybeInstallAugmentations(ns, player);
 
@@ -467,7 +467,13 @@ async function getAllServersInfo(ns) {
 /** IPVGO
  * @param {NS} ns 
  * @param {Player} player */
-async function maybeDoIPvGO(ns) {
+async function maybeDoIPvGO(ns, player) {
+    const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, run in "start-tight" mode
+    const daemonArgs = (player.skills.hacking < hackThreshold) ? [] :
+         // Launch daemon in "looping" mode if we have sufficient hack level
+        ["--looping-mode", "--cycle-timing-delay", 2000, "--queue-delay", "10", "--initial-max-targets", "63", "--silent-misfires", "--no-share",
+            // Use recovery thread padding sparingly until our hack level is significantly higher
+            "--recovery-thread-padding", 1.0 + (player.skills.hacking - hackThreshold) / 1000.0];
     const servers = await getAllServersInfo(ns);
     const home = servers.find(s => s.hostname == "home")
     if (home.maxRam < 2 ** 9 || !(14 in unlockedSFs)) return;
