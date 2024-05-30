@@ -481,7 +481,7 @@ async function maybeDoIPvGO(ns, player) {
     //const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
     //if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
     //launchScriptHelper(ns, 'ipvgo.js', goArgs);
-    launchScriptHelper(ns, 'ipvgo.js', goArgs);
+    launchScriptHelper(ns, 'ipvgo.js');
     goRunning = true;
 }
 
