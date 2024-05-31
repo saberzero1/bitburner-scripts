@@ -549,42 +549,50 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 	}
 	if (!options['enable-infiltration']) return;
 
-	if (player.money < 200000 && player.bitNodeN == 8) 
-		return log(ns, `INFO: Player money is to low (${player.money}) and in this Bitnode is Infiltration Money = 0, maybe do Casino?`);
-
-
-	if (player.money < 250000)
-		return; // We need at least 200K (and change) to run casino so we can travel to aevum
-	
-	if (lastInfiltration > Date.now() - (options['interval-check-scripts'] * 3)) return;
-	lastInfiltration = Date.now();
-
-	let infiltrator = findScriptHelper('infiltrator.js', await getRunningScripts(ns));
-	if (infiltrator) return
-	
-	if (!bitnodeMults) bitnodeMults = await tryGetBitNodeMultipliers(ns);
-
-	let pid = launchScriptHelper(ns, 'infiltrator.js', ['--info'], '', true);
-	if (pid) await waitForProcessToComplete(ns, pid);
-	let stack = ns.read("/Temp/infiltrator.txt")
-	if (!stack) {
-		stack =  null 
-	} else {
-		stack = JSON.parse(stack)
-	}
-
 	if (player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
 		if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
 			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus", "sleep-Between-Infiltration-Time", 1000, "max-loop", 25]);
 		} else {
 			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 10]);
 		}
-	} else if (player.money > 200000 && /*bitnodeMults?.InfiltrationRep > 0.5 &&*/ stack?.length > 0){
-		launchScriptHelper(ns, 'infiltrator.js');
-	} else if ((player.money + stocksValue) < 5E15 && player.bitNodeN != 8 /*&& bitnodeMults?.InfiltrationMoney > 0.5 && !ranGetMoney && stack?.length === 0*/){
-		launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 4]); 
-		//ranGetMoney = true
-		// TODO: after Infiltration, if Money is to low run casino?
+	} else {
+		if (player.money < 200000 && player.bitNodeN == 8) 
+			return log(ns, `INFO: Player money is to low (${player.money}) and in this Bitnode is Infiltration Money = 0, maybe do Casino?`);
+	
+	
+		if (player.money < 250000)
+			return; // We need at least 200K (and change) to run casino so we can travel to aevum
+		
+		if (lastInfiltration > Date.now() - (options['interval-check-scripts'] * 3)) return;
+		lastInfiltration = Date.now();
+	
+		let infiltrator = findScriptHelper('infiltrator.js', await getRunningScripts(ns));
+		if (infiltrator) return
+		
+		if (!bitnodeMults) bitnodeMults = await tryGetBitNodeMultipliers(ns);
+	
+		let pid = launchScriptHelper(ns, 'infiltrator.js', ['--info'], '', true);
+		if (pid) await waitForProcessToComplete(ns, pid);
+		let stack = ns.read("/Temp/infiltrator.txt")
+		if (!stack) {
+			stack =  null 
+		} else {
+			stack = JSON.parse(stack)
+		}
+	
+		if (player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
+			if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
+				launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus", "sleep-Between-Infiltration-Time", 1000, "max-loop", 25]);
+			} else {
+				launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 10]);
+			}
+		} else if (player.money > 200000 && /*bitnodeMults?.InfiltrationRep > 0.5 &&*/ stack?.length > 0){
+			launchScriptHelper(ns, 'infiltrator.js');
+		} else if ((player.money + stocksValue) < 5E15 && player.bitNodeN != 8 /*&& bitnodeMults?.InfiltrationMoney > 0.5 && !ranGetMoney && stack?.length === 0*/){
+			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 4]); 
+			//ranGetMoney = true
+			// TODO: after Infiltration, if Money is to low run casino?
+		}
 	}
 
 	resetWindowAfterInfiltrationLoopFlag = true;
