@@ -575,7 +575,7 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 
 	if (player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
 		if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
-			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus"]);
+			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus", "sleep-Between-Infiltration-Time", 1000, "max-loop", 25]);
 		} else {
 			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 10]);
 		}
