@@ -543,9 +543,10 @@ async function maybeDoCasino(ns, player) {
  * @param {number} stocksValue */
 async function maybeDoInfiltration(ns, player, stocksValue) {
 	const currentReserve = Number(ns.read("reserve.txt") || 0);
-	if (!player.factions.includes("Daedalus") && player.skills.hacking >= 2500 && !reserveForDaedalus && currentReserve !== 100E9) {
+	let farmForDaedalus = false;
+	if (!player.factions.includes("Daedalus") && player.skills.hacking >= 2500/* && !reserveForDaedalus && currentReserve !== 100E9*/) {
 		reserveForDaedalus = true;
-		return;
+		farmForDaedalus = true;
 	}
 	if (!options['enable-infiltration']) return;
 
@@ -573,11 +574,11 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 		stack = JSON.parse(stack)
 	}
 
-	if (player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
+	if (farmForDaedalus || player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
 		if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
 			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus", "sleep-Between-Infiltration-Time", 1000, "max-loop", 25]);
 		} else {
-			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 10]);
+			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "100E9", "sleep-Between-Infiltration-Time", 1000, "--max-loop", 10]);
 		}
 	} else if (player.money > 200000 && /*bitnodeMults?.InfiltrationRep > 0.5 &&*/ stack?.length > 0){
 		launchScriptHelper(ns, 'infiltrator.js');
