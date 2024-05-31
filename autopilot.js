@@ -566,8 +566,10 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 
 	if (player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
 		if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
+			reserveForDaedalus = false;
 			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus"]);
 		} else {
+			reserveForDaedalus = true;
 			launchScriptHelper(ns, 'infiltrator.js', ["--getMoney", "", "--max-loop", 10]);
 		}
 	} else if (player.money > 200000 && /*bitnodeMults?.InfiltrationRep > 0.5 &&*/ stack?.length > 0){
