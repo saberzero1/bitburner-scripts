@@ -728,6 +728,14 @@ async function shouldDelayInstall(ns, player, facmanOutput) {
             return true;
         }
     }
+
+    if (player.factions.includes("Daedalus")) {
+        if (!facmanOutput.affordable_augs.includes("The Red Pill") && !ownedAugmentations.includes("The Red Pill")) {
+            setStatus(ns, `Not installing until we taken The Red Pill.`)
+            return true;
+	}
+    }
+
     // TODO: Bladeburner black-op in progress
     // TODO: Close to the rep needed for unlocking donations with a new faction?
     return false;
