@@ -730,6 +730,7 @@ async function shouldDelayInstall(ns, player, facmanOutput) {
     }
 
     if (player.factions.includes("Daedalus")) {
+        const ownedAugmentations = await getNsDataThroughFile(ns, `ns.singularity.getOwnedAugmentations(true)`, '/Temp/player-augs-purchased.txt');
         if (!facmanOutput.affordable_augs.includes("The Red Pill") && !ownedAugmentations.includes("The Red Pill")) {
             setStatus(ns, `Not installing until we taken The Red Pill.`)
             return true;
