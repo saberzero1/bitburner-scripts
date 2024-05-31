@@ -542,7 +542,8 @@ async function maybeDoCasino(ns, player) {
  * @param {Player} player 
  * @param {number} stocksValue */
 async function maybeDoInfiltration(ns, player, stocksValue) {
-	if (!player.factions.includes("Daedalus") && player.skills.hacking >= 2500 && !reserveForDaedalus) {
+	const currentReserve = Number(ns.read("reserve.txt") || 0);
+	if (!player.factions.includes("Daedalus") && player.skills.hacking >= 2500 && !reserveForDaedalus && currentReserve !== 100E9) {
 		reserveForDaedalus = true;
 		return;
 	}
