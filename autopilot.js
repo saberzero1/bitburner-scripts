@@ -468,6 +468,11 @@ async function getAllServersInfo(ns) {
  * @param {NS} ns 
  * @param {Player} player */
 async function maybeDoIPvGO(ns, player) {
+    if (goCheckTime > Date.now() - (10 * 60 * 1000)) return;
+    goCheckTime = Date.now();
+
+    let isGoScriptRunning = findScriptHelper('infiltrator.js', await getRunningScripts(ns));
+    if (isGoScriptRunning) return
     const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, run in "start-tight" mode
     const daemonArgs = (player.skills.hacking < hackThreshold) ? [] :
          // Launch daemon in "looping" mode if we have sufficient hack level
@@ -481,10 +486,9 @@ async function maybeDoIPvGO(ns, player) {
     //const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
     //if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
     //launchScriptHelper(ns, 'ipvgo.js', goArgs);
-    const pid = (!goRunning || (Date.now() - goCheckTime) > 10 * 60 * 1000) ? launchScriptHelper(ns, 'ipvgo.js') : false;
+    const pid = launchScriptHelper(ns, 'ipvgo.js');
     if (pid) {
-        goRunning = true;
-        goCheckTime = Date.now();
+        log(ns, `INFO: Starting IPvGO script.`);
     }
 }
 
