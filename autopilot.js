@@ -738,7 +738,7 @@ async function shouldDelayInstall(ns, player, facmanOutput) {
 function manageReservedMoney(ns, player, stocksValue) {
     if (reservedPurchase) return; // Do not mess with money reserved for installing augmentations
     const currentReserve = Number(ns.read("reserve.txt") || 0);
-    if (reserveForDaedalus) // Reserve 100b to get the daedalus invite
+    if (reserveForDaedalus || currentReserve == 100E9) // Reserve 100b to get the daedalus invite
         return currentReserve == 100E9 ? true : ns.write("reserve.txt", 100E9, "w");
     // Otherwise, reserve money for stocks for a while, as it's our main source of income early in the BN
     // It also acts as a decent way to save up for augmentations
