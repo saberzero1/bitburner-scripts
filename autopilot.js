@@ -51,7 +51,7 @@ let reserveForDaedalus = false, daedalusUnavailable = false; // Flags to indicat
 let lastScriptsCheck = 0; // Last time we got a listing of all running scripts
 let killScripts = []; // A list of scripts flagged to be restarted due to changes in priority
 let dictOwnedSourceFiles = [], unlockedSFs = [], bitnodeMults, nextBn = 0; // Info for the current bitnode
-let installedAugmentations = [], playerInstalledAugCount = 0, stanekLaunched = false, goLaunched = false; // Info for the current ascend
+let installedAugmentations = [], playerInstalledAugCount = 0, stanekLaunched = false; // Info for the current ascend
 let daemonStartTime = 0; // The time we personally launched daemon.
 let installCountdown = 0; // Start of a countdown before we install augmentations.
 let bnCompletionSuppressed = false; // Flag if we've detected that we've won the BN, but are suppressing a restart
@@ -61,7 +61,6 @@ let ranGetMoney = false;
 
 let resetWindowAfterInfiltrationLoopFlag = false;
 let lastResetTime = Date.now();
-let goCheckTime = Date.now()
 
 let goRunning = false;//(14 in unlockedSFs) && findScript('ipvgo.js') !== undefined;
 
@@ -105,7 +104,7 @@ async function startUp(ns) {
 
     // Reset global state
     playerInGang = rushGang = playerInBladeburner = ranCasino = ranGetMoney = reserveForDaedalus = daedalusUnavailable =
-        bnCompletionSuppressed = stanekLaunched = goLaunched = false;
+        bnCompletionSuppressed = stanekLaunched = false;
     playerInstalledAugCount = wdHack = null;
     installCountdown = daemonStartTime = lastScriptsCheck = reservedPurchase = 0;
     lastStatusLog = "";
@@ -468,26 +467,12 @@ async function getAllServersInfo(ns) {
  * @param {NS} ns 
  * @param {Player} player */
 async function maybeDoIPvGO(ns, player) {
-    if (goCheckTime > Date.now() - (10 * 60 * 1000)) return;
-    goCheckTime = Date.now();
-
     let isGoScriptRunning = findScriptHelper('ipvgo.js', await getRunningScripts(ns));
-    if (isGoScriptRunning) return
-    const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, run in "start-tight" mode
-    const daemonArgs = (player.skills.hacking < hackThreshold) ? [] :
-         // Launch daemon in "looping" mode if we have sufficient hack level
-        ["--looping-mode", "--cycle-timing-delay", 2000, "--queue-delay", "10", "--initial-max-targets", "63", "--silent-misfires", "--no-share",
-            // Use recovery thread padding sparingly until our hack level is significantly higher
-            "--recovery-thread-padding", 1.0 + (player.skills.hacking - hackThreshold) / 1000.0];
-    //const servers = await getAllServersInfo(ns);
-    //const home = servers.find(s => s.hostname == "home")
-    //if (home.maxRam < 2 ** 8 || !(14 in unlockedSFs)) return;
+    if (isGoScriptRunning) return;
+
     const homeRam = await getNsDataThroughFile(ns, `ns.getServerMaxRam(ns.args[0])`, null, ["home"]);
     if (homeRam < 512) return;
-    goLaunched = true;
-    //const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
-    //if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
-    //launchScriptHelper(ns, 'ipvgo.js', goArgs);
+
     const pid = launchScriptHelper(ns, 'ipvgo.js');
     if (pid) {
         log(ns, `INFO: Starting IPvGO script.`);
