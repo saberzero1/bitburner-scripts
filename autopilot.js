@@ -471,7 +471,7 @@ async function maybeDoIPvGO(ns, player) {
     if (goCheckTime > Date.now() - (10 * 60 * 1000)) return;
     goCheckTime = Date.now();
 
-    let isGoScriptRunning = findScriptHelper('infiltrator.js', await getRunningScripts(ns));
+    let isGoScriptRunning = findScriptHelper('ipvgo.js', await getRunningScripts(ns));
     if (isGoScriptRunning) return
     const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, run in "start-tight" mode
     const daemonArgs = (player.skills.hacking < hackThreshold) ? [] :
