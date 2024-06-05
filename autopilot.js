@@ -479,9 +479,11 @@ async function maybeDoIPvGO(ns, player) {
         ["--looping-mode", "--cycle-timing-delay", 2000, "--queue-delay", "10", "--initial-max-targets", "63", "--silent-misfires", "--no-share",
             // Use recovery thread padding sparingly until our hack level is significantly higher
             "--recovery-thread-padding", 1.0 + (player.skills.hacking - hackThreshold) / 1000.0];
-    const servers = await getAllServersInfo(ns);
-    const home = servers.find(s => s.hostname == "home")
-    if (home.maxRam < 2 ** 8 || !(14 in unlockedSFs)) return;
+    //const servers = await getAllServersInfo(ns);
+    //const home = servers.find(s => s.hostname == "home")
+    //if (home.maxRam < 2 ** 8 || !(14 in unlockedSFs)) return;
+    const homeRam = await getNsDataThroughFile(ns, `ns.getServerMaxRam(ns.args[0])`, null, ["home"]);
+    if (homeRam < 512) return;
     goLaunched = true;
     //const goArgs = ["--reserved-ram", 128, "--no-tail", false, "--on-completion-script", getFilePath('daemon.js')]
     //if (daemonArgs.length >= 0) goArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs));
