@@ -14,12 +14,12 @@ let options; // The options used at construction time
 const argsSchema = [ // The set of all command line arguments
     ['next-bn', 0], // If we destroy the current BN, the next BN to start
     ['disable-auto-destroy-bn', false], // Set to true if you do not want to auto destroy this BN when done
-    ['install-at-aug-count', 9], //11// Automatically install when we can afford this many new augmentations (with NF only counting as 1)
+    ['install-at-aug-count', 10], //11// Automatically install when we can afford this many new augmentations (with NF only counting as 1)
     ['install-at-aug-plus-nf-count', 15], //14// or... automatically install when we can afford this many augmentations including additional levels of Neuroflux
     ['install-for-augs', ["The Red Pill"]], // or... automatically install as soon as we can afford one of these augmentations
     ['install-countdown', 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ['time-before-boosting-best-hack-server', 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
-    ['reduced-aug-requirement-per-hour', 1], //0.5// For every hour since the last reset, require this many fewer augs to install.
+    ['reduced-aug-requirement-per-hour', 4], //0.5// For every hour since the last reset, require this many fewer augs to install.
     ['interval', 2000], // Wake up this often (milliseconds) to check on things
     ['interval-check-scripts', 10000], // Get a listing of all running processes on home this frequently
     ['high-hack-threshold', 8000], // Once hack level reaches this, we start daemon in high-performance hacking mode
