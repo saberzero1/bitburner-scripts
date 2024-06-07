@@ -202,6 +202,9 @@ async function checkOnDaedalusStatus(ns, player, stocksValue) {
     // We do not need to run if we've previously determined that Daedalus cannot be unlocked (insufficient augs), or if we've already got TRP
     if (daedalusUnavailable || (wdHack || 0) > 0) return reserveForDaedalus = false;
     if (player.skills.hacking < 2500) return reserveForDaedalus = false;
+    installedAugmentations = !(4 in unlockedSFs) ? [] :
+        await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
+    if (installedAugmentations.includes("The Red Pill")) return reserveForDaedalus = false;
     if (player.factions.includes("Daedalus")) {
         if (reserveForDaedalus) {
             log(ns, "SUCCESS: We sped along joining the faction 'Daedalus'. Restarting work-for-factions.js to speed along earn rep.", false, 'success');
