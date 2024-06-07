@@ -564,7 +564,7 @@ async function maybeDoInfiltration(ns, player, stocksValue) {
 		stack = JSON.parse(stack)
 	}
 
-	if (farmForDaedalus || player.factions.includes("Daedalus") || player.skills.hacking >= 2500) {
+	if ((farmForDaedalus || player.factions.includes("Daedalus") || player.skills.hacking >= 2500) && !installedAugmentations.includes("The Red Pill")) {
 		if (player.factions.includes("Daedalus") && !ns.read("/Temp/Daedalus-donation-rep-attained.txt")) {
 			launchScriptHelper(ns, 'infiltrator.js', ["--boost-Faction", "Daedalus", "sleep-Between-Infiltration-Time", 1000, "max-loop", 25]);
 		} else {
