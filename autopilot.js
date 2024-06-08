@@ -111,7 +111,7 @@ async function startUp(ns) {
     installedAugmentations = killScripts = [];
 
     // Collect and cache some one-time data
-    player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
     bitnodeMults = await tryGetBitNodeMultipliers(ns);
     dictOwnedSourceFiles = await getActiveSourceFiles(ns, false);
@@ -170,7 +170,7 @@ async function initializeNewBitnode(ns, player) {
 /** Logic run periodically throughout the BN
  * @param {NS} ns */
 async function mainLoop(ns) {
-    player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     // Find the button used to save the game
     //const btnSaveGame = await findRetry(ns, "//button[@aria-label = 'save game']");
     let stocksValue = 0;
