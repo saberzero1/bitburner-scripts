@@ -9,6 +9,7 @@ const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produ
 const casinoFlagFile = "/Temp/ran-casino.txt";
 const defaultBnOrder = [4.3, 1.3, 5.1, 9.2, 10.1, 2.1, 8.2, 10.3, 9.3, 11.3, 13.3, 14.3, 5.3, 7.1, 6.3, 7.3, 2.3, 8.3, 3.3, 12.999];
 
+let player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
 let doc = eval("document");
 let options; // The options used at construction time
 const argsSchema = [ // The set of all command line arguments
@@ -112,7 +113,7 @@ async function startUp(ns) {
     installedAugmentations = killScripts = [];
 
     // Collect and cache some one-time data
-    const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
     bitnodeMults = await tryGetBitNodeMultipliers(ns);
     dictOwnedSourceFiles = await getActiveSourceFiles(ns, false);
@@ -171,7 +172,7 @@ async function initializeNewBitnode(ns, player) {
 /** Logic run periodically throughout the BN
  * @param {NS} ns */
 async function mainLoop(ns) {
-    const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     // Find the button used to save the game
     //const btnSaveGame = await findRetry(ns, "//button[@aria-label = 'save game']");
     let stocksValue = 0;
