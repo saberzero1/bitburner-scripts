@@ -9,7 +9,6 @@ const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produ
 const casinoFlagFile = "/Temp/ran-casino.txt";
 const defaultBnOrder = [4.3, 1.3, 5.1, 9.2, 10.1, 2.1, 8.2, 10.3, 9.3, 11.3, 13.3, 14.3, 5.3, 7.1, 6.3, 7.3, 2.3, 8.3, 3.3, 12.999];
 
-let player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
 let doc = eval("document");
 let options; // The options used at construction time
 const argsSchema = [ // The set of all command line arguments
@@ -25,8 +24,7 @@ const argsSchema = [ // The set of all command line arguments
     ['interval-check-scripts', 10000], // Get a listing of all running processes on home this frequently
     ['high-hack-threshold', 8000], // Once hack level reaches this, we start daemon in high-performance hacking mode
     ['enable-bladeburner', null], // (Deprecated) Bladeburner is now always enabled if it's available. Use '--disable-bladeburner' to explicitly turn off
-    //['disable-bladeburner', false], // This will instruct daemon.js not to run the bladeburner.js, even if bladeburner is available.
-    ['disable-bladeburner', player.bitNodeN == 12],
+    ['disable-bladeburner', false], // This will instruct daemon.js not to run the bladeburner.js, even if bladeburner is available.
     ['wait-for-4s-threshold', 0.9], // Set to 0 to not reset until we have 4S. If money is above this ratio of the 4S Tix API cost, don't reset until we buy it.
     ['disable-wait-for-4s', false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
     ['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
@@ -364,7 +362,7 @@ async function checkOnRunningScripts(ns, player) {
         let sleeveArgs = [];
         if (options["enable-casino"] && !ranCasino)
             sleeveArgs.push("--training-reserve", 300000); // Avoid training away our casino seed money
-        if (options["disable-bladeburner"])
+        if (options["disable-bladeburner"] || player.bitNodeN == 12)
             sleeveArgs.push("--disable-bladeburner");
         launchScriptHelper(ns, 'sleeve.js', sleeveArgs);
     }
@@ -399,7 +397,7 @@ async function checkOnRunningScripts(ns, player) {
     // In BN8, always run in a mode that prioritizes stock market manipulation
     if (resetInfo.currentNode == 8) daemonArgs.push("--stock-manipulation-focus");
     // Don't run the script to join and manage bladeburner if it is explicitly disabled
-    if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
+    if (options['disable-bladeburner'] || player.bitNodeN == 12) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
     // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
     if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
         daemonArgs.push('--reserved-ram', 32 * (unlockedSFs[4] == 2 ? 4 : 16));
@@ -428,7 +426,7 @@ async function checkOnRunningScripts(ns, player) {
         "--fast-crimes-only", // Essentially means we do mug until we can do homicide, then stick to homicide
         "--get-invited-to-every-faction" // Join factions even we have all their augs. Good for having NeuroFlux providers
     ];
-    if (options['disable-bladeburner']) workForFactionsArgs.push("--no-bladeburner-check")
+    if (options['disable-bladeburner'] || player.bitNodeN == 12) workForFactionsArgs.push("--no-bladeburner-check")
     // The following args are ideal when running 'work-for-factions.js' to rush unlocking gangs (earn karma)
     const rushGangsArgs = workForFactionsArgs.concat(...[ // Everything above, plus...
         "--crime-focus", // Start off by trying to work for each of the crime factions (generally have combat reqs)
