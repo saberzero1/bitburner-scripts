@@ -1646,7 +1646,7 @@ export async function main(ns) {
 			} //End of style switch
 		} // end of turn >= 3
 
-		if (results?.type === "gameOver") {
+		if (results?.type === "gameOver" || getAllValidMoves(board, validMove) == []) {
 			/*let finalResult = ns.go.getGameState();
 			let playerWonGoGame = finalResult.whiteScore < finalResult.blackScore;
 			let printGameResultString = playerWonGoGame
