@@ -479,7 +479,9 @@ async function maybeDoIPvGO(ns, player) {
     const pid = launchScriptHelper(ns, 'ipvgo.js');
     if (pid) {
         log(ns, `INFO: Starting IPvGO script.`);
+        return;
     }
+    log(ns, `ERROR: IPvGO - Something went wrong.`);
 }
 
 /** Logic to steal 10b from the casino
