@@ -1107,7 +1107,7 @@ export async function main(ns) {
         canHack() { return this.requiredHackLevel <= playerHackSkill(); }
         shouldHack() {
             return this.getMaxMoney() > 0 && this.name !== "home" && !this.name.startsWith('hacknet-server-') && !this.name.startsWith('hacknet-node-') &&
-                !this.name.startsWith(purchasedServersName); // Hack, but beats wasting 2.25 GB on ns.getPurchasedServers()
+                !this.name.startsWith(purchasedServersName); // Hack, but beats wasting 1.05 GB on ns.cloud.getServerNames()
         }
         // "Prepped" means current security is at the minimum, and current money is at the maximum
         isPrepped() {
