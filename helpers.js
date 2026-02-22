@@ -178,8 +178,8 @@ function getDefaultCommandFileName(command, ext = '.txt') {
  * requirements (if you already reference ns.exec in your script, pass the result of `getFnRunViaNsExec(ns)`)
  * Importing incurs no RAM (now that ns.read is free) plus whatever fnRun you provide it.
  * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {function} fnRun A single-argument function used to start the new sript, e.g. `ns.run` or `(f,...args) => ns.exec(f, "home", ...args)`
+ * @param {NS} ns The ns instance passed to your script's main entry point
+ * @param {function} fnRun A single-argument function used to start the new script, e.g. `ns.run` or `(f,...args) => ns.exec(f, "home", ...args)`
  * @param {string} command The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
  * @param {string?} fName (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
  * @param {any[]?} args args to be passed in as arguments to command being run as a new script.
@@ -207,6 +207,14 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
                 return pCopy;
             }, {});
         })()`;
+    // TODO: Remove after v3.0.0 is released on stable.
+    if (!isV3(ns)) {
+        // Use v2 APIs.
+        command = command
+            .replaceAll("hasWseAccount", "hasWSEAccount")
+            .replaceAll("hasTixApiAccess", "hasTIXAPIAccess")
+            .replaceAll("has4SDataTixApi", "has4SDataTIXAPI");
+    }
 
     // Prepare a command that will write out a new file containing the results of the command
     // unless it already exists with the same contents (saves time/ram to check first)
@@ -602,7 +610,10 @@ export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile
     } catch { }
     if (canGetBitNodeMultipliers) {
         try {
-            return await fnGetNsDataThroughFile(ns, 'ns.getBitNodeMultipliers()', '/Temp/bitNode-multipliers.txt', null, null, null, null, /*silent:*/true);
+            const mults = await fnGetNsDataThroughFile(ns, 'ns.getBitNodeMultipliers()', '/Temp/bitNode-multipliers.txt', null, null, null, null, /*silent:*/true);
+            // TODO: Remove after v3.0.0 is released on stable.
+            // If running an older version of the game, some property names need to be updated.
+            mults.FavorToDonateToFaction ??= mults.RepToDonateToFaction;
         } catch { }
     }
     return await getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile);
@@ -662,7 +673,7 @@ export async function getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile,
         PurchasedServerSoftcap: /*     */[1, 1.3, 1.3, 1.2, 1.2, 2, 2, 4, 1, 1.1, 2, 1, 1.6, 1],
         PurchasedServerLimit: /*       */[1, 1, 1, 1, 1, 1, 1, 1, 0, 0.6, 1, 1, 1, 1],
         PurchasedServerMaxRam: /*      */[1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 1, 1, 1, 1],
-        // TODO: v3.0.0
+        // TODO: Remove after v3.0.0 is released on stable.
         /**
          * RepToDonateToFaction and FavorToDonateToFaction have the same value. RepToDonateToFaction was renamed to
          * FavorToDonateToFaction in v3.0.0.
@@ -897,7 +908,7 @@ export function tail(ns, processId = undefined) {
     ns.write(tailFile, JSON.stringify(tailedPids), 'w');
 }
 
-// TODO: v3.0.0
+// TODO: Remove after v3.0.0 is released on stable.
 function isV3(ns) {
     return ns.ui.getGameInfo().versionNumber >= 44;
 }
@@ -907,24 +918,4 @@ export function formatTime(ns, milliseconds, milliPrecision) {
         return ns.ui.time(milliseconds, milliPrecision);
     }
     return ns.tFormat(milliseconds, milliPrecision);
-}
-
-export function getCompatibleApi(ns, latestApi) {
-    if (isV3(ns)) {
-        return latestApi;
-    }
-    // Return v2 APIs
-    switch (latestApi) {
-        case "hasWseAccount":
-            return "hasWSEAccount";
-        case "hasTixApiAccess":
-            return "hasTIXAPIAccess";
-        case "has4SDataTixApi":
-            return "has4SDataTIXAPI";
-        case "FavorToDonateToFaction":
-            return "RepToDonateToFaction";
-    }
-    const errorMessage = `Unknown API: ${latestApi}`;
-    ns.tprint(`\u001b[31m${errorMessage}`);
-    throw new Error(errorMessage);
 }

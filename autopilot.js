@@ -1,7 +1,7 @@
 import {
     log, getFilePath, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
-    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getCompatibleApi
+    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer
 } from './helpers.js'
 
 const argsSchema = [ // The set of all command line arguments
@@ -876,7 +876,7 @@ export async function main(ns) {
         // (doesn't apply in BN8, since we can immediately donate to all factions)
         if (
             player.factions.includes("Daedalus") &&
-            bitNodeMults[getCompatibleApi(ns, "FavorToDonateToFaction")] !== 0 &&
+            bitNodeMults.FavorToDonateToFaction !== 0 &&
             ns.read("/Temp/Daedalus-donation-rep-attained.txt")
         ) {
             shouldReset = true;
@@ -979,7 +979,7 @@ export async function main(ns) {
         if (await checkIfGrafting(ns))
             return true;
         // Are we close to being able to afford 4S TIX data?
-        if (!options['disable-wait-for-4s'] && !(await getNsDataThroughFile(ns, `ns.stock.${getCompatibleApi(ns, "has4SDataTixApi")}()`))) {
+        if (!options['disable-wait-for-4s'] && !(await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`))) {
             const totalWorth = player.money + await getStocksValue(ns);
             const has4S = await getNsDataThroughFile(ns, `ns.stock.has4SData()`);
             const totalCost = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost +
