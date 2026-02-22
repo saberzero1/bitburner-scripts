@@ -207,23 +207,6 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
                 return pCopy;
             }, {});
         })()`;
-    // TODO: Remove after v3.0.0 is released on stable.
-    if (!isV3(ns)) {
-        // Use v2 APIs.
-        command = command
-            .replaceAll("hasWseAccount", "hasWSEAccount")
-            .replaceAll("hasTixApiAccess", "hasTIXAPIAccess")
-            .replaceAll("has4SDataTixApi", "has4SDataTIXAPI")
-            .replaceAll("cloud.getServerCost", "getPurchasedServerCost")
-            .replaceAll("cloud.purchaseServer", "purchaseServer")
-            .replaceAll("cloud.getServerUpgradeCost", "getPurchasedServerUpgradeCost")
-            .replaceAll("cloud.upgradeServer", "upgradePurchasedServer")
-            .replaceAll("cloud.renameServer", "renamePurchasedServer")
-            .replaceAll("cloud.deleteServer", "deleteServer")
-            .replaceAll("cloud.getServerNames", "getPurchasedServers")
-            .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
-            .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
-    }
 
     // Prepare a command that will write out a new file containing the results of the command
     // unless it already exists with the same contents (saves time/ram to check first)
@@ -327,6 +310,25 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
     checkNsInstance(ns, '"runCommand_Custom"');
     if (!Array.isArray(args)) throw new Error(`args specified were a ${typeof args}, but an array is required.`);
     if (!verbose) disableLogs(ns, ['sleep']);
+
+    // TODO: Remove after v3.0.0 is released on stable.
+    if (!isV3(ns)) {
+        // Use v2 APIs.
+        command = command
+            .replaceAll("hasWseAccount", "hasWSEAccount")
+            .replaceAll("hasTixApiAccess", "hasTIXAPIAccess")
+            .replaceAll("has4SDataTixApi", "has4SDataTIXAPI")
+            .replaceAll("cloud.getServerCost", "getPurchasedServerCost")
+            .replaceAll("cloud.purchaseServer", "purchaseServer")
+            .replaceAll("cloud.getServerUpgradeCost", "getPurchasedServerUpgradeCost")
+            .replaceAll("cloud.upgradeServer", "upgradePurchasedServer")
+            .replaceAll("cloud.renameServer", "renamePurchasedServer")
+            .replaceAll("cloud.deleteServer", "deleteServer")
+            .replaceAll("cloud.getServerNames", "getPurchasedServers")
+            .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
+            .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
+    }
+
     // Auto-import any helpers that the temp script attempts to use
     let importFunctions = getExports(ns).filter(e => command.includes(`${e}`)) // Check if the script includes the name of any functions
         // To avoid false positives, narrow these to "whole word" matches (no alpha characters on either side)
@@ -627,6 +629,7 @@ export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile
             mults.CloudServerSoftcap ??= mults.PurchasedServerSoftcap;
             mults.CloudServerLimit ??= mults.PurchasedServerLimit;
             mults.CloudServerMaxRam ??= mults.PurchasedServerMaxRam;
+            return mults;
         } catch { }
     }
     return await getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile);
@@ -682,20 +685,10 @@ export async function getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile,
         InfiltrationMoney: /*          */[1, 3, 1, 1, 1.5, 0.75, 0.75, 0, 1, 0.5, 2.5, 1, 1, 0.75],
         InfiltrationRep: /*            */[1, 1, 1, 1, 1.5, 1, 1, 1, 1, 1, 2.5, 1, 1, 1],
         ManualHackMoney: /*            */[1, 1, 1, 1, 1, 1, 1, 0, 1, 0.5, 1, 1, 1, 1],
-        // TODO: Remove after v3.0.0 is released on stable.
-        // PurchasedServer mults were renamed to CloudServers mults.
-        PurchasedServerCost: /*        */[1, 1, 2, 1, 1, 1, 1, 1, 1, 5, 1, 1, 1, 1],
-        PurchasedServerSoftcap: /*     */[1, 1.3, 1.3, 1.2, 1.2, 2, 2, 4, 1, 1.1, 2, 1, 1.6, 1],
-        PurchasedServerLimit: /*       */[1, 1, 1, 1, 1, 1, 1, 1, 0, 0.6, 1, 1, 1, 1],
-        PurchasedServerMaxRam: /*      */[1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 1, 1, 1, 1],
-        CloudServerCost: /*        */[1, 1, 2, 1, 1, 1, 1, 1, 1, 5, 1, 1, 1, 1],
-        CloudServerSoftcap: /*     */[1, 1.3, 1.3, 1.2, 1.2, 2, 2, 4, 1, 1.1, 2, 1, 1.6, 1],
-        CloudServerLimit: /*       */[1, 1, 1, 1, 1, 1, 1, 1, 0, 0.6, 1, 1, 1, 1],
-        CloudServerMaxRam: /*      */[1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 1, 1, 1, 1],
-        // TODO: Remove after v3.0.0 is released on stable.
-        // RepToDonateToFaction and FavorToDonateToFaction have the same value. RepToDonateToFaction was renamed to
-        // FavorToDonateToFaction in v3.0.0.
-        RepToDonateToFaction: /*       */[1, 1, 0.5, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1],
+        CloudServerCost: /*            */[1, 1, 2, 1, 1, 1, 1, 1, 1, 5, 1, 1, 1, 1],
+        CloudServerSoftcap: /*         */[1, 1.3, 1.3, 1.2, 1.2, 2, 2, 4, 1, 1.1, 2, 1, 1.6, 1],
+        CloudServerLimit: /*           */[1, 1, 1, 1, 1, 1, 1, 1, 0, 0.6, 1, 1, 1, 1],
+        CloudServerMaxRam: /*          */[1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 1, 1, 1, 1],
         FavorToDonateToFaction: /*     */[1, 1, 0.5, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1],
         ScriptHackMoney: /*            */[1, 1, 0.2, 0.2, 0.15, 0.75, 0.5, 0.3, 0.1, 0.5, 1, 1, 0.2, 0.3],
         ScriptHackMoneyGain: /*        */[1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1],
