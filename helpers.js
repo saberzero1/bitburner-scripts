@@ -159,17 +159,65 @@ export async function getNsDataThroughFile(ns, command, fName = null, args = [],
     return await getNsDataThroughFile_Custom(ns, ns.run, command, fName, args, verbose, maxRetries, retryDelayMs, silent);
 }
 
+/** 
+ * Checks the command for functions that had a different name in older versions of bitburner,
+ * and fixes the command to be executed to be compatible with the current game version.
+ * This allows us to support Bitburner versions 2.x and 3.x simultaneously with one set of scripts.
+ * @param {NS} ns
+ * @param {string} command The ns command that should be invoked to get the desired data
+ * @returns {string} The command passed in, or a transformed command if changes are required for backwards compatibility. */
+function checkBackwardsCompatibility(ns, command) {
+    // All code is written using the V3 bitburner APIs, so if we are on V3, there's nothing to change
+    if (isV3(ns))
+        return command;
+    // Otherwise, assume we are on V2 and downgrade any function names that have been changed
+    let alteredCommand = command
+        .replaceAll("hasWseAccount", "hasWSEAccount")
+        .replaceAll("hasTixApiAccess", "hasTIXAPIAccess")
+        .replaceAll("has4SDataTixApi", "has4SDataTIXAPI")
+        .replaceAll("cloud.getServerCost", "getPurchasedServerCost")
+        .replaceAll("cloud.purchaseServer", "purchaseServer")
+        .replaceAll("cloud.getServerUpgradeCost", "getPurchasedServerUpgradeCost")
+        .replaceAll("cloud.upgradeServer", "upgradePurchasedServer")
+        .replaceAll("cloud.renameServer", "renamePurchasedServer")
+        .replaceAll("cloud.deleteServer", "deleteServer")
+        .replaceAll("cloud.getServerNames", "getPurchasedServers")
+        .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
+        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
+
+    // Log altered commands to assist with troubleshooting.
+    if (alteredCommand != command)
+        log(ns, `INFO: Command was converted to be backwards-compatible with v2 APIs:` +
+            `\nOriginal: ${command}` +
+            `\n Updated: ${alteredCommand}`);
+
+    // Workaround for v2.3.0 deprecations. TODO: Remove when the warning is gone from all game versions
+    // Avoid serializing ns.getPlayer() properties that generate warnings. (This doesn't need to be logged)
+    if (command === "ns.getPlayer()")
+        alteredCommand = `( ()=> { let player = ns.getPlayer();
+            const excludeProperties = ['playtimeSinceLastAug', 'playtimeSinceLastBitnode', 'bitNodeN'];
+            return Object.keys(player).reduce((pCopy, key) => {
+                if (!excludeProperties.includes(key))
+                   pCopy[key] = player[key];
+                return pCopy;
+            }, {});
+        })()`;
+
+    return alteredCommand;
+}
+
 /** Convert a command name like "ns.namespace.someFunction(args, args)" into
  * a default file path for running that command "/Temp/namespace-someFunction.txt" */
 function getDefaultCommandFileName(command, ext = '.txt') {
-    // If prefixed with "ns.", strip that out
     let fname = command;
-    if (fname.startsWith("await ")) fname = fname.slice(6);
-    if (fname.startsWith("ns.")) fname = fname.slice(3);
-    // Remove anything between parentheses
-    fname = fname.replace(/ *\([^)]*\) */g, "");
+    // Find the first occurrence of "ns.", which would indicate the start of the main function being invoked
+    const nsIndex = fname.indexOf('ns.');
+    if (nsIndex !== -1) fname = fname.substring(nsIndex);
+    // Remove anything after an opening parentheses (function call)
+    const openParen = fname.indexOf('(');
+    if (openParen !== -1) fname = fname.substring(0, openParen);
     // Replace any dereferencing (dots) with dashes
-    fname = fname.replace(".", "-");
+    fname = fname.replaceAll(".", "-");
     return `/Temp/${fname}${ext}`
 }
 
@@ -191,26 +239,21 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
     if (args == null) args = []; if (verbose == null) verbose = false;
     if (maxRetries == null) maxRetries = 5; if (retryDelayMs == null) retryDelayMs = 50; if (silent == null) silent = false;
     if (!verbose) disableLogs(ns, ['read']);
+
+    // Check whether any backwards-compatible changes need to be made to the command being executed
+    command = checkBackwardsCompatibility(ns, command);
+
+    // Create a file that will store the results of whatever command is executed.
     fName = fName || getDefaultCommandFileName(command);
     const fNameCommand = fName + '.js'
     // Pre-write contents to the file that will allow us to detect if our temp script never got run
     const initialContents = "<Insufficient RAM>";
     ns.write(fName, initialContents, 'w');
-    // TODO: Workaround for v2.3.0 deprecation. Remove when the warning is gone.
-    // Avoid serializing ns.getPlayer() properties that generate warnings
-    if (command === "ns.getPlayer()")
-        command = `( ()=> { let player = ns.getPlayer();
-            const excludeProperties = ['playtimeSinceLastAug', 'playtimeSinceLastBitnode', 'bitNodeN'];
-            return Object.keys(player).reduce((pCopy, key) => {
-                if (!excludeProperties.includes(key))
-                   pCopy[key] = player[key];
-                return pCopy;
-            }, {});
-        })()`;
 
     // Prepare a command that will write out a new file containing the results of the command
     // unless it already exists with the same contents (saves time/ram to check first)
-    // If an error occurs, it will write an empty file to avoid old results being misread.
+    // If an error occurs, it will write the error message to the file (and this will be detected when we read the result)
+    // TODO: (Issue #481) Add special handling for null and undefined results, so that functions returning no value can also be invoked via this function.
     const commandToFile = `let r;try{r=JSON.stringify(\n` +
         `    ${command}\n` +
         `, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}\n` +
@@ -311,23 +354,10 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
     if (!Array.isArray(args)) throw new Error(`args specified were a ${typeof args}, but an array is required.`);
     if (!verbose) disableLogs(ns, ['sleep']);
 
-    // TODO: Remove after v3.0.0 is released on stable.
-    if (!isV3(ns)) {
-        // Use v2 APIs.
-        command = command
-            .replaceAll("hasWseAccount", "hasWSEAccount")
-            .replaceAll("hasTixApiAccess", "hasTIXAPIAccess")
-            .replaceAll("has4SDataTixApi", "has4SDataTIXAPI")
-            .replaceAll("cloud.getServerCost", "getPurchasedServerCost")
-            .replaceAll("cloud.purchaseServer", "purchaseServer")
-            .replaceAll("cloud.getServerUpgradeCost", "getPurchasedServerUpgradeCost")
-            .replaceAll("cloud.upgradeServer", "upgradePurchasedServer")
-            .replaceAll("cloud.renameServer", "renamePurchasedServer")
-            .replaceAll("cloud.deleteServer", "deleteServer")
-            .replaceAll("cloud.getServerNames", "getPurchasedServers")
-            .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
-            .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
-    }
+    // Check whether any backwards-compatible changes need to be made to the command being executed
+    // Note: This is already done in getNsDataThroughFile, before this function is called, but it must be
+    //       checked again here since there are some use-cases where runCommand is invoked directly.
+    command = checkBackwardsCompatibility(ns, command);
 
     // Auto-import any helpers that the temp script attempts to use
     let importFunctions = getExports(ns).filter(e => command.includes(`${e}`)) // Check if the script includes the name of any functions
@@ -918,7 +948,6 @@ export function tail(ns, processId = undefined) {
     ns.write(tailFile, JSON.stringify(tailedPids), 'w');
 }
 
-// TODO: Remove after v3.0.0 is released on stable.
 function isV3(ns) {
     return ns.ui.getGameInfo().versionNumber >= 44;
 }
