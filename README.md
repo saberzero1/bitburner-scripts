@@ -1,3 +1,6 @@
+# Insight's Scripts
+Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. Hosted on my personal github because all the best hackers dox themselves.
+
 # Downloading the whole repository
 
 If you manually `nano git-pull.js` from the terminal and copy the [contents of that script](https://raw.githubusercontent.com/alainbryden/bitburner-scripts/main/git-pull.js), you should be able to run it once and download the rest of the files I use. Early-game, many will be useless because they are only enabled by late-game features, but they shouldn't give you too many problems just being there.
@@ -6,13 +9,13 @@ If you manually `nano git-pull.js` from the terminal and copy the [contents of t
 
 If you `run autopilot.js` from the terminal, it will start several other scripts.
 
-You can think of this as the "master orchestrator" script. It will kick off `daemon.js` (you primary hacking script), which in turn kicks off several other helper-scripts. It will monitor your progress throughout the game and take special actions when it can. I don't want to spoil too much for those new to the game, but it's worth mentioning that `SF4` is not required, but is highly-recommended to get the full benefit of this script.
+You can think of this as the "master orchestrator" script. It will kick off `daemon.js` (your primary hacking script), which in turn kicks off several other helper-scripts. It will monitor your progress throughout the game, and take special actions when it can. I don't want to spoil too much for those new to the game, but it's worth mentioning that `SF4` is not required, but is highly-recommended to get the full benefit of this script.
 
 Most scripts can also be run on their own, but are primarily designed to be orchestrated by `autopilot.js` or `daemon.js`.
 
 ## Manually run scripts
 
-Some scripts are meant to be manually run as needed. Most scripts take arguments to tweak or customize their behaviour based on your preferences or special circumstance. More on this in [below](#customizing-script-behaviour-basic).
+Some scripts are meant to be manually run as needed. Most scripts take arguments to tweak or customize their behaviour based on your preferences or special circumstance. More on this [below](#customizing-script-behaviour-basic).
 Run scripts with the `--help` flag to get a list of their arguments, default values, and a brief description of each:
 ![image](https://user-images.githubusercontent.com/2285037/166085058-952b0805-cf4e-4548-8829-1e1ebeb5428b.png)
 You will also see an error-version of this dialog if you make a mistake in how you run the script.
@@ -31,6 +34,7 @@ Here are scripts that you may want to manually run, roughly in the order in whic
 - `daemon.js` - Automates hacking and infrastructure, and kicking off various scripts to take advantage of other mechanics in the game as you unlock them.
 - `casino.js` - The first time you run this may come as a surprise, it will play blackjack and reload the game if it loses (automated save-scumming). Once you win 10b, you cannot enter the casino any more. Great way to boost your progress once you make the initial 200k needed to travel to Aevum and use the casino. For best performance, run `kill-all-scripts.js` before you run this, since other running scripts slow down the game's load time.
 - `reserve.js` - A simple way to reserve money across all scripts, in case you wanted to be certain to save up for something. e.g. `run reserve.js 200k` will reserve the $200,000 needed to get `casino.js` going.
+  - **NOTE**: If you are using autopilot, it will also automatically manage your reserve. If you want to reserve funds for yourself, kill autopilot and just run daemon.js
 - `kill-all-scripts.js` - Kills all scripts running on home and remote servers, and also removes files that were copied to remote servers.
 - `faction-manager.js` - (Requires SF4) Run this periodically to find out how many augmentations you can currently afford. There are many command line options available to tweak the sort of augmentations you wish to prioritize. Run with `--purchase` to pull the trigger if you're ready to ascend.
 - `work-for-factions.js` - (Requires SF4) Daemon.js will start a version of this to make sure your "focus" work goes to good use, but often you'll want to run with your own arguments to specify what kind of work you want to be doing, depending on your goals for the current BitNode.
@@ -40,7 +44,7 @@ Here are scripts that you may want to manually run, roughly in the order in whic
 - `farm-intelligence.js` - (Requires SF4, SF5) Contains a script that can execute one or more of the best known methods to farm intelligence experience.
   - Note that the current best method (soft reset loop) is most effective if you delete all scripts except this one (and helpers.js which it relies on) before running. You can do this quickly by modifying cleanup.js to run on all files instead of just /Temp/. You then would have to restore scripts by nano'ing git-pull as when you started out.
 - `cleanup.js` - Use this to clear out your temp folder (which contains hundreds of miniature scripts generated by the main scripts). Useful to reduce your save file size before exporting.
-- `grep.js` - Use this to search one or all files for certain text. Handy if you are trying to figure out e.g. what script spend hashes, or care about the TIX api.
+- `grep.js` - Use this to search one or all files for certain text. Handy if you are trying to figure out e.g. what scripts spend hashes, or reference some particular api.
 - `run-command.js` - Useful for testing a bit of code from the terminal without having to create a new script. Creating the alias `alias do="run run-command.js"` makes this extra useful. e.g. `do ns.getPlayer()` will print all the player's info to the terminal. `do ns.getServer('joesguns')` will print all info about that server to the terminal.
 
 If you want more information about any script, try reading the source. I do my best to document things clearly. If it's not clear, feel free to raise an issue.
@@ -136,5 +140,8 @@ It's meant as an easy way for me to share code with friends, and track changes a
 While I do like my work to be helpful to others and re-used, I am only willing to put so much effort into customizing it to others' specific needs or whims.
 You should fork the code, and start tweaking it the way you want it to behave. That's more in the spirit of the game!
 
-Hit up the Bitburner Discord with any questions: [Bitburner#alains-scripts](https://discord.com/channels/415207508303544321/935667531111342200)
+Hit up the Bitburner Discord with any questions:
+- Invite to Bitburner Disccord: https://discord.com/invite/TFc3hKD
+- Link to the channel for these scripts: [Bitburner#alains-scripts](https://discord.com/channels/415207508303544321/935667531111342200)
+
 Many helpful folks in there are familiar with my scripts or ones similar to them and can address your questions and concerns far quicker than I can.

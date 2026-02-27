@@ -74,9 +74,9 @@ export async function main(ns) {
     // 1. Set up priority order of stat fragments to include
     const targetIds = [
         FragmentId.Rep, FragmentId.Hacking2, FragmentId.Hacking1, // Basics, always want
-        , FragmentId.HackingSpeed, // Priority 2, improve hack EXP gain and income?
-        , FragmentId.HacknetMoney, FragmentId.HacknetCost // Priority 3, hacknet good for lots of things?
-        , FragmentId.HackingGrow, FragmentId.HackingMoney // Priority 4, improves growth, income for RAM from hacking?
+        FragmentId.HackingSpeed, // Priority 2, improve hack EXP gain and income?
+        FragmentId.HacknetMoney, FragmentId.HacknetCost, // Priority 3, hacknet good for lots of things?
+        FragmentId.HackingGrow, FragmentId.HackingMoney // Priority 4, improves growth, income for RAM from hacking?
         //etc...
     ];
     const allFragments = ns.stanek.fragmentDefinitions();
@@ -369,7 +369,7 @@ function coverage(x0, y0, rotation, fragment) {
 
 /** @param {number} width
  *  @param {number} height
- *  @param {[number, number][]} coords 
+ *  @param {[number, number][]} coords
  *  @return {[number, number][]} */
 function adjacents(width, height, coords) {
     const adjacent = [...new Array(width)].map(() => [...new Array(height)].map(() => false));

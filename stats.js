@@ -1,6 +1,6 @@
 import {
     log, disableLogs, instanceCount, getConfiguration, getNsDataThroughFile, getActiveSourceFiles,
-    getStocksValue, formatNumberShort, formatMoney, formatRam
+    getStocksValue, formatNumberShort, formatMoney, formatRam, getFilePath
 } from './helpers.js'
 
 const argsSchema = [
@@ -20,7 +20,7 @@ let playerInBladeburner = false, nodeMap = {}
 /** @param {NS} ns **/
 export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
-    if (!options || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
+    if (!options || (await instanceCount(ns)) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
 
     const dictSourceFiles = await getActiveSourceFiles(ns, false); // Find out what source files the user has unlocked
     let resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
@@ -48,7 +48,9 @@ export async function main(ns) {
 
             // update HUD elements with info collected above.
             for (const [header, show, formattedValue, toolTip] of hudData) {
-                updateHudElement(header, show, formattedValue, toolTip)
+                // Ensure values are never shown glued to the header by adding a non-breaking space to the left of each. 
+                const paddedValue = formattedValue == null ? null : ' ' + formattedValue?.trim();
+                updateHudElement(header, show, paddedValue, toolTip)
             }
         } catch (err) {
             // Might run out of ram from time to time, since we use it dynamically
@@ -59,6 +61,8 @@ export async function main(ns) {
     }
 }
 
+/** Creates the new UI elements which we will be adding custom HUD data to. 
+ * @param {HudRowConfig[]} hudData */
 function prepareHudElements(hudData) {
     const newline = (id, txt, toolTip = "") => {
         const p = doc.createElement("p");
@@ -74,7 +78,7 @@ function prepareHudElements(hudData) {
         return p;
     }
 
-    for (const [header, visible, value, toolTip] of hudData) {
+    for (const [header, _, value, toolTip] of hudData) {
         const id = makeID(header)
         hook0.appendChild(newline(id + "-title", header.padEnd(9, " "), toolTip))
         hook1.appendChild(newline(id + "-value", value, toolTip))
@@ -85,6 +89,11 @@ function makeID(header) {
     return header.replace(" ", "") ?? "empty-header"
 }
 
+/** Creates the new UI elements which we will be adding custom HUD data to.
+ * @param {string} header - The stat name which appears in the first column of the custom HUD row
+ * @param {boolean} visible - Indicates whether the current HUD row should be displayed (true) or hidden (false)
+ * @param {string} value - The value to display in the second column of the custom HUD row
+ * @param {string} toolTip - The tooltip to display if the user hovers over this HUD row with their cursor. */
 function updateHudElement(header, visible, value, toolTip) {
     const id = makeID(header),
         valId = id + "-value",
@@ -106,9 +115,18 @@ function updateHudElement(header, visible, value, toolTip) {
     }
 }
 
-/** @param {NS} ns **/
+/** @param {NS} ns
+ * @param {number} bitNode the current bitnode the user is in
+ * @param {{[k: number]: number}} dictSourceFiles The source files the user has unlocked so far
+ * @param {(string | boolean)[][]} options The run configuration of this script.
+ * @typedef {string} header - The stat name which appears in the first column of the custom HUD row
+ * @typedef {boolean} show - Indicates whether the current HUD row should be displayed (true) or hidden (false)
+ * @typedef {string} formattedValue - The value to display in the second column of the custom HUD row
+ * @typedef {string} toolTip - The tooltip to display if the user hovers over this HUD row with their cursor.
+ * @typedef {[header, show, formattedValue, toolTip]} HudRowConfig The configuration for a custom row displayed in the HUD
+ * @returns {Promise<HudRowConfig[]>} **/
 async function getHudData(ns, bitNode, dictSourceFiles, options) {
-    const hudData = [];
+    const hudData = (/**@returns {HudRowConfig[]}*/() => [])();
 
     // Show what bitNode we're currently playing in
     {
@@ -119,22 +137,29 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
 
     // Show Hashes
     {
-        const val1 = ["Hashes"]
-        const val2 = [" "]
+        const val1 = ["Hashes"];
+        const val2 = [" "]; // Blank line placeholder for when hashes are being liquidated
         if (9 in dictSourceFiles || 9 == bitNode) { // Section not relevant if you don't have access to hacknet servers
             const hashes = await getNsDataThroughFile(ns, '[ns.hacknet.numHashes(), ns.hacknet.hashCapacity()]', '/Temp/hash-stats.txt')
             if (hashes[1] > 0) {
                 val1.push(true, `${formatNumberShort(hashes[0], 3, 1)}/${formatNumberShort(hashes[1], 3, 1)}`,
                     `Current Hashes ${hashes[0].toLocaleString('en')} / Current Hash Capacity ${hashes[1].toLocaleString('en')}`)
-            } else val1.push(false)
-            // Detect and notify the HUD if we are liquidating hashes (selling them as quickly as possible)               
-            if (ns.isRunning('spend-hacknet-hashes.js', 'home', '--liquidate') || ns.isRunning('spend-hacknet-hashes.js', 'home', '-l')) {
-                val2.push(true, "Liquidating", 'You have a script running that is selling hashes as quickly as possible (likely `spend-hacknet-hashes.js --liquidate`)')
-            } else val2.push(false)
-        } else {
-            val1.push(false)
-            val2.push(false)
+                // Detect and notify the HUD if any scripts are liquidating hashes (selling them as quickly as possible)
+                const spendHashesScript = getFilePath('spend-hacknet-hashes.js');
+                const liquidatingHashes = await (/**@returns{Promise<ProcessInfo[]>}*/async () =>
+                    await getNsDataThroughFile(ns,
+                        `ns.ps('home').filter(p => p.filename == ns.args[0] && (p.args.includes('--liquidate') || p.args.includes('-l')))`,
+                        '/Temp/hash-liquidation-scripts.txt', [spendHashesScript])
+                )();
+                if (liquidatingHashes.length > 0)
+                    val2.push(true, "Liquidating", `You have ${liquidatingHashes.length} script` +
+                        (liquidatingHashes.length > 1 ? 's running that are' : ' running that is') +
+                        ' selling hashes as quickly as possible:\n' +
+                        liquidatingHashes.map(s => `${s.filename} ${s.args.join(' ')} (PID: ${s.pid})`).join('\n',));
+            }
         }
+        if (val1.length < 2) val1.push(false);
+        if (val2.length < 2) val2.push(false);
         hudData.push(val1, val2)
     }
 
@@ -151,8 +176,10 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
     }
 
     // Show total instantaneous script income and experience per second (values provided directly by the game)
-    hudData.push(["Scr Inc", true, formatMoney(ns.getTotalScriptIncome()[0], 3, 2) + '/sec', "Total 'instantenous' income per second being earned across all scripts running on all servers."]);
-    hudData.push(["Scr Exp", true, formatNumberShort(ns.getTotalScriptExpGain(), 3, 2) + '/sec', "Total 'instantenous' hack experience per second being earned across all scripts running on all servers."]);
+    const totalScriptInc = await getNsDataThroughFile(ns, 'ns.getTotalScriptIncome()');
+    const totalScriptExp = await getNsDataThroughFile(ns, 'ns.getTotalScriptExpGain()');
+    hudData.push(["Scr Inc", true, formatMoney(totalScriptInc[0], 3, 2) + '/sec', "Total 'instantaneous' income per second being earned across all scripts running on all servers."]);
+    hudData.push(["Scr Exp", true, formatNumberShort(totalScriptExp, 3, 2) + '/sec', "Total 'instantaneous' hack experience per second being earned across all scripts running on all servers."]);
 
     // Show reserved money
     {
@@ -244,27 +271,35 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
         const val3 = ["All RAM"]
         if (!options['hide-RAM-utilization']) {
             const servers = await getAllServersInfo(ns);
-            const rooted = servers.filter(s => s.hasAdminRights).length;
-            const purchased = servers.filter(s => s.hostname != "home" && s.purchasedByPlayer).length; // "home" counts as purchased by the game
-            const likelyHacknet = servers.filter(s => s.hostname.startsWith("hacknet-node-"));
+            const hnServers = servers.filter(s => s.hostname.startsWith("hacknet-server-") || s.hostname.startsWith("hacknet-node-"));
+            const nRooted = servers.filter(s => s.hasAdminRights).length;
+            const nPurchased = servers.filter(s => s.hostname != "home" && s.purchasedByPlayer).length; // "home" counts as purchased by the game
             // Add Server count.
-            val1.push(true, `${servers.length}/${rooted}/${purchased}`, `The number of servers on the network (${servers.length}) / ` +
-                `number rooted (${rooted}) / number purchased ` + (likelyHacknet.length > 0 ?
-                    `(${purchased - likelyHacknet.length} servers + ${likelyHacknet.length} hacknet servers)` : `(${purchased})`));
+            val1.push(true, `${servers.length}/${nRooted}/${nPurchased}`, `The number of servers on the network (${servers.length}) / ` +
+                `number rooted (${nRooted}) / number purchased ` + (hnServers.length > 0 ?
+                    `(${nPurchased - hnServers.length} servers + ${hnServers.length} hacknet servers)` : `(${nPurchased})`));
             const home = servers.find(s => s.hostname == "home");
             // Add Home RAM and Utilization
             val2.push(true, `${formatRam(home.maxRam)} ${(100 * home.ramUsed / home.maxRam).toFixed(1)}%`,
                 `Shows total home RAM (and current utilization %)\nDetails: ${home.cpuCores} cores and using ` +
-                `${formatRam(home.ramUsed)} of ${formatRam(home.maxRam)} (${formatRam(home.maxRam - home.ramUsed)} free)`);
-            // If the user has any scripts running on hacknet servers, assume they want them included in available RAM stats
-            const includeHacknet = likelyHacknet.some(s => s.ramUsed > 0);
-            const [totalMax, totalUsed] = servers.filter(s => s.hasAdminRights && (includeHacknet || !s.hostname.startsWith("hacknet-node-")))
-                .reduce(([totalMax, totalUsed], s) => [totalMax + s.maxRam, totalUsed + s.ramUsed], [0, 0]);
+                `${formatRam(home.ramUsed, true)} of ${formatRam(home.maxRam, true)} (${formatRam(home.maxRam - home.ramUsed, true)} free)`);
+            // If the user has any scripts running on hacknet servers, assume they want them included in the main "total available RAM" stat
+            const includeHacknet = hnServers.some(s => s.ramUsed > 0);
+            const fileredServers = servers.filter(s => s.hasAdminRights && !hnServers.includes(s));
+            const [sMax, sUsed] = fileredServers.reduce(([tMax, tUsed], s) => [tMax + s.maxRam, tUsed + s.ramUsed], [0, 0]);
+            const [hMax, hUsed] = hnServers.reduce(([tMax, tUsed], s) => [tMax + s.maxRam, tUsed + s.ramUsed], [0, 0]);
+            const [tMax, tUsed] = [sMax + hMax, sUsed + hUsed];
+            let statText = includeHacknet ?
+                `${formatRam(tMax)} ${(100 * tUsed / tMax).toFixed(1)}%` :
+                `${formatRam(sMax)} ${(100 * sUsed / sMax).toFixed(1)}%`;
+            let toolTip = `Shows the sum-total RAM and utilization across all rooted hosts on the network` + (9 in dictSourceFiles || 9 == bitNode ?
+                (includeHacknet ? "\n(including hacknet servers, because you have scripts running on them)" : " (excluding hacknet servers)") : "") +
+                `\nUsing ${formatRam(tUsed, true)} of ${formatRam(tMax, true)} (${formatRam(tMax - tUsed, true)} free) across all servers`;
+            if (hMax > 0) toolTip +=
+                `\nUsing ${formatRam(sUsed, true)} of ${formatRam(sMax, true)} (${formatRam(sMax - sUsed, true)} free) excluding  hacknet` +
+                `\nUsing ${formatRam(hUsed, true)} of ${formatRam(hMax, true)} (${formatRam(hMax - hUsed, true)} free) of hacknet servers`;
             // Add Total Network RAM and Utilization
-            val3.push(true, `${formatRam(totalMax)} ${(100 * totalUsed / totalMax).toFixed(1)}%`,
-                `Shows the sum-total RAM and utilization across all rooted hosts on the network` + (9 in dictSourceFiles || 9 == bitNode ?
-                    (includeHacknet ? "\n(including hacknet servers, because you have scripts running on them)" : " (excluding hacknet servers)") : "") +
-                `\nDetails: Using ${formatRam(totalUsed)} of ${formatRam(totalMax)} (${formatRam(totalMax - totalUsed)} free)`);
+            val3.push(true, statText, toolTip);
         } else {
             val1.push(false)
             val2.push(false)
@@ -280,7 +315,7 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
         // Bitburner bug: Trace amounts of share power sometimes left over after we stop sharing
         if (sharePower > 1.0001) {
             val.push(true, formatNumberShort(sharePower, 3, 2),
-                "Uses RAM to boost faction reputation gain rate while working for factions (capped at 1.5) " +
+                "Uses RAM to boost faction reputation gain rate while working for factions (tapers off at ~1.65) " +
                 "\nRun `daemon.js` with the `--no-share` flag to disable.");
         } else val.push(false)
         hudData.push(val)
@@ -289,6 +324,8 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
     return hudData
 }
 
+/** @param {number} value
+ *  @returns {string} The number formatted as a string with up to 6 significant digits, but no more than the specified number of decimal places. */
 function formatSixSigFigs(value, minDecimalPlaces = 0, maxDecimalPlaces = 0) {
     return value >= 1E7 ? formatNumberShort(value, 6, 3) :
         value.toLocaleString(undefined, { minimumFractionDigits: minDecimalPlaces, maximumFractionDigits: maxDecimalPlaces });
@@ -300,13 +337,14 @@ async function getGangInfo(ns) {
     return await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt')
 }
 
-/** @param {NS} ns 
+/** @param {NS} ns
  * @returns {Promise<Server[]>} **/
 async function getAllServersInfo(ns) {
     const serverNames = await getNsDataThroughFile(ns, 'scanAllServers(ns)');
     return await getNsDataThroughFile(ns, 'ns.args.map(ns.getServer)', '/Temp/getServers.txt', serverNames);
 }
 
+/** Inject the CSS that controls how custom HUD elements are displayed. */
 function addCSS(doc) {
     let priorCss = doc.getElementById("statsCSS");
     if (priorCss) priorCss.parentNode.removeChild(priorCss); // Remove old CSS to facilitate tweaking css above
@@ -323,7 +361,7 @@ const css = (rootStyle) => `<style id="statsCSS">
     .tooltip .tooltiptext {
         visibility: hidden; position: absolute; z-index: 1;
         right: 20px; top: 19px; padding: 2px 10px;
-        text-align: right; white-space: pre;       
+        text-align: right; white-space: pre;
         border-radius: 6px; border: ${rootStyle?.border || "inherit"};
         background-color: ${rootStyle?.backgroundColor || "#900C"};
     }

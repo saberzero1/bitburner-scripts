@@ -1,10 +1,10 @@
-import { log, getConfiguration, instanceCount, getNsDataThroughFile, scanAllServers, formatMoney, formatRam } from './helpers.js'
+import { log, getConfiguration, instanceCount, getNsDataThroughFile, formatMoney, formatRam, formatDuration } from './helpers.js'
 
 // The purpose of the host manager is to buy the best servers it can
 // until it thinks RAM is underutilized enough that you don't need to anymore.
 
 const purchasedServerName = "daemon"; // The name to give all purchased servers. Also used to determine which servers were purchased
-let maxPurchasableServerRamExponent; // The max server ram you can buy as an exponent (power of 2). Typically 1 petabyte (2^20), but less in some BNs 
+let maxPurchasableServerRamExponent; // The max server ram you can buy as an exponent (power of 2). Typically 1 petabyte (2^20), but less in some BNs
 let maxPurchasedServers; // The max number of servers you can have in your farm. Typically 25, but can be less in some BNs
 let costByRamExponent = {}; // A dictionary of how much each server size costs, prepped in advance.
 
@@ -13,6 +13,7 @@ let keepRunning = false;
 let minRamExponent;
 let absReservedMoney;
 let pctReservedMoney;
+let budget;
 
 let options;
 const argsSchema = [
@@ -24,6 +25,8 @@ const argsSchema = [
     ['absolute-reserve', null], // Set to reserve a fixed amount of money. Defaults to the contents of reserve.txt on home
     ['reserve-percent', 0.9], // Set to reserve a percentage of home money
     ['reserve-by-time', false], // Experimental exponential decay by time in the run. Starts willing to spend lots of money, falls off over time.
+    ['reserve-by-time-decay-factor', 0.2], // Controls how quickly our % reserve increases from --reserve-percent to 100% over time. For example, if --reserve-percent is set to 0.05 (allow spending 95% of money), time to reduce spending to ~25% of money is ~6hrs at 0.2, ~4hrs at 0.3, ~2hrs at 0.5
+    ['budget', Number.POSITIVE_INFINITY], // Yet another way to control spending, this budget will not be exceeded, regardless of player owned money. Reserves are still respected.
     ['allow-worse-purchases', false], // Set to true to allow purchase of servers worse than our current best purchased server
     ['compare-to-home-threshold', 0.25], // Do not bother buying servers unless they are at least this big compared to current home RAM
     ['compare-to-network-ram-threshold', 0.02], // Do not bother buying servers unless they are at least this big compared to total network RAM
@@ -34,7 +37,9 @@ export function autocomplete(data, _) {
     return [];
 }
 
-/** @param {NS} ns **/
+/** Note: In addition to this script's RAM footprint (2.7 GB last this was updated)
+ *        This script requires 3.85 GB of DYNAMIC RAM (2.25 GB (for cloud.purchaseServer) + 1.6 GB Base Cost) used by getNsDataThroughFile)
+ * @param {NS} ns **/
 export async function main(ns) {
     const runOptions = getConfiguration(ns, argsSchema);
     if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
@@ -42,22 +47,23 @@ export async function main(ns) {
     ns.disableLog('ALL')
 
     // Get the maximum number of purchased servers in this bitnode
-    maxPurchasedServers = await getNsDataThroughFile(ns, 'ns.getPurchasedServerLimit()');
+    maxPurchasedServers = await getNsDataThroughFile(ns, 'ns.cloud.getServerLimit()');
     log(ns, `INFO: Max purchasable servers has been detected as ${maxPurchasedServers.toFixed(0)}.`);
     if (maxPurchasedServers == 0)
         return log(ns, `INFO: Shutting down due to host purchasing being disabled in this BN...`);
 
     // Get the maximum size of purchased servers in this bitnode
-    const purchasedServerMaxRam = await getNsDataThroughFile(ns, 'ns.getPurchasedServerMaxRam()');
+    const purchasedServerMaxRam = await getNsDataThroughFile(ns, 'ns.cloud.getRamLimit()');
     maxPurchasableServerRamExponent = Math.log2(purchasedServerMaxRam);
     log(ns, `INFO: Max purchasable RAM has been detected as 2^${maxPurchasableServerRamExponent} (${formatRam(2 ** maxPurchasableServerRamExponent)}).`);
 
-    // Gather one-time info in advance about how much RAM each size of server costs (Up to 2^30 to be future-proof, but we expect everything abouve 2^20 to be Infinity)
-    costByRamExponent = await getNsDataThroughFile(ns, 'Object.fromEntries([...Array(30).keys()].map(i => [i, ns.getPurchasedServerCost(2**i)]))', '/Temp/host-costs.txt');
+    // Gather one-time info in advance about how much RAM each size of server costs (Up to 2^30 to be future-proof, but we expect everything above 2^20 to be Infinity)
+    costByRamExponent = await getNsDataThroughFile(ns, 'Object.fromEntries([...Array(30).keys()].map(i => [i, ns.cloud.getServerCost(2**i)]))', '/Temp/host-costs.txt');
 
     keepRunning = options.c || options['run-continuously'];
     pctReservedMoney = options['reserve-percent'];
     minRamExponent = options['min-ram-exponent'];
+    budget = options['budget'];
     // Log the command line options, for new users who don't know why certain decisions are/aren't being made
     if (minRamExponent > maxPurchasableServerRamExponent) {
         log(ns, `WARN: --min-ram-exponent was set to ${minRamExponent} (${formatRam(2 ** minRamExponent)}), ` +
@@ -74,8 +80,7 @@ export async function main(ns) {
     log(ns, `INFO: --utilization-trigger is set to ${options['utilization-trigger'] * 100}%: ` +
         `New servers will only be purchased when more than this much RAM is in use across the entire network.`);
     if (options['reserve-by-time'])
-        log(ns, `INFO: --reserve-by-time is active! This community-contributed option will spend more of your money on servers ` +
-            `early on, and less later on. Experimental and not tested by me. Have fun!`);
+        log(ns, `INFO: --reserve-by-time is active! This community-contributed option will spend more of your money on servers early on, and less later on.`);
     else
         log(ns, `INFO: --reserve-percent is set to ${pctReservedMoney * 100}%: ` +
             `This means we will spend no more than ${((1 - pctReservedMoney) * 100).toFixed(1)}% of current Money on a new server.`);
@@ -83,7 +88,7 @@ export async function main(ns) {
     if (!keepRunning)
         log(ns, `host-manager will run once. Run with argument "-c" to run continuously.`)
     do {
-        absReservedMoney = options['absolute-reserve'] != null ? options['absolute-reserve'] : Number(ns.read("reserve.txt") || 0);
+        absReservedMoney = options['absolute-reserve'] != null ? Number(options['absolute-reserve']) : Number(ns.read("reserve.txt") || 0);
         await tryToBuyBestServerPossible(ns);
         if (keepRunning)
             await ns.sleep(options['interval']);
@@ -96,14 +101,16 @@ function setStatus(ns, logMessage) {
     return logMessage != lastStatus ? ns.print(lastStatus = logMessage) : false;
 }
 
-/** @param {NS} ns 
+/** @param {NS} ns
   * Attempts to buy a server at or better than your home machine. **/
 async function tryToBuyBestServerPossible(ns) {
-    // Gether the list of all purchased servers.
-    const purchasedServers = await getNsDataThroughFile(ns, 'ns.getPurchasedServers()');
     // Scan the set of all servers on the network that we own (or rooted) to get a sense of current RAM utilization
     let rootedServers = await getNsDataThroughFile(ns, 'scanAllServers(ns).filter(s => ns.hasRootAccess(s))', '/Temp/rooted-servers.txt');
-
+    // Gether the list of all purchased servers.
+    let purchasedServers = null;
+    try { purchasedServers = await getNsDataThroughFile(ns, 'ns.cloud.getServerNames()', null, null, null, 3, 5, /* silent errors */ true); } catch { /* Ignore */ }
+    if (purchasedServers == null) // Early game, if we have insufficient RAM (1.05 GB cloud.getServerNames + 1.6 base cost), we can fall-back to guessing based on their name
+        purchasedServers = rootedServers.filter(s => s.startsWith(purchasedServerName));
     // If some of the servers are hacknet servers, and they aren't being used for scripts, ignore the RAM they have available
     // with the assumption that these are reserved for generating hashes
     const likelyHacknet = rootedServers.filter(s => s.startsWith("hacknet-node-") || s.startsWith('hacknet-server-'));
@@ -118,32 +125,46 @@ async function tryToBuyBestServerPossible(ns) {
 
     const totalMaxRam = rootedServers.reduce((t, s) => t + ns.getServerMaxRam(s), 0);
     const totalUsedRam = rootedServers.reduce((t, s) => t + ns.getServerUsedRam(s), 0);
-    const utilizationRate = totalUsedRam / totalMaxRam;
-    setStatus(ns, `Using ${Math.round(totalUsedRam).toLocaleString('en')}/${formatRam(totalMaxRam)} (` +
-        `${(utilizationRate * 100).toFixed(1)}%) across ${rootedServers.length} servers ` +
-        `(Triggers at ${options['utilization-trigger'] * 100}%, ${purchasedServers.length} bought so far)`);
+    if (options['utilization-trigger'] > 0) {
+        const utilizationRate = totalUsedRam / totalMaxRam;
+        setStatus(ns, `Using ${Math.round(totalUsedRam).toLocaleString('en')}/${formatRam(totalMaxRam)} (` +
+            `${(utilizationRate * 100).toFixed(1)}%) across ${rootedServers.length} servers ` +
+            `(Triggers at ${options['utilization-trigger'] * 100}%, ${purchasedServers.length} bought so far)`);
+        // If utilization is below target. We don't need another server.
+        if (utilizationRate < options['utilization-trigger'])
+            return;
+    }
 
-    // If utilization is below target. We don't need another server.
-    if (utilizationRate < options['utilization-trigger']) return;
 
     // Check for other reasons not to go ahead with the purchase
     let prefix = 'Host-manager wants to buy another server, but ';
 
     // Determine our budget for spending money on home RAM
-    let spendableMoney = await getNsDataThroughFile(ns, `ns.getServerMoneyAvailable(ns.args[0])`, null, ["home"]);
-    if (options['reserve-by-time']) { // Option to vary pctReservedMoney by time since augment. 
+    let cashMoney = await getNsDataThroughFile(ns, `ns.getServerMoneyAvailable(ns.args[0])`, null, ["home"]);
+    if (options['reserve-by-time']) { // Option to vary pctReservedMoney by time since augment.
         // Decay factor of 0.2 = Starts willing to spend 95% of our money, backing down to ~75% at 1 hour, ~60% at 2 hours, ~25% at 6 hours, and ~10% at 10 hours.
         // Decay factor of 0.3 = Starts willing to spend 95% of our money, backing down to ~66% at 1 hour, ~45% at 2 hours, ~23% at 4 hours, ~10% at 6 hours
         // Decay factor of 0.5 = Starts willing to spend 95% of our money, then halving every hour (to ~48% at 1 hour, ~24% at 2 hours, ~12% at 3 hours, etc)
-        const timeSinceLastAug = await getNsDataThroughFile(ns, 'ns.getTimeSinceLastAug()');
+        const timeSinceLastAug = Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo()')).lastAugReset;
         const t = timeSinceLastAug / (60 * 60 * 1000); // Time since last aug, in hours.
-        const decayFactor = 0.5;
-        pctReservedMoney = 1 - 0.95 * Math.pow(1 - decayFactor, t);
+        const decayFactor = options['reserve-by-time-decay-factor'];
+        pctReservedMoney = 1.0 - (1.0 - options['reserve-percent']) * Math.pow(1 - decayFactor, t);
+        if (!keepRunning)
+            log(ns, `After spending ${formatDuration(timeSinceLastAug)} in this augmentation, reserve % has grown from ` +
+                `${(options['reserve-percent'] * 100).toFixed(1)}% to ${(pctReservedMoney * 100).toFixed(1)}%`);
     }
 
-    spendableMoney = Math.min(spendableMoney * (1 - pctReservedMoney), spendableMoney - absReservedMoney);
-    if (spendableMoney <= 0.01)
-        return setStatus(ns, `${prefix}all cash is currently reserved (% reserve: ${(pctReservedMoney * 100).toFixed(1)}%, abs reserve: ${formatMoney(absReservedMoney)})`);
+    let spendableMoney = Math.min(budget, cashMoney * (1.0 - pctReservedMoney), cashMoney - absReservedMoney);
+    if (spendableMoney <= 0.01) {
+        if (!keepRunning) // Show a more detailed log if we aren't running continuously
+
+            return setStatus(ns, `${prefix}all player cash (${formatMoney(cashMoney)}) is currently reserved (budget: ${formatMoney(budget)}, ` +
+                `abs reserve: ${formatMoney(absReservedMoney)}, ` +
+                `% reserve: ${(pctReservedMoney * 100).toFixed(1)}% (${formatMoney(cashMoney * (1.0 - pctReservedMoney))}))`);
+        // Otherwise the "status" log we show should remain relatively consistent so we aren't spamming e.g. changes in player money in --continuous mode
+        return setStatus(ns, `${prefix}all player cash is currently reserved (budget: ${formatMoney(budget)}, ` +
+            `abs reserve: ${formatMoney(absReservedMoney)}, % reserve: ${(pctReservedMoney * 100).toFixed(1)}%)`);
+    }
 
     // Determine the most ram we can buy with our current money
     let exponentLevel = 1;
@@ -195,7 +216,7 @@ async function tryToBuyBestServerPossible(ns) {
 
     let purchasedServer,
         isUpgrade = false
-    // if we're at capacity, check to see if we can do better better than the current worst purchased server. If so, upgrade it.
+    // if we're at capacity, check to see if we can improve the current worst purchased server. If so, upgrade it.
     if (purchasedServers.length >= maxPurchasedServers) {
         if (worstServerRam == maxPurchasableServerRam) {
             keepRunning = false;
@@ -205,15 +226,18 @@ async function tryToBuyBestServerPossible(ns) {
 
         cost -= costByRamExponent[Math.log2(worstServerRam)]
         isUpgrade = true
-        purchasedServer = (await getNsDataThroughFile(ns, `ns.upgradePurchasedServer(ns.args[0], ns.args[1])`, null,
+        purchasedServer = (await getNsDataThroughFile(ns, `ns.cloud.upgradeServer(ns.args[0], ns.args[1])`, null,
             [worstServerName, maxRamPossibleToBuy])) ? worstServerName : "";
     } else {
-        purchasedServer = await getNsDataThroughFile(ns, `ns.purchaseServer(ns.args[0], ns.args[1])`, null,
+        purchasedServer = await getNsDataThroughFile(ns, `ns.cloud.purchaseServer(ns.args[0], ns.args[1])`, null,
             [purchasedServerName, maxRamPossibleToBuy]);
     }
     if (!purchasedServer)
-        setStatus(ns, `${prefix}Could not ${isUpgrade ? 'upgrade' : 'purchase'} a server with ${formatRam(maxRamPossibleToBuy)} RAM for ${formatMoney(cost)} ` +
-            `with a budget of ${formatMoney(spendableMoney)}. This is either a bug, or we in a SF.9`);
-    else
-        log(ns, `SUCCESS: ${isUpgrade ? 'Upgraded' : 'Purchased'} server ${purchasedServer} with ${formatRam(maxRamPossibleToBuy)} RAM for ${formatMoney(cost)}`, true, 'success');
+        setStatus(ns, `${prefix}Could not ${isUpgrade ? 'upgrade' : 'purchase'} a server with ${formatRam(maxRamPossibleToBuy)} ` +
+            `RAM for ${formatMoney(cost)} with a budget of ${formatMoney(spendableMoney)}.`);
+    else {
+        log(ns, `SUCCESS: ${isUpgrade ? 'Upgraded' : 'Purchased'} server ${purchasedServer} with ${formatRam(maxRamPossibleToBuy)} ` +
+            `RAM for ${formatMoney(cost)} (budget was ${formatMoney(spendableMoney)})`, true, 'success');
+        budget -= cost;
+    }
 }

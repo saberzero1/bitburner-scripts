@@ -12,7 +12,7 @@ const argsSchema = [
     // Spawn this script after installing augmentations (Note: Args not supported by the game)
     ['on-reset-script', null], // By default, will start with `stanek.js` if you have stanek's gift, otherwise `daemon.js`.
     ['ticks-to-wait-for-additional-purchases', 10], // Don't reset until we've gone this many game ticks without any new purchases being made (10 * 200ms (game tick time) ~= 2 seconds)
-    ['max-wait-time', 60000], // The maximum number of milliseconds we'll wait for external scripts to purchase whatever permanent upgrades they can before we ascend anyway.    
+    ['max-wait-time', 60000], // The maximum number of milliseconds we'll wait for external scripts to purchase whatever permanent upgrades they can before we ascend anyway.
     ['prioritize-home-ram', false], // If set to true, will spend as much money as possible on upgrading home RAM before buying augmentations
     /* Deprecated */['prioritize-augmentations', true], // (Legacy flag, now ignored - left for backwards compatibility)
 ];
@@ -25,7 +25,7 @@ export function autocomplete(data, args) {
     return [];
 }
 
-/** @param {NS} ns 
+/** @param {NS} ns
  * This script is meant to do all the things best done when ascending (in a generally ideal order) **/
 export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
@@ -53,7 +53,7 @@ export async function main(ns) {
     ns.run(getFilePath('spend-hacknet-hashes.js'), 1, '--liquidate');
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
-    const hasTixApiAccess = await getNsDataThroughFile(ns, 'ns.stock.hasTIXAPIAccess()');
+    const hasTixApiAccess = await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
     if (hasTixApiAccess) {
         const stkSymbols = await getStockSymbols(ns);
         const countOwnedStocks = async () => await getNsDataThroughFile(ns, `ns.args.map(sym => ns.stock.getPosition(sym))` +
@@ -109,7 +109,7 @@ export async function main(ns) {
     pid = ns.run(getFilePath('faction-manager.js'), 1, ...facmanArgs);
     await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it is done.
 
-    // Sanity check, if we are not slated to install any augmentations, ABORT
+    // If we are not slated to install any augmentations, ABORT
     // Get owned + purchased augmentations, then installed augmentations. Ensure there's a difference
     let purchasedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt');
     let installedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
@@ -172,13 +172,24 @@ export async function main(ns) {
         lastMoney = money;
     }
 
+    // TODO STEP 11: Accept any outstanding faction invitations, and claim our +1 free favour if available.
+    /*
+    const factionInvites = ns.singularity.checkFactionInvitations()
+    if (factionInvites.length > 0)
+        factionInvites.forEach(factionName => ns.singularity.joinFaction(factionName));
+    if (ns.singularity.exportGameBonus())
+        ns.singularity.exportGame();
+    // TODO: No way to close the pop-up save dialog, which is a deal-breaker for me.
+    */
+
     // STEP 4 REDUX: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
     log(ns, 'Seeing if we can afford any other augmentations...', true, 'info');
     facmanArgs.push('--stat-desired', '_'); // Means buy any aug with any stats
     pid = ns.run(getFilePath('faction-manager.js'), 1, ...facmanArgs);
     await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it is done.
 
-    // Clean up our temp folder - it's good to do this once in a while to reduce the save footprint.
+    // Clean up our temp folder - it's good to do this once in a while to reduce the save footprint
+    // As well as to ensure that data written out on this bitnode don't confuse scripts in the next one.
     await waitForProcessToComplete(ns, ns.run(getFilePath('cleanup.js')), true);
 
     // FINALLY: If configured, soft reset

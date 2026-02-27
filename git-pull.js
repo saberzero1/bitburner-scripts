@@ -18,7 +18,7 @@ export function autocomplete(data, args) {
     return [];
 }
 
-/** @param {NS} ns 
+/** @param {NS} ns
  * Will try to download a fresh version of every file on the current server.
  * You are responsible for:
  * - Backing up your save / scripts first (try `download *` in the terminal)
@@ -40,8 +40,8 @@ export async function main(ns) {
         else
             ns.tprint(`WARNING: "${fullLocalFilePath}" was not updated. (Currently running, or not located at ${remoteFilePath}?)`)
     }
-    ns.tprint(`INFO: Pull complete. If you have any questions or issues, head over to the Bitburner #alains-scripts Discord channel: ` +
-        `https://discord.com/channels/415207508303544321/935667531111342200`);
+    ns.tprint(`INFO: Pull complete. If you have any questions or issues, create an issue on github or join the ` +
+        `Bitburner Discord channel "#Insight's-scripts": https://discord.com/channels/415207508303544321/935667531111342200`);
     // Remove any temp files / scripts from the prior version
     ns.run(pathJoin(options.subfolder, `cleanup.js`));
 }
@@ -70,13 +70,13 @@ export function rewriteFileForSubfolder(ns, path) {
     let contents = ns.read(path);
     // Replace subfolder reference in helpers.js getFilePath:
     contents = contents.replace(`const subfolder = ''`, `const subfolder = '${options.subfolder}/'`);
-    // Replace any imports, which can't use getFilePath:
-    contents = contents.replace(/from '(\.\/)?(.*)'/g, `from '${pathJoin(options.subfolder, '$2')}'`);
+    // Replace any imports, which can't use getFilePath, but only if they don't specify a relative path (../)
+    contents = contents.replace(/from '(\.\/)?((?!\.\.\/).*)'/g, `from '${pathJoin(options.subfolder, '$2')}'`);
     ns.write(path, contents, 'w');
     return true;
 }
 
-/** @param {NS} ns 
+/** @param {NS} ns
  * Gets a list of files to download, either from the github repository (if supported), or using a local directory listing **/
 async function repositoryListing(ns, folder = '') {
     // Note: Limit of 60 free API requests per day, don't over-do it
