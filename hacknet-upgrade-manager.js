@@ -2,7 +2,8 @@ import { getConfiguration, disableLogs, formatDuration, formatMoney, } from './h
 
 let haveHacknetServers = true; // Cached flag after detecting whether we do (or don't) have hacknet servers
 const argsSchema = [
-    ['max-payoff-time', '1h'], // Controls how far to upgrade hacknets. Can be a number of seconds, or an expression of minutes/hours (e.g. '123m', '4h')
+    // ['max-payoff-time', '1h'], // Controls how far to upgrade hacknets. Can be a number of seconds, or an expression of minutes/hours (e.g. '123m', '4h')
+    ['max-payoff-time', '168h'],
     ['time', null], // alias for max-payoff-time
     ['c', false], // Set to true to run continuously, otherwise, it runs once
     ['continuous', false],
