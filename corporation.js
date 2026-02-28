@@ -161,11 +161,23 @@ async function runSmartSupply(ns, state) {
     if (corpData.prevState !== 'SALE') return;
 
     for (const division of corpData.divisions) {
+        const divData = await corpApi.getDivision(ns, division);
+        const industry = INDUSTRIES[divData.type];
+        if (!industry || !industry.inputMaterials) continue;
+
         for (const city of CITIES) {
             try {
                 if (!(await corpApi.hasWarehouse(ns, division, city))) continue;
 
-                const supplies = calculateSmartSupplyQuantities(ns, division, city);
+                const warehouse = await corpApi.getWarehouse(ns, division, city);
+
+                // Fetch all input materials for this city
+                const materials = {};
+                for (const material of Object.keys(industry.inputMaterials)) {
+                    materials[material] = await corpApi.getMaterial(ns, division, city, material);
+                }
+
+                const supplies = calculateSmartSupplyQuantities(divData, warehouse, materials);
 
                 for (const [material, amount] of Object.entries(supplies)) {
                     if (amount > 0) {
@@ -191,11 +203,13 @@ async function updatePricing(ns, state) {
             try {
                 if (!(await corpApi.hasWarehouse(ns, division, city))) continue;
 
+                const office = await corpApi.getOffice(ns, division, city);
+
                 if (industry.outputMaterials) {
                     for (const material of industry.outputMaterials) {
                         const mat = await corpApi.getMaterial(ns, division, city, material);
                         if (mat.stored > 0) {
-                            const price = calculateOptimalPrice(ns, division, city, material, false);
+                            const price = calculateOptimalPrice(mat, divData, office, false);
                             await corpApi.sellMaterial(ns, division, city, material, 'MAX', price.toString());
                         }
                     }
@@ -205,7 +219,7 @@ async function updatePricing(ns, state) {
                     for (const productName of divData.products) {
                         const product = await corpApi.getProduct(ns, division, city, productName);
                         if (product.developmentProgress >= 100 && product.stored > 0) {
-                            const price = calculateOptimalPrice(ns, division, city, productName, true);
+                            const price = calculateOptimalPrice(product, divData, office, true);
                             await corpApi.sellProduct(ns, division, city, productName, 'MAX', price.toString(), false);
                         }
                     }
@@ -605,8 +619,9 @@ async function upgradeProductionCapability(ns) {
 }
 
 async function checkInvestment(ns, state) {
-    if (shouldAcceptInvestment(ns, state.round, 0)) {
-        const offer = await corpApi.getInvestmentOffer(ns);
+    const offer = await corpApi.getInvestmentOffer(ns);
+
+    if (shouldAcceptInvestment(offer, state.round, 0)) {
         await corpApi.acceptInvestmentOffer(ns);
         log(ns, `Accepted investment offer: ${formatMoney(offer.funds)}`, true, 'success');
         state.round++;

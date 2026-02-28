@@ -46,6 +46,12 @@ export const MATERIAL_SIZES = {
 
 export const CITIES = ['Aevum', 'Chongqing', 'Sector-12', 'New Tokyo', 'Ishima', 'Volhaven'];
 
+/**
+ * Calculate optimal boost material distribution using Lagrange multipliers
+ * @param {string} industry - Industry type (Agriculture, Chemical, Tobacco)
+ * @param {number} storageSpace - Available storage space
+ * @returns {Object} Optimal quantities for each boost material
+ */
 export function calculateOptimalBoostMaterials(industry, storageSpace) {
     const factors = INDUSTRIES[industry]?.boostFactors;
     if (!factors) return null;
@@ -75,7 +81,7 @@ export function calculateOptimalBoostMaterials(industry, storageSpace) {
     };
 
     let totalUsed = Object.entries(result).reduce((sum, [mat, qty]) => sum + qty * MATERIAL_SIZES[mat], 0);
-    
+
     if (totalUsed > storageSpace) {
         const scale = storageSpace / totalUsed * 0.95;
         for (const mat of Object.keys(result)) {
@@ -86,6 +92,12 @@ export function calculateOptimalBoostMaterials(industry, storageSpace) {
     return result;
 }
 
+/**
+ * Calculate division production multiplier from boost materials
+ * @param {Object} boostMaterials - Current boost material quantities
+ * @param {string} industry - Industry type
+ * @returns {number} Production multiplier
+ */
 export function calculateDivisionProductionMultiplier(boostMaterials, industry) {
     const factors = INDUSTRIES[industry]?.boostFactors;
     if (!factors) return 1;
@@ -96,27 +108,31 @@ export function calculateDivisionProductionMultiplier(boostMaterials, industry) 
     const aiCores = boostMaterials['AI Cores'] || 0;
 
     const cityMult = Math.pow(0.002 * realEstate + 1, factors.realEstate) *
-                     Math.pow(0.002 * hardware + 1, factors.hardware) *
-                     Math.pow(0.002 * robots + 1, factors.robots) *
-                     Math.pow(0.002 * aiCores + 1, factors.aiCores);
+        Math.pow(0.002 * hardware + 1, factors.hardware) *
+        Math.pow(0.002 * robots + 1, factors.robots) *
+        Math.pow(0.002 * aiCores + 1, factors.aiCores);
 
     return Math.pow(cityMult, 0.73);
 }
 
-export function calculateOptimalPrice(ns, division, city, itemName, isProduct) {
-    const corp = ns.corporation;
-    
-    let item, marketPrice, markupLimit, stored;
-    
+/**
+ * Calculate optimal selling price using Market-TA2 formula
+ * @param {Object} item - Material or Product object from API
+ * @param {Object} divData - Division data from API
+ * @param {Object} office - Office data from API
+ * @param {boolean} isProduct - Whether the item is a product
+ * @returns {number} Optimal price
+ */
+export function calculateOptimalPrice(item, divData, office, isProduct) {
+    let marketPrice, markupLimit, stored;
+
     if (isProduct) {
-        item = corp.getProduct(division, city, itemName);
         stored = item.stored;
         marketPrice = item.productionCost;
         const effectiveRating = Math.max(item.effectiveRating, 0.001);
         const productMarkup = estimateProductMarkup(item);
         markupLimit = effectiveRating / productMarkup;
     } else {
-        item = corp.getMaterial(division, city, itemName);
         stored = item.stored;
         marketPrice = item.marketPrice;
         const quality = Math.max(item.quality, 0.001);
@@ -124,7 +140,7 @@ export function calculateOptimalPrice(ns, division, city, itemName, isProduct) {
     }
 
     const expectedSalesVolume = stored / 10;
-    const potentialSalesVolume = calculatePotentialSalesVolume(ns, division, city, item, isProduct);
+    const potentialSalesVolume = calculatePotentialSalesVolume(item, divData, office, isProduct);
 
     if (potentialSalesVolume <= expectedSalesVolume || expectedSalesVolume === 0) {
         return marketPrice + markupLimit;
@@ -141,11 +157,15 @@ function estimateProductMarkup(product) {
     return 100 / (advertInvestMult * Math.pow(quality + 0.001, 0.65) * businessManagementRatio);
 }
 
-function calculatePotentialSalesVolume(ns, division, city, item, isProduct) {
-    const corp = ns.corporation;
-    const divData = corp.getDivision(division);
-    const office = corp.getOffice(division, city);
-    
+/**
+ * Calculate potential sales volume for pricing
+ * @param {Object} item - Material or Product object
+ * @param {Object} divData - Division data
+ * @param {Object} office - Office data
+ * @param {boolean} isProduct - Whether the item is a product
+ * @returns {number} Potential sales volume
+ */
+function calculatePotentialSalesVolume(item, divData, office, isProduct) {
     const industry = INDUSTRIES[divData.type];
     if (!industry) return 1;
 
@@ -162,7 +182,7 @@ function calculatePotentialSalesVolume(ns, division, city, item, isProduct) {
     const awareness = divData.awareness + 1;
     const popularity = divData.popularity + 1;
     const advertFactor = industry.advertisingFactor;
-    
+
     const awarenessFactor = Math.pow(awareness, advertFactor);
     const popularityFactor = Math.pow(popularity, advertFactor);
     const ratioFactor = awareness > 1 ? Math.max(0.01, (popularity - 1 + 0.001) / (awareness - 1)) : 0.01;
@@ -175,92 +195,101 @@ function calculatePotentialSalesVolume(ns, division, city, item, isProduct) {
     return itemMult * businessFactor * advertMult * marketFactor;
 }
 
-export function calculateSmartSupplyQuantities(ns, division, city) {
-    const corp = ns.corporation;
-    const divData = corp.getDivision(division);
-    const warehouse = corp.getWarehouse(division, city);
+/**
+ * Calculate smart supply quantities for input materials
+ * @param {Object} divData - Division data from API
+ * @param {Object} warehouse - Warehouse data from API
+ * @param {Object} materials - Map of material name to material data
+ * @returns {Object} Quantities to buy for each input material
+ */
+export function calculateSmartSupplyQuantities(divData, warehouse, materials) {
     const industry = INDUSTRIES[divData.type];
-    
     if (!industry || !industry.inputMaterials) return {};
 
     const freeSpace = warehouse.size - warehouse.sizeUsed;
     const result = {};
 
     for (const [material, coefficient] of Object.entries(industry.inputMaterials)) {
-        const currentMat = corp.getMaterial(division, city, material);
-        const currentStored = currentMat.stored;
-        
+        const currentMat = materials[material];
+        const currentStored = currentMat?.stored || 0;
+
         const targetProduction = 100;
         const needed = targetProduction * coefficient * 10;
         const toBuy = Math.max(0, needed - currentStored);
-        
+
         const materialSize = MATERIAL_SIZES[material] || 0.05;
         const maxCanBuy = Math.floor(freeSpace * 0.8 / materialSize);
-        
+
         result[material] = Math.min(toBuy, maxCanBuy) / 10;
     }
 
     return result;
 }
 
+/**
+ * Calculate upgrade cost from current to target level
+ */
 export function getUpgradeCost(basePrice, priceMult, currentLevel, targetLevel) {
     if (targetLevel <= currentLevel) return 0;
     return basePrice * (Math.pow(priceMult, targetLevel) - Math.pow(priceMult, currentLevel)) / (priceMult - 1);
 }
 
+/**
+ * Calculate office size upgrade cost
+ */
 export function getOfficeSizeUpgradeCost(currentSize, targetSize) {
     const basePrice = 4e9;
     return basePrice * (Math.pow(1.09, targetSize / 3) - Math.pow(1.09, currentSize / 3)) / 0.09;
 }
 
+/**
+ * Calculate warehouse upgrade cost
+ */
 export function getWarehouseUpgradeCost(currentLevel, targetLevel) {
     const basePrice = 1e9;
     const priceMult = 1.07;
     return getUpgradeCost(basePrice, priceMult, currentLevel, targetLevel);
 }
 
+/**
+ * Calculate optimal party cost to reach target morale
+ */
 export function calculateOptimalPartyCost(currentMorale, targetMorale = 100, perfMult = 1.002) {
     const a = currentMorale;
     const b = targetMorale;
     const k = perfMult;
-    
+
     const discriminant = Math.pow(a * k - 10, 2) + 40 * b;
     if (discriminant < 0) return 500000;
-    
+
     const cost = 500000 * (Math.sqrt(discriminant) - a * k - 10);
     return Math.max(0, Math.min(cost, 10e6));
 }
 
-export async function waitForState(ns, targetState) {
-    const corp = ns.corporation;
-    const states = ['START', 'PURCHASE', 'PRODUCTION', 'EXPORT', 'SALE'];
-    
-    while (true) {
-        const currentState = corp.getCorporation().prevState;
-        if (currentState === targetState) {
-            return;
-        }
-        await ns.sleep(100);
-    }
-}
-
+/**
+ * Generate product name from division and version
+ */
 export function getProductName(divisionName, version) {
     return `${divisionName.substring(0, 3)}-v${version}`;
 }
 
-export function shouldAcceptInvestment(ns, round, targetValuation) {
-    const corp = ns.corporation.getCorporation();
-    const offer = ns.corporation.getInvestmentOffer();
-    
+/**
+ * Check if an investment offer should be accepted
+ * @param {Object} offer - Investment offer from API
+ * @param {number} round - Current investment round
+ * @param {number} targetValuation - Custom target valuation (optional)
+ * @returns {boolean} Whether to accept the offer
+ */
+export function shouldAcceptInvestment(offer, round, targetValuation = 0) {
     if (!offer || offer.funds <= 0) return false;
-    
+
     const minimums = {
         1: 500e9,
         2: 5e12,
         3: 500e12,
         4: 50e15
     };
-    
+
     const minimum = minimums[round] || targetValuation;
     return offer.funds >= minimum;
 }
