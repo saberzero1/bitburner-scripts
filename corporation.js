@@ -320,6 +320,14 @@ async function runRound2(ns, state) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
     const verbose = state.options.verbose;
 
+    // Check if Agriculture exists first - if not, we need to run Round 1 logic
+    const hasAgriculture = corpData.divisions.includes('Agriculture');
+    if (!hasAgriculture) {
+        // Agriculture doesn't exist yet, run Round 1 instead
+        await runRound1(ns, state);
+        return;
+    }
+
     if (!(await execCorpFunc(ns, 'hasUnlock(ns.args[0])', 'Export'))) {
         if (corpData.funds > 20e9) {
             await execCorpFunc(ns, 'purchaseUnlock(ns.args[0])', 'Export');
@@ -363,6 +371,9 @@ async function runRound2(ns, state) {
     await setupExportRoutes(ns);
 
     for (const city of CITIES) {
+        // Check if Agriculture has expanded to this city
+        if (!agDiv.cities.includes(city)) continue;
+        
         const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', city);
         if (office.size < 8 && corpData.funds > 4e9) {
             const toAdd = 8 - office.size;
@@ -395,8 +406,23 @@ async function runRound3Plus(ns, state) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
     const verbose = state.options.verbose;
 
-    const hasTobacco = corpData.divisions.includes('Tobacco');
+    // Check prerequisites - need Agriculture and Chemical from earlier rounds
+    const hasAgriculture = corpData.divisions.includes('Agriculture');
+    const hasChemical = corpData.divisions.includes('Chemical');
+    
+    if (!hasAgriculture) {
+        // Need to complete Round 1 first
+        await runRound1(ns, state);
+        return;
+    }
+    
+    if (!hasChemical) {
+        // Need to complete Round 2 first
+        await runRound2(ns, state);
+        return;
+    }
 
+    const hasTobacco = corpData.divisions.includes('Tobacco');
     if (!hasTobacco) {
         if (corpData.funds > 20e9) {
             log(ns, 'Round 3+: Creating Tobacco division');
