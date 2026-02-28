@@ -1,7 +1,13 @@
+/**
+ * Corporation management script using temp script pattern for low RAM usage
+ * Manages corporation from creation through all investment rounds
+ */
+
 import { log, getConfiguration, disableLogs, formatMoney, getErrorInfo } from './helpers.js'
+import { corpApi } from './corp-api.js'
 import {
     INDUSTRIES, CITIES, calculateOptimalBoostMaterials, calculateOptimalPrice,
-    calculateSmartSupplyQuantities, calculateOptimalPartyCost, waitForState,
+    calculateSmartSupplyQuantities, calculateOptimalPartyCost,
     getProductName, shouldAcceptInvestment
 } from './corp-helpers.js'
 
@@ -28,12 +34,11 @@ export async function main(ns) {
     if (!options) return;
 
     if (options.tail) ns.tail();
-    disableLogs(ns, ['sleep', 'getServerMoneyAvailable']);
+    disableLogs(ns, ['sleep', 'getServerMoneyAvailable', 'run', 'read', 'write', 'isRunning']);
 
-    const corp = ns.corporation;
     const state = new CorpState(ns, options);
 
-    if (!corp.hasCorporation()) {
+    if (!(await corpApi.hasCorporation(ns))) {
         await createCorporation(ns, state);
     }
 
@@ -52,27 +57,32 @@ export async function main(ns) {
 class CorpState {
     constructor(ns, options) {
         this.options = options;
-        this.round = options.round || this.detectRound(ns);
+        this.round = options.round || 0; // Will be detected async
         this.productVersion = 1;
         this.lastTeaParty = 0;
+        this.initialized = false;
     }
 
-    detectRound(ns) {
-        const corp = ns.corporation;
-        if (!corp.hasCorporation()) return 0;
+    async init(ns) {
+        if (this.initialized) return;
+        this.round = this.options.round || await this.detectRound(ns);
+        this.initialized = true;
+    }
 
-        const corpData = corp.getCorporation();
-        const numInvestments = corpData.numShares > 1e9 ? 0 : 
+    async detectRound(ns) {
+        if (!(await corpApi.hasCorporation(ns))) return 0;
+
+        const corpData = await corpApi.getCorporation(ns);
+        const numInvestments = corpData.numShares > 1e9 ? 0 :
             corpData.numShares > 900e6 ? 1 :
-            corpData.numShares > 800e6 ? 2 :
-            corpData.numShares > 700e6 ? 3 : 4;
+                corpData.numShares > 800e6 ? 2 :
+                    corpData.numShares > 700e6 ? 3 : 4;
 
         return numInvestments + 1;
     }
 }
 
 async function createCorporation(ns, state) {
-    const corp = ns.corporation;
     const options = state.options;
 
     log(ns, `Creating corporation: ${options['corp-name']}`);
@@ -83,9 +93,9 @@ async function createCorporation(ns, state) {
             log(ns, `ERROR: Need ${formatMoney(cost)} to self-fund corporation`, true, 'error');
             return false;
         }
-        corp.createCorporation(options['corp-name'], true);
+        await corpApi.createCorporation(ns, options['corp-name'], true);
     } else {
-        corp.createCorporation(options['corp-name'], false);
+        await corpApi.createCorporation(ns, options['corp-name'], false);
     }
 
     state.round = 1;
@@ -93,7 +103,7 @@ async function createCorporation(ns, state) {
 }
 
 async function runCorpCycle(ns, state) {
-    const corp = ns.corporation;
+    await state.init(ns);
     const verbose = state.options.verbose;
 
     await maintainEmployees(ns, state);
@@ -124,22 +134,21 @@ async function runCorpCycle(ns, state) {
 }
 
 async function maintainEmployees(ns, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
 
     for (const division of corpData.divisions) {
         for (const city of CITIES) {
             try {
-                const office = corp.getOffice(division, city);
+                const office = await corpApi.getOffice(ns, division, city);
                 if (!office) continue;
 
                 if (office.avgEnergy < 99) {
-                    corp.buyTea(division, city);
+                    await corpApi.buyTea(ns, division, city);
                 }
 
                 if (office.avgMorale < 99) {
                     const partyCost = calculateOptimalPartyCost(office.avgMorale, 100);
-                    corp.throwParty(division, city, partyCost);
+                    await corpApi.throwParty(ns, division, city, partyCost);
                 }
             } catch { }
         }
@@ -147,25 +156,22 @@ async function maintainEmployees(ns, state) {
 }
 
 async function runSmartSupply(ns, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
 
     if (corpData.prevState !== 'SALE') return;
 
     for (const division of corpData.divisions) {
-        const divData = corp.getDivision(division);
-        
         for (const city of CITIES) {
             try {
-                if (!corp.hasWarehouse(division, city)) continue;
+                if (!(await corpApi.hasWarehouse(ns, division, city))) continue;
 
                 const supplies = calculateSmartSupplyQuantities(ns, division, city);
-                
+
                 for (const [material, amount] of Object.entries(supplies)) {
                     if (amount > 0) {
-                        corp.buyMaterial(division, city, material, amount);
+                        await corpApi.buyMaterial(ns, division, city, material, amount);
                     } else {
-                        corp.buyMaterial(division, city, material, 0);
+                        await corpApi.buyMaterial(ns, division, city, material, 0);
                     }
                 }
             } catch { }
@@ -174,34 +180,33 @@ async function runSmartSupply(ns, state) {
 }
 
 async function updatePricing(ns, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
 
     for (const division of corpData.divisions) {
-        const divData = corp.getDivision(division);
+        const divData = await corpApi.getDivision(ns, division);
         const industry = INDUSTRIES[divData.type];
         if (!industry) continue;
 
         for (const city of CITIES) {
             try {
-                if (!corp.hasWarehouse(division, city)) continue;
+                if (!(await corpApi.hasWarehouse(ns, division, city))) continue;
 
                 if (industry.outputMaterials) {
                     for (const material of industry.outputMaterials) {
-                        const mat = corp.getMaterial(division, city, material);
+                        const mat = await corpApi.getMaterial(ns, division, city, material);
                         if (mat.stored > 0) {
                             const price = calculateOptimalPrice(ns, division, city, material, false);
-                            corp.sellMaterial(division, city, material, 'MAX', price.toString());
+                            await corpApi.sellMaterial(ns, division, city, material, 'MAX', price.toString());
                         }
                     }
                 }
 
                 if (industry.makesProducts) {
                     for (const productName of divData.products) {
-                        const product = corp.getProduct(division, city, productName);
+                        const product = await corpApi.getProduct(ns, division, city, productName);
                         if (product.developmentProgress >= 100 && product.stored > 0) {
                             const price = calculateOptimalPrice(ns, division, city, productName, true);
-                            corp.sellProduct(division, city, productName, 'MAX', price.toString(), false);
+                            await corpApi.sellProduct(ns, division, city, productName, 'MAX', price.toString(), false);
                         }
                     }
                 }
@@ -211,35 +216,34 @@ async function updatePricing(ns, state) {
 }
 
 async function runRound1(ns, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
     const verbose = state.options.verbose;
 
     const hasAgriculture = corpData.divisions.includes('Agriculture');
-    
+
     if (!hasAgriculture) {
         log(ns, 'Round 1: Creating Agriculture division');
-        corp.expandIndustry('Agriculture', 'Agriculture');
-        
+        await corpApi.expandIndustry(ns, 'Agriculture', 'Agriculture');
+
         for (const city of CITIES) {
             if (city !== 'Sector-12') {
-                corp.expandCity('Agriculture', city);
+                await corpApi.expandCity(ns, 'Agriculture', city);
             }
-            corp.purchaseWarehouse('Agriculture', city);
-            
-            corp.upgradeOfficeSize('Agriculture', city, 1);
-            
+            await corpApi.purchaseWarehouse(ns, 'Agriculture', city);
+
+            await corpApi.upgradeOfficeSize(ns, 'Agriculture', city, 1);
+
             for (let i = 0; i < 4; i++) {
-                corp.hireEmployee('Agriculture', city);
+                await corpApi.hireEmployee(ns, 'Agriculture', city);
             }
-            corp.setAutoJobAssignment('Agriculture', city, 'Research & Development', 4);
+            await corpApi.setAutoJobAssignment(ns, 'Agriculture', city, 'Research & Development', 4);
         }
         return;
     }
 
-    const agDiv = corp.getDivision('Agriculture');
-    const sectorOffice = corp.getOffice('Agriculture', 'Sector-12');
-    
+    const agDiv = await corpApi.getDivision(ns, 'Agriculture');
+    const sectorOffice = await corpApi.getOffice(ns, 'Agriculture', 'Sector-12');
+
     if (agDiv.researchPoints < 55 && sectorOffice.avgMorale >= 95) {
         if (verbose) log(ns, `Round 1: Waiting for RP (${agDiv.researchPoints.toFixed(0)}/55)`);
         return;
@@ -248,160 +252,158 @@ async function runRound1(ns, state) {
     if (sectorOffice.employeeJobs['Research & Development'] === 4) {
         log(ns, 'Round 1: Switching employees from R&D to production');
         for (const city of CITIES) {
-            corp.setAutoJobAssignment('Agriculture', city, 'Research & Development', 0);
-            corp.setAutoJobAssignment('Agriculture', city, 'Operations', 1);
-            corp.setAutoJobAssignment('Agriculture', city, 'Engineer', 1);
-            corp.setAutoJobAssignment('Agriculture', city, 'Business', 1);
-            corp.setAutoJobAssignment('Agriculture', city, 'Management', 1);
+            await corpApi.setAutoJobAssignment(ns, 'Agriculture', city, 'Research & Development', 0);
+            await corpApi.setAutoJobAssignment(ns, 'Agriculture', city, 'Operations', 1);
+            await corpApi.setAutoJobAssignment(ns, 'Agriculture', city, 'Engineer', 1);
+            await corpApi.setAutoJobAssignment(ns, 'Agriculture', city, 'Business', 1);
+            await corpApi.setAutoJobAssignment(ns, 'Agriculture', city, 'Management', 1);
         }
     }
 
     await buyBoostMaterials(ns, 'Agriculture');
 
-    const smartStorageLevel = corp.getUpgradeLevel('Smart Storage');
+    const smartStorageLevel = await corpApi.getUpgradeLevel(ns, 'Smart Storage');
     if (smartStorageLevel < 10 && corpData.funds > 2e9) {
-        corp.levelUpgrade('Smart Storage');
+        await corpApi.levelUpgrade(ns, 'Smart Storage');
     }
 
-    const advertLevel = corp.getHireAdVertCount('Agriculture');
+    const advertLevel = await corpApi.getHireAdVertCount(ns, 'Agriculture');
     if (advertLevel < 2 && corpData.funds > 1e9) {
-        corp.hireAdVert('Agriculture');
+        await corpApi.hireAdVert(ns, 'Agriculture');
     }
 
     for (const city of CITIES) {
-        const warehouse = corp.getWarehouse('Agriculture', city);
+        const warehouse = await corpApi.getWarehouse(ns, 'Agriculture', city);
         if (warehouse.level < 3 && corpData.funds > 1e9) {
-            corp.upgradeWarehouse('Agriculture', city);
+            await corpApi.upgradeWarehouse(ns, 'Agriculture', city);
         }
     }
 
     for (const city of CITIES) {
-        const mat = corp.getMaterial('Agriculture', city, 'Plants');
+        const mat = await corpApi.getMaterial(ns, 'Agriculture', city, 'Plants');
         if (mat.stored > 0 && !mat.desiredSellPrice) {
-            corp.sellMaterial('Agriculture', city, 'Plants', 'MAX', 'MP');
-            corp.sellMaterial('Agriculture', city, 'Food', 'MAX', 'MP');
+            await corpApi.sellMaterial(ns, 'Agriculture', city, 'Plants', 'MAX', 'MP');
+            await corpApi.sellMaterial(ns, 'Agriculture', city, 'Food', 'MAX', 'MP');
         }
     }
 }
 
 async function runRound2(ns, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
     const verbose = state.options.verbose;
 
-    if (!corp.hasUnlock('Export')) {
+    if (!(await corpApi.hasUnlock(ns, 'Export'))) {
         if (corpData.funds > 20e9) {
-            corp.purchaseUnlock('Export');
+            await corpApi.purchaseUnlock(ns, 'Export');
             log(ns, 'Round 2: Purchased Export unlock');
         }
         return;
     }
 
     const hasChemical = corpData.divisions.includes('Chemical');
-    
+
     if (!hasChemical) {
         if (corpData.funds > 1e9) {
             log(ns, 'Round 2: Creating Chemical division');
-            corp.expandIndustry('Chemical', 'Chemical');
-            
+            await corpApi.expandIndustry(ns, 'Chemical', 'Chemical');
+
             for (const city of CITIES) {
                 if (city !== 'Sector-12') {
-                    corp.expandCity('Chemical', city);
+                    await corpApi.expandCity(ns, 'Chemical', city);
                 }
-                corp.purchaseWarehouse('Chemical', city);
-                
+                await corpApi.purchaseWarehouse(ns, 'Chemical', city);
+
                 for (let i = 0; i < 3; i++) {
-                    corp.hireEmployee('Chemical', city);
+                    await corpApi.hireEmployee(ns, 'Chemical', city);
                 }
-                corp.setAutoJobAssignment('Chemical', city, 'Research & Development', 3);
+                await corpApi.setAutoJobAssignment(ns, 'Chemical', city, 'Research & Development', 3);
             }
         }
         return;
     }
 
-    const chemDiv = corp.getDivision('Chemical');
+    const chemDiv = await corpApi.getDivision(ns, 'Chemical');
     if (chemDiv.researchPoints < 390) {
         if (verbose) log(ns, `Round 2: Waiting for Chemical RP (${chemDiv.researchPoints.toFixed(0)}/390)`);
     }
 
-    const agDiv = corp.getDivision('Agriculture');
+    const agDiv = await corpApi.getDivision(ns, 'Agriculture');
     if (agDiv.researchPoints < 700) {
         if (verbose) log(ns, `Round 2: Waiting for Agriculture RP (${agDiv.researchPoints.toFixed(0)}/700)`);
     }
 
-    setupExportRoutes(ns);
+    await setupExportRoutes(ns);
 
     for (const city of CITIES) {
-        const office = corp.getOffice('Agriculture', city);
+        const office = await corpApi.getOffice(ns, 'Agriculture', city);
         if (office.size < 8 && corpData.funds > 4e9) {
             const toAdd = 8 - office.size;
-            corp.upgradeOfficeSize('Agriculture', city, toAdd);
+            await corpApi.upgradeOfficeSize(ns, 'Agriculture', city, toAdd);
             for (let i = 0; i < toAdd; i++) {
-                corp.hireEmployee('Agriculture', city);
+                await corpApi.hireEmployee(ns, 'Agriculture', city);
             }
         }
     }
 
-    const advertLevel = corp.getHireAdVertCount('Agriculture');
+    const advertLevel = await corpApi.getHireAdVertCount(ns, 'Agriculture');
     if (advertLevel < 8 && corpData.funds > 1e9) {
-        corp.hireAdVert('Agriculture');
+        await corpApi.hireAdVert(ns, 'Agriculture');
     }
 
-    const smartStorageLevel = corp.getUpgradeLevel('Smart Storage');
+    const smartStorageLevel = await corpApi.getUpgradeLevel(ns, 'Smart Storage');
     if (smartStorageLevel < 15 && corpData.funds > 2e9) {
-        corp.levelUpgrade('Smart Storage');
+        await corpApi.levelUpgrade(ns, 'Smart Storage');
     }
 
-    const smartFactoriesLevel = corp.getUpgradeLevel('Smart Factories');
+    const smartFactoriesLevel = await corpApi.getUpgradeLevel(ns, 'Smart Factories');
     if (smartFactoriesLevel < 10 && corpData.funds > 2e9) {
-        corp.levelUpgrade('Smart Factories');
+        await corpApi.levelUpgrade(ns, 'Smart Factories');
     }
 
     await buyBoostMaterials(ns, 'Agriculture');
 }
 
 async function runRound3Plus(ns, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
     const verbose = state.options.verbose;
 
     const hasTobacco = corpData.divisions.includes('Tobacco');
-    
+
     if (!hasTobacco) {
         if (corpData.funds > 20e9) {
             log(ns, 'Round 3+: Creating Tobacco division');
-            corp.expandIndustry('Tobacco', 'Tobacco');
-            
+            await corpApi.expandIndustry(ns, 'Tobacco', 'Tobacco');
+
             for (const city of CITIES) {
                 if (city !== 'Sector-12') {
-                    corp.expandCity('Tobacco', city);
+                    await corpApi.expandCity(ns, 'Tobacco', city);
                 }
-                corp.purchaseWarehouse('Tobacco', city);
-                
-                corp.upgradeOfficeSize('Tobacco', city, 27);
+                await corpApi.purchaseWarehouse(ns, 'Tobacco', city);
+
+                await corpApi.upgradeOfficeSize(ns, 'Tobacco', city, 27);
                 for (let i = 0; i < 30; i++) {
-                    corp.hireEmployee('Tobacco', city);
+                    await corpApi.hireEmployee(ns, 'Tobacco', city);
                 }
-                
+
                 if (city === 'Sector-12') {
-                    corp.setAutoJobAssignment('Tobacco', city, 'Operations', 6);
-                    corp.setAutoJobAssignment('Tobacco', city, 'Engineer', 6);
-                    corp.setAutoJobAssignment('Tobacco', city, 'Business', 6);
-                    corp.setAutoJobAssignment('Tobacco', city, 'Management', 6);
-                    corp.setAutoJobAssignment('Tobacco', city, 'Research & Development', 6);
+                    await corpApi.setAutoJobAssignment(ns, 'Tobacco', city, 'Operations', 6);
+                    await corpApi.setAutoJobAssignment(ns, 'Tobacco', city, 'Engineer', 6);
+                    await corpApi.setAutoJobAssignment(ns, 'Tobacco', city, 'Business', 6);
+                    await corpApi.setAutoJobAssignment(ns, 'Tobacco', city, 'Management', 6);
+                    await corpApi.setAutoJobAssignment(ns, 'Tobacco', city, 'Research & Development', 6);
                 } else {
-                    corp.setAutoJobAssignment('Tobacco', city, 'Research & Development', 30);
+                    await corpApi.setAutoJobAssignment(ns, 'Tobacco', city, 'Research & Development', 30);
                 }
             }
-            
-            setupTobaccoExports(ns);
+
+            await setupTobaccoExports(ns);
         }
         return;
     }
 
-    const tobaccoDiv = corp.getDivision('Tobacco');
-    
-    if (tobaccoDiv.products.length === 0 || canDevelopNewProduct(ns, 'Tobacco', state)) {
+    const tobaccoDiv = await corpApi.getDivision(ns, 'Tobacco');
+
+    if (tobaccoDiv.products.length === 0 || await canDevelopNewProduct(ns, 'Tobacco', state)) {
         await developNewProduct(ns, 'Tobacco', state);
     }
 
@@ -412,66 +414,61 @@ async function runRound3Plus(ns, state) {
     await upgradeProductionCapability(ns);
 }
 
-function setupExportRoutes(ns) {
-    const corp = ns.corporation;
-    
+async function setupExportRoutes(ns) {
     try {
         for (const city of CITIES) {
-            corp.cancelExportMaterial('Agriculture', city, 'Chemical', city, 'Plants');
+            await corpApi.cancelExportMaterial(ns, 'Agriculture', city, 'Chemical', city, 'Plants');
         }
     } catch { }
 
     for (const city of CITIES) {
         try {
-            corp.exportMaterial('Agriculture', city, 'Chemical', city, 'Plants', '(IPROD+IINV/10)*(-1)');
+            await corpApi.exportMaterial(ns, 'Agriculture', city, 'Chemical', city, 'Plants', '(IPROD+IINV/10)*(-1)');
         } catch { }
     }
 
     try {
         for (const city of CITIES) {
-            corp.cancelExportMaterial('Chemical', city, 'Agriculture', city, 'Chemicals');
+            await corpApi.cancelExportMaterial(ns, 'Chemical', city, 'Agriculture', city, 'Chemicals');
         }
     } catch { }
 
     for (const city of CITIES) {
         try {
-            corp.exportMaterial('Chemical', city, 'Agriculture', city, 'Chemicals', '(IPROD+IINV/10)*(-1)');
+            await corpApi.exportMaterial(ns, 'Chemical', city, 'Agriculture', city, 'Chemicals', '(IPROD+IINV/10)*(-1)');
         } catch { }
     }
 }
 
-function setupTobaccoExports(ns) {
-    const corp = ns.corporation;
-    
+async function setupTobaccoExports(ns) {
     for (const city of CITIES) {
         try {
-            corp.exportMaterial('Agriculture', city, 'Tobacco', city, 'Plants', '(IPROD+IINV/10)*(-1)');
+            await corpApi.exportMaterial(ns, 'Agriculture', city, 'Tobacco', city, 'Plants', '(IPROD+IINV/10)*(-1)');
         } catch { }
     }
 }
 
 async function buyBoostMaterials(ns, division) {
-    const corp = ns.corporation;
-    const divData = corp.getDivision(division);
+    const divData = await corpApi.getDivision(ns, division);
 
     for (const city of CITIES) {
         try {
-            if (!corp.hasWarehouse(division, city)) continue;
-            
-            const warehouse = corp.getWarehouse(division, city);
+            if (!(await corpApi.hasWarehouse(ns, division, city))) continue;
+
+            const warehouse = await corpApi.getWarehouse(ns, division, city);
             const freeSpace = warehouse.size - warehouse.sizeUsed;
-            
+
             if (freeSpace < 100) continue;
 
             const optimal = calculateOptimalBoostMaterials(divData.type, freeSpace * 0.8);
             if (!optimal) continue;
 
             for (const [material, targetQty] of Object.entries(optimal)) {
-                const current = corp.getMaterial(division, city, material);
+                const current = await corpApi.getMaterial(ns, division, city, material);
                 const toBuy = targetQty - current.stored;
-                
+
                 if (toBuy > 0) {
-                    corp.buyMaterial(division, city, material, toBuy / 10);
+                    await corpApi.buyMaterial(ns, division, city, material, toBuy / 10);
                 }
             }
         } catch { }
@@ -481,81 +478,77 @@ async function buyBoostMaterials(ns, division) {
 
     for (const city of CITIES) {
         try {
-            corp.buyMaterial(division, city, 'AI Cores', 0);
-            corp.buyMaterial(division, city, 'Hardware', 0);
-            corp.buyMaterial(division, city, 'Real Estate', 0);
-            corp.buyMaterial(division, city, 'Robots', 0);
+            await corpApi.buyMaterial(ns, division, city, 'AI Cores', 0);
+            await corpApi.buyMaterial(ns, division, city, 'Hardware', 0);
+            await corpApi.buyMaterial(ns, division, city, 'Real Estate', 0);
+            await corpApi.buyMaterial(ns, division, city, 'Robots', 0);
         } catch { }
     }
 }
 
-function canDevelopNewProduct(ns, division, state) {
-    const corp = ns.corporation;
-    const divData = corp.getDivision(division);
-    
+async function canDevelopNewProduct(ns, division, state) {
+    const divData = await corpApi.getDivision(ns, division);
+
     for (const productName of divData.products) {
-        const product = corp.getProduct(division, 'Sector-12', productName);
+        const product = await corpApi.getProduct(ns, division, 'Sector-12', productName);
         if (product.developmentProgress < 100) {
             return false;
         }
     }
-    
+
     if (divData.products.length >= 3) {
         return true;
     }
-    
+
     return divData.products.length < 3;
 }
 
 async function developNewProduct(ns, division, state) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
-    const divData = corp.getDivision(division);
+    const corpData = await corpApi.getCorporation(ns);
+    const divData = await corpApi.getDivision(ns, division);
 
     if (divData.products.length >= 3) {
         let oldestProduct = divData.products[0];
         let oldestRating = Infinity;
-        
+
         for (const productName of divData.products) {
-            const product = corp.getProduct(division, 'Sector-12', productName);
+            const product = await corpApi.getProduct(ns, division, 'Sector-12', productName);
             if (product.developmentProgress >= 100 && product.effectiveRating < oldestRating) {
                 oldestRating = product.effectiveRating;
                 oldestProduct = productName;
             }
         }
-        
-        corp.discontinueProduct(division, oldestProduct);
+
+        await corpApi.discontinueProduct(ns, division, oldestProduct);
         log(ns, `Discontinued product: ${oldestProduct}`);
     }
 
     const productName = getProductName(division, state.productVersion++);
     const investment = Math.max(1e9, corpData.funds * 0.01);
-    
-    corp.makeProduct(division, 'Sector-12', productName, investment, investment);
+
+    await corpApi.makeProduct(ns, division, 'Sector-12', productName, investment, investment);
     log(ns, `Started developing product: ${productName}`);
 }
 
 async function buyWilsonAndAdvert(ns, division) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
-    const divData = corp.getDivision(division);
+    const corpData = await corpApi.getCorporation(ns);
+    const divData = await corpApi.getDivision(ns, division);
 
     if (divData.awareness >= Number.MAX_VALUE * 0.9) return;
 
-    const wilsonCost = corp.getUpgradeLevelCost('Wilson Analytics');
+    const wilsonCost = await corpApi.getUpgradeLevelCost(ns, 'Wilson Analytics');
     if (corpData.funds > wilsonCost * 2) {
-        corp.levelUpgrade('Wilson Analytics');
+        await corpApi.levelUpgrade(ns, 'Wilson Analytics');
     }
 
-    const advertCost = corp.getHireAdVertCost(division);
+    const advertCost = await corpApi.getHireAdVertCost(ns, division);
     if (corpData.funds > advertCost * 5) {
-        corp.hireAdVert(division);
+        await corpApi.hireAdVert(ns, division);
     }
 }
 
 async function buyResearch(ns, division) {
-    const corp = ns.corporation;
-    const divData = corp.getDivision(division);
+    const divData = await corpApi.getDivision(ns, division);
     const rp = divData.researchPoints;
 
     const priorityResearch = [
@@ -577,8 +570,8 @@ async function buyResearch(ns, division) {
     for (const research of priorityResearch) {
         if (rp > research.cost * 2) {
             try {
-                if (!corp.hasResearched(division, research.name)) {
-                    corp.research(division, research.name);
+                if (!(await corpApi.hasResearched(ns, division, research.name))) {
+                    await corpApi.research(ns, division, research.name);
                     log(ns, `Researched: ${research.name}`);
                     break;
                 }
@@ -588,8 +581,7 @@ async function buyResearch(ns, division) {
 }
 
 async function upgradeProductionCapability(ns) {
-    const corp = ns.corporation;
-    const corpData = corp.getCorporation();
+    const corpData = await corpApi.getCorporation(ns);
 
     const upgrades = [
         'Smart Storage',
@@ -604,20 +596,18 @@ async function upgradeProductionCapability(ns) {
 
     for (const upgrade of upgrades) {
         try {
-            const cost = corp.getUpgradeLevelCost(upgrade);
+            const cost = await corpApi.getUpgradeLevelCost(ns, upgrade);
             if (corpData.funds > cost * 10) {
-                corp.levelUpgrade(upgrade);
+                await corpApi.levelUpgrade(ns, upgrade);
             }
         } catch { }
     }
 }
 
 async function checkInvestment(ns, state) {
-    const corp = ns.corporation;
-    
     if (shouldAcceptInvestment(ns, state.round, 0)) {
-        const offer = corp.getInvestmentOffer();
-        corp.acceptInvestmentOffer();
+        const offer = await corpApi.getInvestmentOffer(ns);
+        await corpApi.acceptInvestmentOffer(ns);
         log(ns, `Accepted investment offer: ${formatMoney(offer.funds)}`, true, 'success');
         state.round++;
     }

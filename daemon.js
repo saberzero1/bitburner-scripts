@@ -377,6 +377,7 @@ export async function main(ns) {
             {
                 name: "corporation.js",
                 shouldRun: () => reqRam(64) && (3 in dictSourceFiles || bitNodeN === 3),
+                minRamReq: 25,
                 shouldTail: false
             },
         ];
