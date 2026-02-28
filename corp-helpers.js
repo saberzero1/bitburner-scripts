@@ -494,11 +494,13 @@ export const INVESTMENT_ROUNDS = {
  * @returns {number} Minimum acceptable offer
  */
 export function getMinimumInvestmentOffer(round) {
+    // Lowered thresholds to escape death spirals
+    // When in trouble, any investment is better than none
     const minimums = {
         1: 500e6,    // $500m - basic Agriculture setup
-        2: 3e9,      // $3b - Chemical division
-        3: 10e9,     // $10b - Tobacco + products
-        4: 100e9     // $100b - maximize before going public
+        2: 2e9,      // $2b - Chemical division
+        3: 5e9,      // $5b - lowered to escape death spiral
+        4: 50e9      // $50b - going public
     };
     return minimums[round] || 0;
 }
@@ -506,13 +508,21 @@ export function getMinimumInvestmentOffer(round) {
 /**
  * Check if an investment offer should be accepted
  * 
+ * IMPORTANT: When funds are negative (death spiral), accept ANY positive offer
+ * 
  * @param {Object} offer - Investment offer from API
  * @param {number} round - Current investment round
  * @param {number} customMinimum - Override minimum (optional)
+ * @param {number} currentFunds - Current corporation funds (optional, for emergency logic)
  * @returns {boolean} Whether to accept the offer
  */
-export function shouldAcceptInvestment(offer, round, customMinimum = 0) {
+export function shouldAcceptInvestment(offer, round, customMinimum = 0, currentFunds = null) {
     if (!offer || offer.funds <= 0) return false;
+    
+    // EMERGENCY: If funds are negative (death spiral), accept ANY investment
+    if (currentFunds !== null && currentFunds < 0) {
+        return true;  // Accept any offer to escape death spiral
+    }
     
     const minimum = customMinimum > 0 ? customMinimum : getMinimumInvestmentOffer(round);
     return offer.funds >= minimum;

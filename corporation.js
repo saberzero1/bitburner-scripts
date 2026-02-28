@@ -372,16 +372,34 @@ async function manageWarehouses(ns, state) {
                     } catch {}
                 }
                 
-                // If warehouse is critically full, STOP all buying
+                // If warehouse is critically full (>95%), emergency measures
                 if (health.isCritical) {
-                    // Stop buying boost materials
+                    // Stop ALL buying
                     for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
                         await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
                     }
-                    // Stop buying input materials
                     for (const mat of Object.keys(industry.inputMaterials || {})) {
                         await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
                     }
+                    
+                    // EMERGENCY: Sell some boost materials to make room for production
+                    // Prioritize selling Robots (largest size: 0.5) first
+                    const robotsStored = materials['Robots']?.stored || 0;
+                    if (robotsStored > 100) {
+                        // Sell half of robots to free up space
+                        const toSell = Math.floor(robotsStored * 0.5);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'Robots', toSell.toString(), 'MP');
+                        log(ns, `EMERGENCY: Selling ${toSell} Robots in ${divName}/${city} to free warehouse space`);
+                    }
+                    
+                    // Also sell some AI Cores (size: 0.1)
+                    const aiCoresStored = materials['AI Cores']?.stored || 0;
+                    if (aiCoresStored > 500) {
+                        const toSell = Math.floor(aiCoresStored * 0.3);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'AI Cores', toSell.toString(), 'MP');
+                        log(ns, `EMERGENCY: Selling ${toSell} AI Cores in ${divName}/${city} to free warehouse space`);
+                    }
+                    
                     continue;
                 }
                 
@@ -394,6 +412,11 @@ async function manageWarehouses(ns, state) {
                 for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
                     const stored = materials[mat]?.stored || 0;
                     currentBoostSpace += stored * MATERIAL_SIZES[mat];
+                }
+                
+                // When NOT critical, stop selling boost materials (cleanup from emergency)
+                for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
+                    await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, mat, '0', '0');
                 }
                 
                 // Only buy boost materials if we have room and are healthy
@@ -694,8 +717,16 @@ async function runRound3Plus(ns, state) {
     let corpData = await execCorpFunc(ns, 'getCorporation()');
     const verbose = state.options.verbose;
 
-    // Verify prerequisites
+    // Verify prerequisites - must have both divisions with employees
     if (!corpData.divisions.includes('Agriculture') || !corpData.divisions.includes('Chemical')) {
+        await runRound2(ns, state);
+        return;
+    }
+
+    // Verify Chemical has employees (critical for production chain)
+    const chemOffice = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Chemical', 'Sector-12');
+    if (chemOffice.numEmployees === 0) {
+        log(ns, 'Round 3+: Chemical has no employees, running Round 2 setup');
         await runRound2(ns, state);
         return;
     }
@@ -926,14 +957,16 @@ async function upgradeProductionCapability(ns) {
 // ============================================================================
 
 async function checkInvestment(ns, state) {
+    const corpData = await execCorpFunc(ns, 'getCorporation()');
     const offer = await execCorpFunc(ns, 'getInvestmentOffer()');
 
     if (offer && offer.funds > 0) {
-        const corpData = await execCorpFunc(ns, 'getCorporation()');
-        log(ns, `Investment offer: ${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares (Round ${state.round})`);
+        const isEmergency = corpData.funds < 0;
+        log(ns, `Investment offer: ${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares (Round ${state.round})${isEmergency ? ' [EMERGENCY - negative funds]' : ''}`);
     }
 
-    if (shouldAcceptInvestment(offer, state.round, 0)) {
+    // Pass current funds to enable emergency acceptance when in death spiral
+    if (shouldAcceptInvestment(offer, state.round, 0, corpData.funds)) {
         await execCorpFunc(ns, 'acceptInvestmentOffer()');
         log(ns, `Accepted investment: ${formatMoney(offer.funds)}`, true, 'success');
         state.round++;
