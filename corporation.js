@@ -135,11 +135,17 @@ async function runCorpCycle(ns, state) {
     }
 }
 
-async function maintainEmployees(ns, state) {
+async function maintainEmployees(ns, corpState) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
 
     for (const division of corpData.divisions) {
+        // Get division data to check which cities it has expanded to
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
+        
         for (const city of CITIES) {
+            // Skip cities where this division doesn't have an office
+            if (!divData.cities.includes(city)) continue;
+            
             try {
                 const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', division, city);
                 if (!office) continue;
@@ -160,7 +166,7 @@ async function maintainEmployees(ns, state) {
 async function runSmartSupply(ns, state) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
 
-    if (corpData.prevState !== 'SALE') return;
+    if (corpData.nextState !== 'SALE') return;
 
     for (const division of corpData.divisions) {
         const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
@@ -168,6 +174,9 @@ async function runSmartSupply(ns, state) {
         if (!industry || !industry.inputMaterials) continue;
 
         for (const city of CITIES) {
+            // Skip cities where this division hasn't expanded
+            if (!divData.cities.includes(city)) continue;
+            
             try {
                 if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', division, city))) continue;
 
@@ -202,6 +211,9 @@ async function updatePricing(ns, state) {
         if (!industry) continue;
 
         for (const city of CITIES) {
+            // Skip cities where this division hasn't expanded
+            if (!divData.cities.includes(city)) continue;
+            
             try {
                 if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', division, city))) continue;
 
