@@ -244,7 +244,7 @@ async function logCorpStatus(ns, corpData, state) {
                     for (const matName of [...Object.keys(industry.inputMaterials || {}), ...industry.outputMaterials, 'Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
                         try {
                             materials[matName] = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, matName);
-                        } catch {}
+                        } catch (e) {}
                     }
                     
                     const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
@@ -287,7 +287,7 @@ async function maintainEmployees(ns) {
                     const partyCost = calculateOptimalPartyCost(office.avgMorale, 100);
                     await execCorpFunc(ns, 'throwParty(ns.args[0], ns.args[1], ns.args[2])', divName, city, partyCost);
                 }
-            } catch { }
+            } catch (e) { }
         }
     }
 }
@@ -343,7 +343,7 @@ async function ensureSelling(ns) {
                 for (const material of Object.keys(industry.inputMaterials || {})) {
                     await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, material, '0', '0');
                 }
-            } catch { }
+            } catch (e) { }
         }
     }
 }
@@ -372,7 +372,7 @@ async function manageWarehouses(ns, state) {
                 for (const matName of ['Real Estate', 'Hardware', 'Robots', 'AI Cores', ...Object.keys(industry.inputMaterials || {})]) {
                     try {
                         materials[matName] = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, matName);
-                    } catch {}
+                    } catch (e) {}
                 }
                 
                 // If warehouse is critically full (>95%), emergency measures
@@ -489,7 +489,7 @@ async function manageWarehouses(ns, state) {
                         }
                     }
                 }
-            } catch { }
+            } catch (e) { }
         }
     }
     
@@ -505,7 +505,7 @@ async function manageWarehouses(ns, state) {
                 for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
                     await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
                 }
-            } catch { }
+            } catch (e) { }
         }
     }
 }
@@ -529,7 +529,7 @@ async function expandAllDivisions(ns) {
                         await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', divName, city);
                         log(ns, `Expanded ${divName} to ${city}`);
                         await ns.sleep(100);
-                    } catch { }
+                    } catch (e) { }
                 }
                 continue;
             }
@@ -542,7 +542,7 @@ async function expandAllDivisions(ns) {
                         await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', divName, city);
                         log(ns, `Purchased warehouse for ${divName} in ${city}`);
                         await ns.sleep(100);
-                    } catch { }
+                    } catch (e) { }
                 }
                 continue;
             }
@@ -553,7 +553,7 @@ async function expandAllDivisions(ns) {
                 if (warehouse.level < 5 && corpData.funds > 2e9) {
                     await execCorpFunc(ns, 'upgradeWarehouse(ns.args[0], ns.args[1])', divName, city);
                 }
-            } catch { }
+            } catch (e) { }
             
             // Hire employees up to office size (target: 9 for support, 30 for main)
             try {
@@ -575,7 +575,7 @@ async function expandAllDivisions(ns) {
                     // Assign to production roles
                     await assignEmployeesToProduction(ns, divName, city, industry?.makesProducts || false);
                 }
-            } catch { }
+            } catch (e) { }
         }
         
         // Buy AdVerts aggressively for product divisions
@@ -585,7 +585,7 @@ async function expandAllDivisions(ns) {
                 if (corpData.funds > advertCost * 2) {
                     await execCorpFunc(ns, 'hireAdVert(ns.args[0])', divName);
                 }
-            } catch { }
+            } catch (e) { }
         }
     }
 }
@@ -627,7 +627,7 @@ async function updatePricing(ns) {
                         }
                     }
                 }
-            } catch { }
+            } catch (e) { }
         }
     }
 }
@@ -940,12 +940,12 @@ async function setupExportRoutes(ns, fromDiv, toDiv, material) {
         try {
             // Cancel existing export
             await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', fromDiv, city, toDiv, city, material);
-        } catch { }
+        } catch (e) { }
         
         try {
             // Set up new export: export production + 10% of inventory
             await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', fromDiv, city, toDiv, city, material, '(IPROD+IINV/10)*(-1)');
-        } catch { }
+        } catch (e) { }
     }
 }
 
@@ -1050,7 +1050,7 @@ async function buyResearch(ns, division) {
                     log(ns, `Researched: ${researchItem.name}`);
                     break;
                 }
-            } catch { }
+            } catch (e) { }
         }
 }
 
@@ -1081,7 +1081,7 @@ async function upgradeProductionCapability(ns) {
                     await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', upgrade.name);
                 }
             }
-        } catch { }
+        } catch (e) { }
     }
 }
 
