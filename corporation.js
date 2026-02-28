@@ -252,24 +252,57 @@ async function runRound1(ns, state) {
     if (!hasAgriculture) {
         log(ns, 'Round 1: Creating Agriculture division');
         await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Agriculture', 'Agriculture');
-
-        for (const city of CITIES) {
-            if (city !== 'Sector-12') {
-                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Agriculture', city);
-            }
-            await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
-
-            await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 1);
-
-            for (let i = 0; i < 4; i++) {
-                await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Agriculture', city);
-            }
-            await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Research & Development', 4);
-        }
-        return;
+        // Wait for division to initialize
+        await ns.sleep(500);
+        return; // Return and let next cycle handle city expansion
     }
 
     const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
+
+    // Check if we need to expand to all cities and set up warehouses
+    let allCitiesReady = true;
+    for (const city of CITIES) {
+        if (!agDiv.cities.includes(city)) {
+            // Need to expand to this city
+            if (city !== 'Sector-12') {
+                log(ns, `Round 1: Expanding to ${city}`);
+                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Agriculture', city);
+                await ns.sleep(200);
+            }
+            allCitiesReady = false;
+            continue;
+        }
+        
+        // City is expanded, check if warehouse exists
+        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!hasWarehouse) {
+            log(ns, `Round 1: Purchasing warehouse in ${city}`);
+            await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+            await ns.sleep(200);
+            allCitiesReady = false;
+            continue;
+        }
+        
+        // Check if employees are set up
+        const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (office.numEmployees < 4) {
+            if (office.size < 4) {
+                await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 4 - office.size);
+            }
+            for (let i = office.numEmployees; i < 4; i++) {
+                await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Agriculture', city);
+            }
+            await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Research & Development', 4);
+            allCitiesReady = false;
+        }
+    }
+
+    if (!allCitiesReady) {
+        if (verbose) log(ns, 'Round 1: Setting up cities...');
+        return; // Let next cycle continue setup
+    }
+
+    // All cities have warehouses and employees - now proceed with rest of Round 1
     const sectorOffice = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', 'Sector-12');
 
     if (agDiv.researchPoints < 55 && sectorOffice.avgMorale >= 95) {
@@ -280,6 +313,7 @@ async function runRound1(ns, state) {
     if (sectorOffice.employeeJobs['Research & Development'] === 4) {
         log(ns, 'Round 1: Switching employees from R&D to production');
         for (const city of CITIES) {
+            if (!agDiv.cities.includes(city)) continue;
             await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Research & Development', 0);
             await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Operations', 1);
             await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Engineer', 1);
@@ -301,6 +335,9 @@ async function runRound1(ns, state) {
     }
 
     for (const city of CITIES) {
+        if (!agDiv.cities.includes(city)) continue;
+        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!hasWarehouse) continue;
         const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
         if (warehouse.level < 3 && corpData.funds > 1e9) {
             await execCorpFunc(ns, 'upgradeWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
@@ -308,6 +345,9 @@ async function runRound1(ns, state) {
     }
 
     for (const city of CITIES) {
+        if (!agDiv.cities.includes(city)) continue;
+        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!hasWarehouse) continue;
         const mat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 'Plants');
         if (mat.stored > 0 && !mat.desiredSellPrice) {
             await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Agriculture', city, 'Plants', 'MAX', 'MP');
@@ -323,9 +363,24 @@ async function runRound2(ns, state) {
     // Check if Agriculture exists first - if not, we need to run Round 1 logic
     const hasAgriculture = corpData.divisions.includes('Agriculture');
     if (!hasAgriculture) {
-        // Agriculture doesn't exist yet, run Round 1 instead
         await runRound1(ns, state);
         return;
+    }
+
+    // Verify Agriculture is fully set up (all cities have warehouses)
+    const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
+    for (const city of CITIES) {
+        if (!agDiv.cities.includes(city)) {
+            if (verbose) log(ns, `Round 2: Agriculture not expanded to ${city}, running Round 1`);
+            await runRound1(ns, state);
+            return;
+        }
+        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!hasWarehouse) {
+            if (verbose) log(ns, `Round 2: Agriculture missing warehouse in ${city}, running Round 1`);
+            await runRound1(ns, state);
+            return;
+        }
     }
 
     if (!(await execCorpFunc(ns, 'hasUnlock(ns.args[0])', 'Export'))) {
@@ -342,36 +397,64 @@ async function runRound2(ns, state) {
         if (corpData.funds > 1e9) {
             log(ns, 'Round 2: Creating Chemical division');
             await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Chemical', 'Chemical');
-
-            for (const city of CITIES) {
-                if (city !== 'Sector-12') {
-                    await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Chemical', city);
-                }
-                await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
-
-                for (let i = 0; i < 3; i++) {
-                    await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Chemical', city);
-                }
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Chemical', city, 'Research & Development', 3);
-            }
+            await ns.sleep(500); // Wait for division to initialize
         }
         return;
     }
 
+    // Chemical division exists - ensure it's fully expanded with warehouses
     const chemDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Chemical');
+    let chemicalFullySetUp = true;
+    
+    for (const city of CITIES) {
+        if (!chemDiv.cities.includes(city)) {
+            // Expand to this city
+            if (city !== 'Sector-12') {
+                log(ns, `Round 2: Expanding Chemical to ${city}`);
+                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Chemical', city);
+                await ns.sleep(200);
+            }
+            chemicalFullySetUp = false;
+            continue;
+        }
+        
+        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
+        if (!hasWarehouse) {
+            log(ns, `Round 2: Purchasing warehouse for Chemical in ${city}`);
+            await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
+            await ns.sleep(200);
+            chemicalFullySetUp = false;
+            continue;
+        }
+        
+        // Check employees
+        const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Chemical', city);
+        if (office.numEmployees < 3) {
+            for (let i = office.numEmployees; i < 3; i++) {
+                await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Chemical', city);
+            }
+            await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Chemical', city, 'Research & Development', 3);
+            chemicalFullySetUp = false;
+        }
+    }
+
+    if (!chemicalFullySetUp) {
+        if (verbose) log(ns, 'Round 2: Setting up Chemical division...');
+        return;
+    }
+
+    // Both divisions are fully set up - now we can safely set up export routes
     if (chemDiv.researchPoints < 390) {
         if (verbose) log(ns, `Round 2: Waiting for Chemical RP (${chemDiv.researchPoints.toFixed(0)}/390)`);
     }
 
-    const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
     if (agDiv.researchPoints < 700) {
         if (verbose) log(ns, `Round 2: Waiting for Agriculture RP (${agDiv.researchPoints.toFixed(0)}/700)`);
     }
 
-    await setupExportRoutes(ns);
+    await setupExportRoutes(ns, agDiv, chemDiv);
 
     for (const city of CITIES) {
-        // Check if Agriculture has expanded to this city
         if (!agDiv.cities.includes(city)) continue;
         
         const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', city);
@@ -427,35 +510,70 @@ async function runRound3Plus(ns, state) {
         if (corpData.funds > 20e9) {
             log(ns, 'Round 3+: Creating Tobacco division');
             await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Tobacco', 'Tobacco');
-
-            for (const city of CITIES) {
-                if (city !== 'Sector-12') {
-                    await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Tobacco', city);
-                }
-                await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
-
-                await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Tobacco', city, 27);
-                for (let i = 0; i < 30; i++) {
-                    await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Tobacco', city);
-                }
-
-                if (city === 'Sector-12') {
-                    await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Operations', 6);
-                    await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Engineer', 6);
-                    await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Business', 6);
-                    await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Management', 6);
-                    await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Research & Development', 6);
-                } else {
-                    await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Research & Development', 30);
-                }
-            }
-
-            await setupTobaccoExports(ns);
+            await ns.sleep(500); // Wait for division to initialize
         }
         return;
     }
 
+    // Tobacco division exists - ensure it's fully expanded with warehouses
     const tobaccoDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Tobacco');
+    let tobaccoFullySetUp = true;
+
+    for (const city of CITIES) {
+        if (!tobaccoDiv.cities.includes(city)) {
+            if (city !== 'Sector-12') {
+                log(ns, `Round 3+: Expanding Tobacco to ${city}`);
+                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Tobacco', city);
+                await ns.sleep(200);
+            }
+            tobaccoFullySetUp = false;
+            continue;
+        }
+
+        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
+        if (!hasWarehouse) {
+            log(ns, `Round 3+: Purchasing warehouse for Tobacco in ${city}`);
+            await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
+            await ns.sleep(200);
+            tobaccoFullySetUp = false;
+            continue;
+        }
+
+        // Check office size and employees
+        const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Tobacco', city);
+        if (office.size < 30) {
+            const toAdd = 30 - office.size;
+            await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Tobacco', city, toAdd);
+            tobaccoFullySetUp = false;
+            continue;
+        }
+
+        if (office.numEmployees < 30) {
+            for (let i = office.numEmployees; i < 30; i++) {
+                await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Tobacco', city);
+            }
+            
+            if (city === 'Sector-12') {
+                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Operations', 6);
+                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Engineer', 6);
+                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Business', 6);
+                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Management', 6);
+                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Research & Development', 6);
+            } else {
+                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Research & Development', 30);
+            }
+            tobaccoFullySetUp = false;
+        }
+    }
+
+    if (!tobaccoFullySetUp) {
+        if (verbose) log(ns, 'Round 3+: Setting up Tobacco division...');
+        return;
+    }
+
+    // Set up exports from Agriculture to Tobacco
+    const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
+    await setupTobaccoExports(ns, agDiv, tobaccoDiv);
 
     if (tobaccoDiv.products.length === 0 || await canDevelopNewProduct(ns, 'Tobacco', state)) {
         await developNewProduct(ns, 'Tobacco', state);
@@ -468,34 +586,49 @@ async function runRound3Plus(ns, state) {
     await upgradeProductionCapability(ns);
 }
 
-async function setupExportRoutes(ns) {
-    try {
-        for (const city of CITIES) {
-            await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Agriculture', city, 'Chemical', city, 'Plants');
-        }
-    } catch { }
-
+async function setupExportRoutes(ns, agDiv, chemDiv) {
+    // Only set up exports for cities where BOTH divisions have warehouses
     for (const city of CITIES) {
+        // Check Agriculture has warehouse in this city
+        if (!agDiv.cities.includes(city)) continue;
+        const agHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!agHasWarehouse) continue;
+
+        // Check Chemical has warehouse in this city
+        if (!chemDiv.cities.includes(city)) continue;
+        const chemHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
+        if (!chemHasWarehouse) continue;
+
+        // Both have warehouses - set up export routes
+        try {
+            await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Agriculture', city, 'Chemical', city, 'Plants');
+        } catch { }
+        
         try {
             await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', 'Agriculture', city, 'Chemical', city, 'Plants', '(IPROD+IINV/10)*(-1)');
         } catch { }
-    }
 
-    try {
-        for (const city of CITIES) {
+        try {
             await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Chemical', city, 'Agriculture', city, 'Chemicals');
-        }
-    } catch { }
-
-    for (const city of CITIES) {
+        } catch { }
+        
         try {
             await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', 'Chemical', city, 'Agriculture', city, 'Chemicals', '(IPROD+IINV/10)*(-1)');
         } catch { }
     }
 }
 
-async function setupTobaccoExports(ns) {
+async function setupTobaccoExports(ns, agDiv, tobaccoDiv) {
     for (const city of CITIES) {
+        // Check both divisions have warehouses
+        if (!agDiv.cities.includes(city)) continue;
+        const agHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!agHasWarehouse) continue;
+
+        if (!tobaccoDiv.cities.includes(city)) continue;
+        const tobaccoHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
+        if (!tobaccoHasWarehouse) continue;
+
         try {
             await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', 'Agriculture', city, 'Tobacco', city, 'Plants', '(IPROD+IINV/10)*(-1)');
         } catch { }
@@ -506,6 +639,9 @@ async function buyBoostMaterials(ns, division) {
     const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
 
     for (const city of CITIES) {
+        // Skip cities where division hasn't expanded
+        if (!divData.cities.includes(city)) continue;
+
         try {
             if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', division, city))) continue;
 
@@ -531,6 +667,7 @@ async function buyBoostMaterials(ns, division) {
     await ns.sleep(10000);
 
     for (const city of CITIES) {
+        if (!divData.cities.includes(city)) continue;
         try {
             await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, 'AI Cores', 0);
             await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, 'Hardware', 0);
