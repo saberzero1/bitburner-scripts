@@ -166,7 +166,10 @@ async function runCorpCycle(ns, state) {
         await updatePricing(ns);
     }
 
-    // 5. Run round-specific logic
+    // 5. Aggressive expansion - expand all divisions to all cities
+    await expandAllDivisions(ns);
+
+    // 6. Run round-specific logic
     switch (state.round) {
         case 1:
             await runRound1(ns, state);
@@ -382,27 +385,64 @@ async function manageWarehouses(ns, state) {
                         await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
                     }
                     
-                    // EMERGENCY: Sell some boost materials to make room for production
-                    // Prioritize selling Robots (largest size: 0.5) first
+                    // EMERGENCY: Sell boost materials to make room for production
+                    // Log what we have for debugging
                     const robotsStored = materials['Robots']?.stored || 0;
-                    if (robotsStored > 100) {
-                        // Sell half of robots to free up space
-                        const toSell = Math.floor(robotsStored * 0.5);
-                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'Robots', toSell.toString(), 'MP');
-                        log(ns, `EMERGENCY: Selling ${toSell} Robots in ${divName}/${city} to free warehouse space`);
-                    }
-                    
-                    // Also sell some AI Cores (size: 0.1)
                     const aiCoresStored = materials['AI Cores']?.stored || 0;
-                    if (aiCoresStored > 500) {
-                        const toSell = Math.floor(aiCoresStored * 0.3);
-                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'AI Cores', toSell.toString(), 'MP');
-                        log(ns, `EMERGENCY: Selling ${toSell} AI Cores in ${divName}/${city} to free warehouse space`);
+                    const hardwareStored = materials['Hardware']?.stored || 0;
+                    const realEstateStored = materials['Real Estate']?.stored || 0;
+                    
+                    log(ns, `EMERGENCY ${divName}/${city}: Warehouse FULL. Boost materials: RE=${realEstateStored.toFixed(0)}, HW=${hardwareStored.toFixed(0)}, Robots=${robotsStored.toFixed(0)}, AI=${aiCoresStored.toFixed(0)}`);
+                    
+                    // Sell ALL boost materials to clear space quickly
+                    // Set sell amount to current stored amount (sells everything)
+                    let soldAny = false;
+                    
+                    // Sell Real Estate (size 0.005, but often have lots)
+                    if (realEstateStored > 1000) {
+                        const toSell = Math.floor(realEstateStored * 0.5);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'Real Estate', (toSell / 10).toString(), 'MP');
+                        log(ns, `  Selling ${toSell} Real Estate (${(toSell * 0.005).toFixed(1)} space)`);
+                        soldAny = true;
                     }
                     
+                    // Sell Hardware (size 0.06)
+                    if (hardwareStored > 100) {
+                        const toSell = Math.floor(hardwareStored * 0.5);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'Hardware', (toSell / 10).toString(), 'MP');
+                        log(ns, `  Selling ${toSell} Hardware (${(toSell * 0.06).toFixed(1)} space)`);
+                        soldAny = true;
+                    }
+                    
+                    // Sell Robots (size 0.5 - largest)
+                    if (robotsStored > 10) {
+                        const toSell = Math.floor(robotsStored * 0.5);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'Robots', (toSell / 10).toString(), 'MP');
+                        log(ns, `  Selling ${toSell} Robots (${(toSell * 0.5).toFixed(1)} space)`);
+                        soldAny = true;
+                    }
+                    
+                    // Sell AI Cores (size 0.1)
+                    if (aiCoresStored > 50) {
+                        const toSell = Math.floor(aiCoresStored * 0.5);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, 'AI Cores', (toSell / 10).toString(), 'MP');
+                        log(ns, `  Selling ${toSell} AI Cores (${(toSell * 0.1).toFixed(1)} space)`);
+                        soldAny = true;
+                    }
+                    
+                    if (!soldAny) {
+                        log(ns, `  WARNING: No boost materials to sell! Check input materials.`);
+                        // Maybe the warehouse is full of INPUT materials - sell those too
+                        for (const mat of Object.keys(industry.inputMaterials || {})) {
+                            const stored = materials[mat]?.stored || 0;
+                            if (stored > 100) {
+                                await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, mat, (stored / 20).toString(), 'MP');
+                                log(ns, `  Selling excess ${mat}: ${stored.toFixed(0)}`);
+                            }
+                        }
+                    }
                     continue;
                 }
-                
                 // Calculate space budget
                 const budget = calculateWarehouseSpaceBudget(divData.type, warehouse.size);
                 if (!budget) continue;
@@ -464,6 +504,86 @@ async function manageWarehouses(ns, state) {
                 // Stop boost material purchases
                 for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
                     await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
+                }
+            } catch { }
+        }
+    }
+}
+
+// ============================================================================
+// AGGRESSIVE EXPANSION - Expand all divisions to all cities
+// ============================================================================
+
+async function expandAllDivisions(ns) {
+    const corpData = await execCorpFunc(ns, 'getCorporation()');
+    
+    for (const divName of corpData.divisions) {
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
+        const industry = INDUSTRIES[divData.type];
+        
+        for (const city of CITIES) {
+            // Expand to city if not present
+            if (!divData.cities.includes(city)) {
+                if (city !== 'Sector-12' && corpData.funds > 4e9) {
+                    try {
+                        await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', divName, city);
+                        log(ns, `Expanded ${divName} to ${city}`);
+                        await ns.sleep(100);
+                    } catch { }
+                }
+                continue;
+            }
+            
+            // Purchase warehouse if missing
+            const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city);
+            if (!hasWarehouse) {
+                if (corpData.funds > 5e9) {
+                    try {
+                        await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', divName, city);
+                        log(ns, `Purchased warehouse for ${divName} in ${city}`);
+                        await ns.sleep(100);
+                    } catch { }
+                }
+                continue;
+            }
+            
+            // Upgrade warehouse if small
+            try {
+                const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', divName, city);
+                if (warehouse.level < 5 && corpData.funds > 2e9) {
+                    await execCorpFunc(ns, 'upgradeWarehouse(ns.args[0], ns.args[1])', divName, city);
+                }
+            } catch { }
+            
+            // Hire employees up to office size (target: 9 for support, 30 for main)
+            try {
+                const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
+                const isMainCity = city === 'Sector-12';
+                const targetSize = industry?.makesProducts ? (isMainCity ? 30 : 9) : 9;
+                
+                // Upgrade office size if needed
+                if (office.size < targetSize && corpData.funds > 2e9) {
+                    const toAdd = Math.min(3, targetSize - office.size);  // Add 3 at a time
+                    await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', divName, city, toAdd);
+                }
+                
+                // Hire employees up to office size
+                if (office.numEmployees < office.size) {
+                    for (let i = office.numEmployees; i < office.size; i++) {
+                        await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', divName, city);
+                    }
+                    // Assign to production roles
+                    await assignEmployeesToProduction(ns, divName, city, industry?.makesProducts || false);
+                }
+            } catch { }
+        }
+        
+        // Buy AdVerts aggressively for product divisions
+        if (industry?.makesProducts) {
+            try {
+                const advertCost = await execCorpFunc(ns, 'getHireAdVertCost(ns.args[0])', divName);
+                if (corpData.funds > advertCost * 2) {
+                    await execCorpFunc(ns, 'hireAdVert(ns.args[0])', divName);
                 }
             } catch { }
         }
@@ -899,24 +1019,31 @@ async function buyResearch(ns, division) {
     const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
     const rp = divData.researchPoints;
 
+    // Research priority - Market-TA is critical for sales optimization
+    // AutoBrew/AutoPartyManager eliminate micromanagement
     const priorityResearch = [
-        { name: 'Hi-Tech R&D Laboratory', cost: 5000 },
-        { name: 'Market-TA.I', cost: 20000 },
-        { name: 'Market-TA.II', cost: 50000 },
-        { name: 'Overclock', cost: 15000 },
-        { name: 'Sti.mu', cost: 30000 },
-        { name: 'Automatic Drug Administration', cost: 10000 },
-        { name: 'Go-Juice', cost: 25000 },
-        { name: 'CPH4 Injections', cost: 25000 },
-        { name: 'Drones', cost: 5000 },
-        { name: 'Drones - Assembly', cost: 25000 },
-        { name: 'Drones - Transport', cost: 30000 },
-        { name: 'Self-Correcting Assemblers', cost: 25000 },
-        { name: 'uPgrade: Fulcrum', cost: 10000 },
+        { name: 'Hi-Tech R&D Laboratory', cost: 5000 },   // Unlocks everything, +10% research
+        { name: 'Market-TA.I', cost: 20000 },             // Auto-price at max markup
+        { name: 'Market-TA.II', cost: 50000 },            // Auto-match production to sales
+        { name: 'Drones', cost: 5000 },                   // Prereq for other drone research
+        { name: 'Drones - Assembly', cost: 25000 },       // +20% production!
+        { name: 'Drones - Transport', cost: 30000 },      // +50% warehouse storage
+        { name: 'AutoBrew', cost: 12000 },                // Auto max energy
+        { name: 'AutoPartyManager', cost: 15000 },        // Auto max morale
+        { name: 'Self-Correcting Assemblers', cost: 25000 }, // +10% production
+        { name: 'Automatic Drug Administration', cost: 10000 }, // Prereq for drugs
+        { name: 'Go-Juice', cost: 25000 },                // +10 max energy
+        { name: 'Sti.mu', cost: 30000 },                   // +10 max morale
+        { name: 'CPH4 Injections', cost: 25000 },         // +10% ALL employee stats
+        { name: 'Overclock', cost: 15000 },               // +25% efficiency & intelligence
+        { name: 'uPgrade: Fulcrum', cost: 10000 },        // +5% product production
+        { name: 'uPgrade: Capacity.I', cost: 20000 },     // +1 max products
+        { name: 'uPgrade: Capacity.II', cost: 30000 },    // +1 max products
     ];
 
+    // Buy research more aggressively (1.5x instead of 2x)
     for (const researchItem of priorityResearch) {
-        if (rp > researchItem.cost * 2) {
+        if (rp > researchItem.cost * 1.5) {
             try {
                 if (!(await execCorpFunc(ns, 'hasResearched(ns.args[0], ns.args[1])', division, researchItem.name))) {
                     await execCorpFunc(ns, 'research(ns.args[0], ns.args[1])', division, researchItem.name);
@@ -925,28 +1052,34 @@ async function buyResearch(ns, division) {
                 }
             } catch { }
         }
-    }
 }
 
 async function upgradeProductionCapability(ns) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
 
-    const upgrades = [
-        'Smart Storage',
-        'Smart Factories',
-        'FocusWires',
-        'Neural Accelerators',
-        'Speech Processor Implants',
-        'Nuoptimal Nootropic Injector Implants',
-        'Project Insight',
-        'ABC SalesBots'
+    // Priority upgrades with more aggressive purchasing
+    // Smart Factories (+3% production) and Smart Storage (+10% warehouse) are most impactful
+    const priorityUpgrades = [
+        { name: 'Smart Factories', fundsMult: 2 },    // Buy if funds > 2x cost
+        { name: 'Smart Storage', fundsMult: 2 },
+        { name: 'Wilson Analytics', fundsMult: 3 },   // Advertising effectiveness
+        { name: 'ABC SalesBots', fundsMult: 3 },       // +1% sales per level
+        { name: 'FocusWires', fundsMult: 4 },
+        { name: 'Neural Accelerators', fundsMult: 4 },
+        { name: 'Speech Processor Implants', fundsMult: 4 },
+        { name: 'Nuoptimal Nootropic Injector Implants', fundsMult: 4 },
+        { name: 'Project Insight', fundsMult: 5 },
     ];
 
-    for (const upgrade of upgrades) {
+    for (const upgrade of priorityUpgrades) {
         try {
-            const cost = await execCorpFunc(ns, 'getUpgradeLevelCost(ns.args[0])', upgrade);
-            if (corpData.funds > cost * 10) {
-                await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', upgrade);
+            const cost = await execCorpFunc(ns, 'getUpgradeLevelCost(ns.args[0])', upgrade.name);
+            if (corpData.funds > cost * upgrade.fundsMult) {
+                await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', upgrade.name);
+                // Buy multiple levels if very cheap
+                if (corpData.funds > cost * upgrade.fundsMult * 5) {
+                    await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', upgrade.name);
+                }
             }
         } catch { }
     }
