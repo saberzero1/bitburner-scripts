@@ -42,7 +42,7 @@ export async function main(ns) {
     const state = new CorpState(ns, options);
 
     if (!(await execCorpFunc(ns, 'hasCorporation()'))) {
-        await createCorporation(ns, state);
+        await initCorporation(ns, state);
     }
 
     log(ns, 'INFO: Corporation manager starting...', true, 'info');
@@ -85,7 +85,7 @@ class CorpState {
     }
 }
 
-async function createCorporation(ns, state) {
+async function initCorporation(ns, state) {
     const options = state.options;
 
     log(ns, `Creating corporation: ${options['corp-name']}`);
@@ -583,12 +583,12 @@ async function buyResearch(ns, division) {
         { name: 'uPgrade: Fulcrum', cost: 10000 },
     ];
 
-    for (const research of priorityResearch) {
-        if (rp > research.cost * 2) {
+    for (const researchItem of priorityResearch) {
+        if (rp > researchItem.cost * 2) {
             try {
-                if (!(await execCorpFunc(ns, 'hasResearched(ns.args[0], ns.args[1])', division, research.name))) {
-                    await execCorpFunc(ns, 'research(ns.args[0], ns.args[1])', division, research.name);
-                    log(ns, `Researched: ${research.name}`);
+                if (!(await execCorpFunc(ns, 'hasResearched(ns.args[0], ns.args[1])', division, researchItem.name))) {
+                    await execCorpFunc(ns, 'research(ns.args[0], ns.args[1])', division, researchItem.name);
+                    log(ns, `Researched: ${researchItem.name}`);
                     break;
                 }
             } catch { }
