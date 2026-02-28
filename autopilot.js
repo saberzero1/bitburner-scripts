@@ -74,6 +74,9 @@ export async function main(ns) {
         6.3,  // Normal. The 3 easier bladeburner BNs. Boosts combat stats by 8% -> 12% -> 14%
         7.3,  // Hard.   The remaining 2 hard bladeburner BNs. Boosts all Bladeburner mults by 8% -> 12% -> 14%, so no interaction with other BNs unless trying to win via Bladeburner.
 
+        // 5th Priority: Darknet
+        15.3, // Hard.   Unlocks darknet features. Flaky servers, password cracking, new hacking mechanics. Useful for varied gameplay.
+
         // Low Priority:
         8.3,  // Hard.   Just gives stock "Limit orders" which we don't use in our scripts,
         3.3,  // Hard.   Corporations. I have no corp scripts, maybe one day I will. The history here is: in 2021, corps were too exploity and broke the game (inf. money). Also the APIs were buggy and new, so I skipped it. Autopilot will win normally while ignoring corps.

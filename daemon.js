@@ -374,6 +374,11 @@ export async function main(ns) {
                 shouldRun: () => !options['disable-script'].includes('bladeburner.js') && reqRam(64)
                     && 7 in dictSourceFiles && bitNodeMults.BladeburnerRank != 0 // Don't run bladeburner in BN's where it can't rank up (currently just BN8)
             },
+            {
+                name: "darknet.js",
+                shouldRun: () => reqRam(64) && ns.fileExists('DarkscapeNavigator.exe', 'home'),
+                shouldTail: false
+            },
         ];
         // Add any additional scripts to be run provided by --run-script arguments
         options['run-script'].forEach(s => asynchronousHelpers.push({ name: s }));
@@ -390,7 +395,12 @@ export async function main(ns) {
         periodicScripts = [
             // Buy tor as soon as we can if we haven't already, and all the port crackers
             { interval: 25000, name: "/Tasks/tor-manager.js", shouldRun: () => 4 in dictSourceFiles && !allHostNames.includes("darkweb") },
-            { interval: 26000, name: "/Tasks/program-manager.js", shouldRun: () => 4 in dictSourceFiles && ownedCracks.length != 5 },
+            {
+                interval: 26000,
+                name: "/Tasks/program-manager.js",
+                shouldRun: () => 4 in dictSourceFiles && (ownedCracks.length != 5 || shouldAcquireDarknet()),
+                args: () => shouldAcquireDarknet() ? ['--include-darknet'] : []
+            },
             { interval: 27000, name: "/Tasks/contractor.js", minRamReq: 14.2 }, // Periodically look for coding contracts that need solving
             // Buy every hacknet upgrade with up to 4h payoff if it is less than 10% of our current money or 8h if it is less than 1% of our current money.
             { interval: 28000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "4h", "--max-spend", getPlayerMoney(ns) * 0.1] },
@@ -468,6 +478,12 @@ export async function main(ns) {
         return 0 != (bitNodeMults.ScriptHackMoneyGain * bitNodeMults.ScriptHackMoney) || // Check for disabled hack-income
             getPlayerMoney(ns) > 1e12 || // If we have sufficient money, we may consider improving hack infrastructure (to earn hack exp more quickly)
             bitNodeN === 8 // The exception is in BN8, we still want lots of hacking to take place to manipulate stocks, which requires this infrastructure (TODO: Strike a balance between spending on this stuff and leaving money for stockmaster.js)
+    }
+
+    /** Check if we should acquire darknet tools (in BN15 or with SF15, and don't have navigator yet) */
+    function shouldAcquireDarknet() {
+        if (ns.fileExists('DarkscapeNavigator.exe', 'home')) return false;
+        return bitNodeN === 15 || 15 in dictSourceFiles;
     }
 
     /** Periodic scripts helper function: Get how much we're willing to spend on new servers (host-manager.js budget) */
