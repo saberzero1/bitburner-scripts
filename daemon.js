@@ -374,6 +374,11 @@ export async function main(ns) {
                 shouldRun: () => !options['disable-script'].includes('bladeburner.js') && reqRam(64)
                     && 7 in dictSourceFiles && bitNodeMults.BladeburnerRank != 0 // Don't run bladeburner in BN's where it can't rank up (currently just BN8)
             },
+            {
+                name: "corporation.js",
+                shouldRun: () => reqRam(64) && (3 in dictSourceFiles || bitNodeN === 3),
+                shouldTail: false
+            },
         ];
         // Add any additional scripts to be run provided by --run-script arguments
         options['run-script'].forEach(s => asynchronousHelpers.push({ name: s }));

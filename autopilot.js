@@ -76,7 +76,7 @@ export async function main(ns) {
 
         // Low Priority:
         8.3,  // Hard.   Just gives stock "Limit orders" which we don't use in our scripts,
-        3.3,  // Hard.   Corporations. I have no corp scripts, maybe one day I will. The history here is: in 2021, corps were too exploity and broke the game (inf. money). Also the APIs were buggy and new, so I skipped it. Autopilot will win normally while ignoring corps.
+        3.3,  // Hard.   Corporations. Now automated with corporation.js. Provides massive income potential and corp API access.
         12.9999 // Easy. Keep playing forever. Only stanek scales very well here, there is much work to be done to be able to climb these faster.
     ];
     const augTRP = "The Red Pill";
