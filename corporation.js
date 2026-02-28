@@ -1,13 +1,27 @@
 /**
- * Corporation management script using temp script pattern for low RAM usage
- * Manages corporation from creation through all investment rounds
+ * Corporation Management Script - Rewritten based on BitBurner source code analysis
+ * 
+ * Key insights from source code:
+ * 1. Production requires warehouse space for OUTPUT (not just inputs)
+ * 2. Boost materials provide exponential multipliers
+ * 3. Employee productivity = (Ops^0.4 + Eng^0.3) × MgmtFactor × 0.05
+ * 4. Smart supply trails by 1 cycle
+ * 5. Valuation = 10B + funds/3 + profit/s × 315000 (for private corps)
+ * 
+ * Architecture:
+ * - Warehouse space is budgeted: boost materials + input buffer + output headroom
+ * - Employees optimized for production roles (not stuck in R&D)
+ * - Selling is ALWAYS set up before buying inputs
+ * - Investment accepted when profitable, not when hitting arbitrary thresholds
  */
 
 import { log, getConfiguration, disableLogs, formatMoney, getErrorInfo, getNsDataThroughFile } from './helpers.js'
 import {
-    INDUSTRIES, CITIES, calculateOptimalBoostMaterials, calculateOptimalPrice,
-    calculateSmartSupplyQuantities, calculateOptimalPartyCost,
-    getProductName, shouldAcceptInvestment
+    INDUSTRIES, CITIES, MATERIAL_SIZES,
+    calculateWarehouseSpaceBudget, calculateOptimalBoostMaterials, calculateProductionMultiplier,
+    calculateOptimalEmployeeDistribution, calculateSmartSupplyQuantities, checkWarehouseHealth,
+    calculateOptimalPrice, calculateOptimalPartyCost, getProductName,
+    shouldAcceptInvestment, diagnoseZeroProduction
 } from './corp-helpers.js'
 
 const argsSchema = [
@@ -20,6 +34,8 @@ const argsSchema = [
     ['smart-supply', true],
     ['market-ta', true],
     ['verbose', false],
+    ['debug', false],          // Extra diagnostic output
+    ['warehouse-target', 0.7], // Target warehouse utilization (0.7 = 70%)
 ];
 
 export function autocomplete(data, args) {
@@ -27,9 +43,9 @@ export function autocomplete(data, args) {
     return [];
 }
 
-// Ram dodging helper to execute a corporation function
+// RAM-dodging helper to execute corporation functions
 // Many corp functions return void/undefined, which causes getNsDataThroughFile to fail
-// (see helpers.js Issue #481). Wrap with ?? 'OK' to always return a serializable value.
+// Wrap with ?? 'OK' to always return a serializable value
 const execCorpFunc = async (ns, strFunction, ...args) =>
     await getNsDataThroughFile(ns, `ns.corporation.${strFunction} ?? 'OK'`, null, args);
 
@@ -44,29 +60,37 @@ export async function main(ns) {
     const state = new CorpState(ns, options);
 
     if (!(await execCorpFunc(ns, 'hasCorporation()'))) {
-        await initCorporation(ns, state);
+        if (!await initCorporation(ns, state)) {
+            log(ns, 'ERROR: Failed to create corporation', true, 'error');
+            return;
+        }
     }
 
-    log(ns, 'INFO: Corporation manager starting...', true, 'info');
+    log(ns, 'Corporation manager starting...', true, 'info');
 
     while (true) {
         try {
             await runCorpCycle(ns, state);
         } catch (err) {
-            log(ns, `WARNING: Corp cycle error: ${getErrorInfo(err)}`, false, 'warning');
+            log(ns, `Corp cycle error: ${getErrorInfo(err)}`, false, 'warning');
         }
         await ns.sleep(1000);
     }
 }
+
+// ============================================================================
+// STATE MANAGEMENT
+// ============================================================================
 
 class CorpState {
     constructor(ns, options) {
         this.options = options;
         this.round = options.round || 0;
         this.productVersion = 1;
-        this.lastTeaParty = 0;
         this.lastStatusLog = 0;
+        this.lastDiagnostic = 0;
         this.initialized = false;
+        this.warehouseTarget = options['warehouse-target'] || 0.7;
     }
 
     async init(ns) {
@@ -79,6 +103,7 @@ class CorpState {
         if (!(await execCorpFunc(ns, 'hasCorporation()'))) return 0;
 
         const corpData = await execCorpFunc(ns, 'getCorporation()');
+        // Detect round based on shares sold
         const numInvestments = corpData.numShares > 1e9 ? 0 :
             corpData.numShares > 900e6 ? 1 :
                 corpData.numShares > 800e6 ? 2 :
@@ -88,15 +113,18 @@ class CorpState {
     }
 }
 
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
 async function initCorporation(ns, state) {
     const options = state.options;
-
     log(ns, `Creating corporation: ${options['corp-name']}`);
 
     if (options['self-fund']) {
         const cost = 150e9;
         if (ns.getServerMoneyAvailable('home') < cost) {
-            log(ns, `ERROR: Need ${formatMoney(cost)} to self-fund corporation`, true, 'error');
+            log(ns, `Need ${formatMoney(cost)} to self-fund corporation`, true, 'error');
             return false;
         }
         await execCorpFunc(ns, 'createCorporation(ns.args[0], ns.args[1])', options['corp-name'], true);
@@ -108,42 +136,37 @@ async function initCorporation(ns, state) {
     return true;
 }
 
+// ============================================================================
+// MAIN CYCLE
+// ============================================================================
+
 async function runCorpCycle(ns, state) {
     await state.init(ns);
+    const corpData = await execCorpFunc(ns, 'getCorporation()');
 
-    // Periodic status logging with detailed diagnostics
+    // Periodic status logging
     const now = Date.now();
     if (now - state.lastStatusLog > 30000) {
         state.lastStatusLog = now;
-        const corpData = await execCorpFunc(ns, 'getCorporation()');
-        log(ns, `Status: Round ${state.round}, Funds: ${formatMoney(corpData.funds)}, Revenue: ${formatMoney(corpData.revenue)}/s`);
-        for (const divName of corpData.divisions) {
-            const div = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
-            const citiesWithWH = [];
-            for (const city of div.cities) {
-                if (await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city)) {
-                    citiesWithWH.push(city);
-                }
-            }
-            log(ns, `  ${divName}: ${div.cities.length}/6 cities, ${citiesWithWH.length} warehouses, Revenue: ${formatMoney(div.lastCycleRevenue)}/cycle`);
-            // Show employee jobs for main city
-            try {
-                const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, 'Sector-12');
-                const jobs = office.employeeJobs;
-                log(ns, `    Jobs: Ops=${jobs.Operations||0} Eng=${jobs.Engineer||0} Bus=${jobs.Business||0} Mgmt=${jobs.Management||0} R&D=${jobs['Research & Development']||0}`);
-            } catch { }
-        }
-    }
-    await maintainEmployees(ns, state);
-
-    if (state.options['smart-supply']) {
-        await runSmartSupply(ns, state);
+        await logCorpStatus(ns, corpData, state);
     }
 
+    // CRITICAL: These must run in the correct order
+    // 1. Maintain employees (energy, morale)
+    await maintainEmployees(ns);
+    
+    // 2. Ensure selling is set up BEFORE buying anything
+    await ensureSelling(ns);
+    
+    // 3. Manage warehouse space (boost materials + inputs)
+    await manageWarehouses(ns, state);
+    
+    // 4. Update pricing if Market-TA enabled
     if (state.options['market-ta']) {
-        await updatePricing(ns, state);
+        await updatePricing(ns);
     }
 
+    // 5. Run round-specific logic
     switch (state.round) {
         case 1:
             await runRound1(ns, state);
@@ -156,111 +179,308 @@ async function runCorpCycle(ns, state) {
             break;
     }
 
+    // 6. Check for investment opportunities
     if (state.options['auto-invest'] && state.round < state.options['target-round']) {
         await checkInvestment(ns, state);
     }
 }
 
-async function maintainEmployees(ns, corpState) {
+// ============================================================================
+// STATUS LOGGING & DIAGNOSTICS
+// ============================================================================
+
+async function logCorpStatus(ns, corpData, state) {
+    log(ns, `Status: Round ${state.round}, Funds: ${formatMoney(corpData.funds)}, Revenue: ${formatMoney(corpData.revenue)}/s`);
+    
+    for (const divName of corpData.divisions) {
+        const div = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
+        const industry = INDUSTRIES[div.type];
+        
+        // Count cities with warehouses
+        let warehouseCities = [];
+        for (const city of div.cities) {
+            if (await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city)) {
+                warehouseCities.push(city);
+            }
+        }
+        
+        log(ns, `  ${divName}: ${div.cities.length}/6 cities, ${warehouseCities.length} warehouses, Revenue: ${formatMoney(div.lastCycleRevenue)}/cycle`);
+        
+        // Show main office stats
+        if (div.cities.includes('Sector-12')) {
+            const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, 'Sector-12');
+            const jobs = office.employeeJobs;
+            log(ns, `    Employees: Ops=${jobs.Operations||0} Eng=${jobs.Engineer||0} Bus=${jobs.Business||0} Mgmt=${jobs.Management||0} R&D=${jobs['Research & Development']||0}`);
+            log(ns, `    Energy=${office.avgEnergy.toFixed(0)}, Morale=${office.avgMorale.toFixed(0)}`);
+        }
+        
+        // Show warehouse and production stats
+        if (warehouseCities.length > 0 && industry) {
+            const city = warehouseCities[0];
+            const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', divName, city);
+            const health = checkWarehouseHealth(warehouse);
+            
+            log(ns, `    Warehouse: ${warehouse.sizeUsed.toFixed(0)}/${warehouse.size} (${(health.utilization * 100).toFixed(1)}%)${health.isCritical ? ' CRITICAL!' : ''}`);
+            
+            // Show output materials for non-product industries
+            if (industry.outputMaterials?.length > 0) {
+                for (const mat of industry.outputMaterials) {
+                    const matData = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, mat);
+                    log(ns, `    ${mat}: ${matData.stored.toFixed(0)} (prod=${matData.productionAmount.toFixed(2)}/s, sell=${matData.actualSellAmount.toFixed(2)}/s)`);
+                }
+            }
+            
+            // Run diagnostics if production is zero
+            if (state.options.debug && industry.outputMaterials?.length > 0) {
+                const firstOutput = industry.outputMaterials[0];
+                const outputMat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, firstOutput);
+                
+                if (outputMat.productionAmount === 0) {
+                    // Gather all materials for diagnosis
+                    const materials = {};
+                    for (const matName of [...Object.keys(industry.inputMaterials || {}), ...industry.outputMaterials, 'Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
+                        try {
+                            materials[matName] = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, matName);
+                        } catch {}
+                    }
+                    
+                    const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
+                    const diagnosis = diagnoseZeroProduction(div, warehouse, office, materials);
+                    
+                    if (!diagnosis.isHealthy) {
+                        log(ns, `    PRODUCTION ISSUES FOUND:`, false, 'warning');
+                        for (const issue of diagnosis.issues) {
+                            log(ns, `      [${issue.severity.toUpperCase()}] ${issue.issue}: ${issue.detail}`, false, issue.severity === 'critical' ? 'error' : 'warning');
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// EMPLOYEE MANAGEMENT
+// ============================================================================
+
+async function maintainEmployees(ns) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
 
-    for (const division of corpData.divisions) {
-        // Get division data to check which cities it has expanded to
-        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
+    for (const divName of corpData.divisions) {
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
         
-        for (const city of CITIES) {
-            // Skip cities where this division doesn't have an office
-            if (!divData.cities.includes(city)) continue;
-            
+        for (const city of divData.cities) {
             try {
-                const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', division, city);
-                if (!office) continue;
+                const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
+                if (!office || office.numEmployees === 0) continue;
 
-                if (office.avgEnergy < 99) {
-                    await execCorpFunc(ns, 'buyTea(ns.args[0], ns.args[1])', division, city);
+                // Buy tea if energy is low
+                if (office.avgEnergy < 98) {
+                    await execCorpFunc(ns, 'buyTea(ns.args[0], ns.args[1])', divName, city);
                 }
 
-                if (office.avgMorale < 99) {
+                // Throw party if morale is low
+                if (office.avgMorale < 98) {
                     const partyCost = calculateOptimalPartyCost(office.avgMorale, 100);
-                    await execCorpFunc(ns, 'throwParty(ns.args[0], ns.args[1], ns.args[2])', division, city, partyCost);
+                    await execCorpFunc(ns, 'throwParty(ns.args[0], ns.args[1], ns.args[2])', divName, city, partyCost);
                 }
             } catch { }
         }
     }
 }
 
-async function runSmartSupply(ns, state) {
+/**
+ * Assign employees to optimal production distribution
+ */
+async function assignEmployeesToProduction(ns, divName, city, forProducts = false) {
+    const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
+    const distribution = calculateOptimalEmployeeDistribution(office.numEmployees, forProducts);
+    
+    // Clear all assignments first
+    for (const job of ['Operations', 'Engineer', 'Business', 'Management', 'Research & Development']) {
+        await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, job, 0);
+    }
+    
+    // Assign to optimal distribution
+    for (const [job, count] of Object.entries(distribution)) {
+        if (count > 0) {
+            await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, job, count);
+        }
+    }
+    
+    return distribution;
+}
+
+// ============================================================================
+// SELLING MANAGEMENT
+// ============================================================================
+
+async function ensureSelling(ns) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
-
-    if (corpData.nextState !== 'SALE') return;
-
-    for (const division of corpData.divisions) {
-        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
+    
+    for (const divName of corpData.divisions) {
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
         const industry = INDUSTRIES[divData.type];
-        if (!industry || !industry.inputMaterials) continue;
-
-        for (const city of CITIES) {
-            // Skip cities where this division hasn't expanded
-            if (!divData.cities.includes(city)) continue;
-            
+        if (!industry) continue;
+        
+        for (const city of divData.cities) {
             try {
-                if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', division, city))) continue;
-
-                const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', division, city);
-
-                // Fetch all input materials for this city
-                const materials = {};
-                for (const material of Object.keys(industry.inputMaterials)) {
-                    materials[material] = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', division, city, material);
+                if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city))) continue;
+                
+                // Set up selling for all OUTPUT materials
+                for (const material of industry.outputMaterials || []) {
+                    const mat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, material);
+                    // Set up selling if not already configured
+                    if (!mat.desiredSellPrice || mat.desiredSellPrice === '0' || mat.desiredSellPrice === 0) {
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, material, 'MAX', 'MP');
+                    }
                 }
+                
+                // Ensure INPUT materials are NOT being sold (they should only be consumed)
+                for (const material of Object.keys(industry.inputMaterials || {})) {
+                    await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, material, '0', '0');
+                }
+            } catch { }
+        }
+    }
+}
 
-                const supplies = calculateSmartSupplyQuantities(divData, warehouse, materials);
+// ============================================================================
+// WAREHOUSE MANAGEMENT - THE CRITICAL PIECE
+// ============================================================================
 
-                for (const [material, amount] of Object.entries(supplies)) {
-                    if (amount > 0) {
-                        await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, material, amount);
-                    } else {
-                        await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, material, 0);
+async function manageWarehouses(ns, state) {
+    const corpData = await execCorpFunc(ns, 'getCorporation()');
+    
+    for (const divName of corpData.divisions) {
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
+        const industry = INDUSTRIES[divData.type];
+        if (!industry) continue;
+        
+        for (const city of divData.cities) {
+            try {
+                if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city))) continue;
+                
+                const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', divName, city);
+                const health = checkWarehouseHealth(warehouse);
+                
+                // Get current materials
+                const materials = {};
+                for (const matName of ['Real Estate', 'Hardware', 'Robots', 'AI Cores', ...Object.keys(industry.inputMaterials || {})]) {
+                    try {
+                        materials[matName] = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, matName);
+                    } catch {}
+                }
+                
+                // If warehouse is critically full, STOP all buying
+                if (health.isCritical) {
+                    // Stop buying boost materials
+                    for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
+                        await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
+                    }
+                    // Stop buying input materials
+                    for (const mat of Object.keys(industry.inputMaterials || {})) {
+                        await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
+                    }
+                    continue;
+                }
+                
+                // Calculate space budget
+                const budget = calculateWarehouseSpaceBudget(divData.type, warehouse.size);
+                if (!budget) continue;
+                
+                // Calculate current boost material space
+                let currentBoostSpace = 0;
+                for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
+                    const stored = materials[mat]?.stored || 0;
+                    currentBoostSpace += stored * MATERIAL_SIZES[mat];
+                }
+                
+                // Only buy boost materials if we have room and are healthy
+                if (health.isHealthy && currentBoostSpace < budget.boostSpace * 0.9) {
+                    const remainingBoostBudget = budget.boostSpace - currentBoostSpace;
+                    if (remainingBoostBudget > 100) {
+                        const optimal = calculateOptimalBoostMaterials(divData.type, remainingBoostBudget * 0.5);
+                        if (optimal) {
+                            for (const [mat, targetQty] of Object.entries(optimal)) {
+                                const current = materials[mat]?.stored || 0;
+                                const toBuy = targetQty - current;
+                                if (toBuy > 0) {
+                                    // Buy over 10 seconds
+                                    await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, toBuy / 10);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Smart supply for input materials
+                if (state.options['smart-supply'] && industry.inputMaterials) {
+                    const supplies = calculateSmartSupplyQuantities(divData, warehouse, materials, state.warehouseTarget);
+                    
+                    for (const [mat, amount] of Object.entries(supplies)) {
+                        if (amount > 0 && health.isSafe) {
+                            await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, amount);
+                        } else {
+                            await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
+                        }
                     }
                 }
             } catch { }
         }
     }
+    
+    // After buying, wait a bit then stop boost purchases (one-time buy pattern)
+    await ns.sleep(5000);
+    
+    for (const divName of corpData.divisions) {
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
+        for (const city of divData.cities) {
+            try {
+                if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city))) continue;
+                // Stop boost material purchases
+                for (const mat of ['Real Estate', 'Hardware', 'Robots', 'AI Cores']) {
+                    await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
+                }
+            } catch { }
+        }
+    }
 }
 
-async function updatePricing(ns, state) {
+// ============================================================================
+// PRICING (Market-TA)
+// ============================================================================
+
+async function updatePricing(ns) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
 
-    for (const division of corpData.divisions) {
-        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
+    for (const divName of corpData.divisions) {
+        const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', divName);
         const industry = INDUSTRIES[divData.type];
         if (!industry) continue;
 
-        for (const city of CITIES) {
-            // Skip cities where this division hasn't expanded
-            if (!divData.cities.includes(city)) continue;
-            
+        for (const city of divData.cities) {
             try {
-                if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', division, city))) continue;
+                if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', divName, city))) continue;
 
-                const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', division, city);
+                const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
 
-                if (industry.outputMaterials) {
-                    for (const material of industry.outputMaterials) {
-                        const mat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', division, city, material);
-                        if (mat.stored > 0) {
-                            const price = calculateOptimalPrice(mat, divData, office, false);
-                            await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', division, city, material, 'MAX', price.toString());
-                        }
+                // Price output materials
+                for (const material of industry.outputMaterials || []) {
+                    const mat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, material);
+                    if (mat.stored > 0) {
+                        const price = calculateOptimalPrice(mat, divData, office, false);
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, material, 'MAX', price.toString());
                     }
                 }
 
+                // Price products
                 if (industry.makesProducts) {
                     for (const productName of divData.products) {
-                        const product = await execCorpFunc(ns, 'getProduct(ns.args[0], ns.args[1], ns.args[2])', division, city, productName);
+                        const product = await execCorpFunc(ns, 'getProduct(ns.args[0], ns.args[1], ns.args[2])', divName, city, productName);
                         if (product.developmentProgress >= 100 && product.stored > 0) {
                             const price = calculateOptimalPrice(product, divData, office, true);
-                            await execCorpFunc(ns, 'sellProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', division, city, productName, 'MAX', price.toString(), false);
+                            await execCorpFunc(ns, 'sellProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', divName, city, productName, 'MAX', price.toString(), false);
                         }
                     }
                 }
@@ -268,14 +488,17 @@ async function updatePricing(ns, state) {
         }
     }
 }
+
+// ============================================================================
+// ROUND 1: AGRICULTURE SETUP
+// ============================================================================
 
 async function runRound1(ns, state) {
     let corpData = await execCorpFunc(ns, 'getCorporation()');
     const verbose = state.options.verbose;
 
-    const hasAgriculture = corpData.divisions.includes('Agriculture');
-
-    if (!hasAgriculture) {
+    // Create Agriculture division if needed
+    if (!corpData.divisions.includes('Agriculture')) {
         log(ns, 'Round 1: Creating Agriculture division');
         await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Agriculture', 'Agriculture');
         await ns.sleep(500);
@@ -283,110 +506,70 @@ async function runRound1(ns, state) {
     }
 
     const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
-
-    // Costs (approximate): expandCity ~4b, warehouse ~5b
-    const EXPAND_COST = 4e9;
-    const WAREHOUSE_COST = 5e9;
-    const MIN_FUNDS = 1e9;
-
-    // Check if we need to expand to all cities and set up warehouses
+    
+    // Expand to all cities and set up warehouses
     let allCitiesReady = true;
     for (const city of CITIES) {
-        // Refresh corp data to get current funds
         corpData = await execCorpFunc(ns, 'getCorporation()');
 
+        // Expand to city
         if (!agDiv.cities.includes(city)) {
-            if (city !== 'Sector-12') {
-                if (corpData.funds < EXPAND_COST) {
-                    if (verbose) log(ns, `Round 1: Waiting for funds to expand to ${city}`);
-                    allCitiesReady = false;
-                    continue;
-                }
-                try {
-                    log(ns, `Round 1: Expanding to ${city}`);
-                    await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Agriculture', city);
-                    await ns.sleep(200);
-                } catch { allCitiesReady = false; continue; }
+            if (city !== 'Sector-12' && corpData.funds > 4e9) {
+                log(ns, `Round 1: Expanding to ${city}`);
+                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Agriculture', city);
+                await ns.sleep(200);
             }
             allCitiesReady = false;
             continue;
         }
 
+        // Purchase warehouse
         const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
         if (!hasWarehouse) {
-            if (corpData.funds < WAREHOUSE_COST) {
-                if (verbose) log(ns, `Round 1: Waiting for funds for warehouse in ${city}`);
-                allCitiesReady = false;
-                continue;
-            }
-            try {
+            if (corpData.funds > 5e9) {
                 log(ns, `Round 1: Purchasing warehouse in ${city}`);
                 await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
                 await ns.sleep(200);
-            } catch { allCitiesReady = false; continue; }
+            }
             allCitiesReady = false;
             continue;
         }
 
+        // Hire employees and assign to production roles
         const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', city);
         if (office.numEmployees < 4) {
-            if (corpData.funds < MIN_FUNDS) {
-                allCitiesReady = false;
-                continue;
-            }
-            try {
+            if (corpData.funds > 1e9) {
                 if (office.size < 4) {
                     await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 4 - office.size);
                 }
                 for (let i = office.numEmployees; i < 4; i++) {
                     await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Agriculture', city);
                 }
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Research & Development', 4);
-            } catch { allCitiesReady = false; }
+                // Assign to PRODUCTION roles immediately (not R&D!)
+                await assignEmployeesToProduction(ns, 'Agriculture', city, false);
+                log(ns, `Round 1: Hired employees in ${city} and assigned to production`);
+            }
+            allCitiesReady = false;
+            continue;
+        }
+        
+        // Check if employees are in production roles
+        const opsCount = office.employeeJobs['Operations'] || 0;
+        if (opsCount === 0 && office.numEmployees >= 4) {
+            // Switch from R&D to production
+            await assignEmployeesToProduction(ns, 'Agriculture', city, false);
+            log(ns, `Round 1: Reassigned ${city} employees to production`);
             allCitiesReady = false;
         }
     }
 
     if (!allCitiesReady) {
         if (verbose) log(ns, 'Round 1: Setting up cities...');
-        return;
     }
 
-    // All cities have warehouses and employees - now proceed with rest of Round 1
-    const sectorOffice = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', 'Sector-12');
-
-    // Wait for research points OR low morale (need both conditions met to proceed)
-    if (agDiv.researchPoints < 55 || sectorOffice.avgMorale < 95) {
-        if (verbose) log(ns, `Round 1: Waiting for conditions (RP: ${agDiv.researchPoints.toFixed(0)}/55, Morale: ${sectorOffice.avgMorale.toFixed(0)}/95)`);
-        return;
-    }
-
-    // Check if employees are still in R&D mode (any > 0 means we need to switch)
-    const rdEmployees = sectorOffice.employeeJobs['Research & Development'] || 0;
-    const opsEmployees = sectorOffice.employeeJobs['Operations'] || 0;
+    // Upgrades
+    corpData = await execCorpFunc(ns, 'getCorporation()');
     
-    // Switch from R&D to production if not already done
-    if (rdEmployees > 0 || opsEmployees === 0) {
-        log(ns, `Round 1: Switching employees from R&D (${rdEmployees}) to production jobs`);
-        for (const city of CITIES) {
-            if (!agDiv.cities.includes(city)) continue;
-            try {
-                // First clear R&D
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Research & Development', 0);
-                // Then assign to production roles
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Operations', 1);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Engineer', 1);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Business', 1);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Agriculture', city, 'Management', 1);
-            } catch (err) {
-                log(ns, `WARNING: Failed to assign jobs in ${city}: ${err}`, false, 'warning');
-            }
-        }
-        log(ns, 'Round 1: Employees switched to production roles');
-    }
-
-    await buyBoostMaterials(ns, 'Agriculture');
-
     const smartStorageLevel = await execCorpFunc(ns, 'getUpgradeLevel(ns.args[0])', 'Smart Storage');
     if (smartStorageLevel < 10 && corpData.funds > 2e9) {
         await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', 'Smart Storage');
@@ -397,55 +580,39 @@ async function runRound1(ns, state) {
         await execCorpFunc(ns, 'hireAdVert(ns.args[0])', 'Agriculture');
     }
 
-    for (const city of CITIES) {
-        if (!agDiv.cities.includes(city)) continue;
-        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (!hasWarehouse) continue;
+    // Upgrade warehouses
+    for (const city of agDiv.cities) {
+        if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city))) continue;
         const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
         if (warehouse.level < 3 && corpData.funds > 1e9) {
             await execCorpFunc(ns, 'upgradeWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
         }
     }
-
-    for (const city of CITIES) {
-        if (!agDiv.cities.includes(city)) continue;
-        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (!hasWarehouse) continue;
-        const mat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 'Plants');
-        if (mat.stored > 0 && !mat.desiredSellPrice) {
-            await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Agriculture', city, 'Plants', 'MAX', 'MP');
-            await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Agriculture', city, 'Food', 'MAX', 'MP');
-        }
-    }
 }
 
+// ============================================================================
+// ROUND 2: CHEMICAL DIVISION
+// ============================================================================
+
 async function runRound2(ns, state) {
-    const corpData = await execCorpFunc(ns, 'getCorporation()');
+    let corpData = await execCorpFunc(ns, 'getCorporation()');
     const verbose = state.options.verbose;
 
-    // Check if Agriculture exists first - if not, we need to run Round 1 logic
-    const hasAgriculture = corpData.divisions.includes('Agriculture');
-    if (!hasAgriculture) {
+    // Verify Agriculture is set up
+    if (!corpData.divisions.includes('Agriculture')) {
         await runRound1(ns, state);
         return;
     }
 
-    // Verify Agriculture is fully set up (all cities have warehouses)
+    // Verify Agriculture has production employees
     const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
-    for (const city of CITIES) {
-        if (!agDiv.cities.includes(city)) {
-            if (verbose) log(ns, `Round 2: Agriculture not expanded to ${city}, running Round 1`);
-            await runRound1(ns, state);
-            return;
-        }
-        const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (!hasWarehouse) {
-            if (verbose) log(ns, `Round 2: Agriculture missing warehouse in ${city}, running Round 1`);
-            await runRound1(ns, state);
-            return;
-        }
+    const agOffice = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', 'Sector-12');
+    if ((agOffice.employeeJobs['Operations'] || 0) === 0) {
+        await runRound1(ns, state);
+        return;
     }
 
+    // Purchase Export unlock
     if (!(await execCorpFunc(ns, 'hasUnlock(ns.args[0])', 'Export'))) {
         if (corpData.funds > 20e9) {
             await execCorpFunc(ns, 'purchaseUnlock(ns.args[0])', 'Export');
@@ -454,120 +621,60 @@ async function runRound2(ns, state) {
         return;
     }
 
-    const hasChemical = corpData.divisions.includes('Chemical');
-
-    if (!hasChemical) {
-        if (corpData.funds > 1e9) {
+    // Create Chemical division
+    if (!corpData.divisions.includes('Chemical')) {
+        if (corpData.funds > 70e9) {
             log(ns, 'Round 2: Creating Chemical division');
             await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Chemical', 'Chemical');
-            await ns.sleep(500); // Wait for division to initialize
+            await ns.sleep(500);
         }
         return;
     }
 
-    // Chemical division exists - ensure it's fully expanded with warehouses
     const chemDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Chemical');
-    let chemicalFullySetUp = true;
     
-    // Costs (approximate): expandCity ~4b, warehouse ~5b
-    const EXPAND_COST = 4e9;
-    const WAREHOUSE_COST = 5e9;
-
+    // Expand Chemical to all cities
     for (const city of CITIES) {
-        // Refresh corp data to get current funds
         corpData = await execCorpFunc(ns, 'getCorporation()');
-        
+
         if (!chemDiv.cities.includes(city)) {
-            // Expand to this city
-            if (city !== 'Sector-12') {
-                if (corpData.funds < EXPAND_COST) {
-                    if (verbose) log(ns, `Round 2: Waiting for funds to expand Chemical to ${city}`);
-                    chemicalFullySetUp = false;
-                    continue;
-                }
-                try {
-                    log(ns, `Round 2: Expanding Chemical to ${city}`);
-                    await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Chemical', city);
-                    await ns.sleep(200);
-                } catch { chemicalFullySetUp = false; continue; }
+            if (city !== 'Sector-12' && corpData.funds > 4e9) {
+                log(ns, `Round 2: Expanding Chemical to ${city}`);
+                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Chemical', city);
+                await ns.sleep(200);
             }
-            chemicalFullySetUp = false;
             continue;
         }
-        
+
         const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
         if (!hasWarehouse) {
-            if (corpData.funds < WAREHOUSE_COST) {
-                if (verbose) log(ns, `Round 2: Waiting for funds for warehouse in ${city}`);
-                chemicalFullySetUp = false;
-                continue;
-            }
-            try {
+            if (corpData.funds > 5e9) {
                 log(ns, `Round 2: Purchasing warehouse for Chemical in ${city}`);
                 await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
                 await ns.sleep(200);
-            } catch { chemicalFullySetUp = false; continue; }
-            chemicalFullySetUp = false;
+            }
             continue;
         }
 
-        // Check employees - need funds to hire
         const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Chemical', city);
         if (office.numEmployees < 3) {
-            if (corpData.funds < 1e6) {  // Hiring is cheap but needs SOME funds
-                if (verbose) log(ns, `Round 2: Waiting for funds to hire Chemical employees in ${city}`);
-                chemicalFullySetUp = false;
-                continue;
-            }
-            try {
+            if (corpData.funds > 1e6) {
                 for (let i = office.numEmployees; i < 3; i++) {
                     await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Chemical', city);
                 }
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Chemical', city, 'Research & Development', 3);
-                log(ns, `Round 2: Hired ${3 - office.numEmployees} employees for Chemical in ${city}`);
-            } catch (err) {
-                log(ns, `WARNING: Failed to hire Chemical employees in ${city}: ${err}`, false, 'warning');
-                chemicalFullySetUp = false;
-                continue;
-            }
-            chemicalFullySetUp = false;
-        }
-    }
-
-    if (!chemicalFullySetUp) {
-        if (verbose) log(ns, 'Round 2: Setting up Chemical division...');
-        return;
-    }
-
-    // Both divisions are fully set up - now we can safely set up export routes
-    if (chemDiv.researchPoints < 390) {
-        if (verbose) log(ns, `Round 2: Waiting for Chemical RP (${chemDiv.researchPoints.toFixed(0)}/390)`);
-    }
-
-    if (agDiv.researchPoints < 700) {
-        if (verbose) log(ns, `Round 2: Waiting for Agriculture RP (${agDiv.researchPoints.toFixed(0)}/700)`);
-    }
-
-    await setupExportRoutes(ns, agDiv, chemDiv);
-
-    for (const city of CITIES) {
-        if (!agDiv.cities.includes(city)) continue;
-        
-        const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (office.size < 8 && corpData.funds > 4e9) {
-            const toAdd = 8 - office.size;
-            await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, toAdd);
-            for (let i = 0; i < toAdd; i++) {
-                await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Agriculture', city);
+                await assignEmployeesToProduction(ns, 'Chemical', city, false);
+                log(ns, `Round 2: Hired employees for Chemical in ${city}`);
             }
         }
     }
 
-    const advertLevel = await execCorpFunc(ns, 'getHireAdVertCount(ns.args[0])', 'Agriculture');
-    if (advertLevel < 8 && corpData.funds > 1e9) {
-        await execCorpFunc(ns, 'hireAdVert(ns.args[0])', 'Agriculture');
-    }
+    // Set up export routes: Agriculture -> Chemical (Plants)
+    await setupExportRoutes(ns, 'Agriculture', 'Chemical', 'Plants');
+    
+    // Set up export routes: Chemical -> Agriculture (Chemicals)
+    await setupExportRoutes(ns, 'Chemical', 'Agriculture', 'Chemicals');
 
+    // Upgrades
     const smartStorageLevel = await execCorpFunc(ns, 'getUpgradeLevel(ns.args[0])', 'Smart Storage');
     if (smartStorageLevel < 15 && corpData.funds > 2e9) {
         await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', 'Smart Storage');
@@ -577,232 +684,125 @@ async function runRound2(ns, state) {
     if (smartFactoriesLevel < 10 && corpData.funds > 2e9) {
         await execCorpFunc(ns, 'levelUpgrade(ns.args[0])', 'Smart Factories');
     }
-
-    await buyBoostMaterials(ns, 'Agriculture');
 }
 
+// ============================================================================
+// ROUND 3+: TOBACCO & PRODUCTS
+// ============================================================================
+
 async function runRound3Plus(ns, state) {
-    const corpData = await execCorpFunc(ns, 'getCorporation()');
+    let corpData = await execCorpFunc(ns, 'getCorporation()');
     const verbose = state.options.verbose;
 
-    // Check prerequisites - need Agriculture and Chemical from earlier rounds
-    const hasAgriculture = corpData.divisions.includes('Agriculture');
-    const hasChemical = corpData.divisions.includes('Chemical');
-    
-    if (!hasAgriculture) {
-        // Need to complete Round 1 first
-        await runRound1(ns, state);
-        return;
-    }
-    
-    if (!hasChemical) {
-        // Need to complete Round 2 first
+    // Verify prerequisites
+    if (!corpData.divisions.includes('Agriculture') || !corpData.divisions.includes('Chemical')) {
         await runRound2(ns, state);
         return;
     }
 
-    const hasTobacco = corpData.divisions.includes('Tobacco');
-    if (!hasTobacco) {
+    // Create Tobacco division
+    if (!corpData.divisions.includes('Tobacco')) {
         if (corpData.funds > 20e9) {
             log(ns, 'Round 3+: Creating Tobacco division');
             await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Tobacco', 'Tobacco');
-            await ns.sleep(500); // Wait for division to initialize
+            await ns.sleep(500);
         }
         return;
     }
 
-    // Tobacco division exists - ensure it's fully expanded with warehouses
     const tobaccoDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Tobacco');
-    let tobaccoFullySetUp = true;
     
-    // Costs (approximate): expandCity ~4b, warehouse ~5b, upgradeOfficeSize varies
-    const EXPAND_COST = 4e9;
-    const WAREHOUSE_COST = 5e9;
-    const OFFICE_UPGRADE_COST = 2e9;
-
+    // Expand Tobacco to all cities
     for (const city of CITIES) {
-        // Refresh corp data to get current funds
         corpData = await execCorpFunc(ns, 'getCorporation()');
-        
+
         if (!tobaccoDiv.cities.includes(city)) {
-            if (city !== 'Sector-12') {
-                if (corpData.funds < EXPAND_COST) {
-                    if (verbose) log(ns, `Round 3+: Waiting for funds to expand Tobacco to ${city}`);
-                    tobaccoFullySetUp = false;
-                    continue;
-                }
-                try {
-                    log(ns, `Round 3+: Expanding Tobacco to ${city}`);
-                    await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Tobacco', city);
-                    await ns.sleep(200);
-                } catch { tobaccoFullySetUp = false; continue; }
+            if (city !== 'Sector-12' && corpData.funds > 4e9) {
+                log(ns, `Round 3+: Expanding Tobacco to ${city}`);
+                await execCorpFunc(ns, 'expandCity(ns.args[0], ns.args[1])', 'Tobacco', city);
+                await ns.sleep(200);
             }
-            tobaccoFullySetUp = false;
             continue;
         }
 
         const hasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
         if (!hasWarehouse) {
-            if (corpData.funds < WAREHOUSE_COST) {
-                if (verbose) log(ns, `Round 3+: Waiting for funds for warehouse in ${city}`);
-                tobaccoFullySetUp = false;
-                continue;
-            }
-            try {
+            if (corpData.funds > 5e9) {
                 log(ns, `Round 3+: Purchasing warehouse for Tobacco in ${city}`);
                 await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
                 await ns.sleep(200);
-            } catch { tobaccoFullySetUp = false; continue; }
-            tobaccoFullySetUp = false;
-            continue;
-        }
-
-        // Check office size and employees
-        const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Tobacco', city);
-        if (office.size < 30) {
-            if (corpData.funds < OFFICE_UPGRADE_COST) {
-                if (verbose) log(ns, `Round 3+: Waiting for funds to upgrade office in ${city}`);
-                tobaccoFullySetUp = false;
-                continue;
             }
-            try {
-                const toAdd = 30 - office.size;
-                await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Tobacco', city, toAdd);
-            } catch { tobaccoFullySetUp = false; continue; }
-            tobaccoFullySetUp = false;
             continue;
         }
 
-        if (office.numEmployees < 30) {
-            for (let i = office.numEmployees; i < 30; i++) {
+        const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Tobacco', city);
+        const targetSize = city === 'Sector-12' ? 30 : 9;
+        
+        if (office.size < targetSize && corpData.funds > 2e9) {
+            await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Tobacco', city, targetSize - office.size);
+        }
+        
+        if (office.numEmployees < targetSize) {
+            for (let i = office.numEmployees; i < Math.min(targetSize, office.size); i++) {
                 await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Tobacco', city);
             }
-            
-            if (city === 'Sector-12') {
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Operations', 6);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Engineer', 6);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Business', 6);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Management', 6);
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Research & Development', 6);
-            } else {
-                await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 'Tobacco', city, 'Research & Development', 30);
-            }
-            tobaccoFullySetUp = false;
+            // Products need Engineers prioritized
+            await assignEmployeesToProduction(ns, 'Tobacco', city, true);
         }
     }
 
-    if (!tobaccoFullySetUp) {
-        if (verbose) log(ns, 'Round 3+: Setting up Tobacco division...');
-        return;
-    }
+    // Set up export routes: Agriculture -> Tobacco (Plants)
+    await setupExportRoutes(ns, 'Agriculture', 'Tobacco', 'Plants');
 
-    // Set up exports from Agriculture to Tobacco
-    const agDiv = await execCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
-    await setupTobaccoExports(ns, agDiv, tobaccoDiv);
-
-    if (tobaccoDiv.products.length === 0 || await canDevelopNewProduct(ns, 'Tobacco', state)) {
+    // Product development
+    if (tobaccoDiv.products.length === 0 || await canDevelopNewProduct(ns, 'Tobacco')) {
         await developNewProduct(ns, 'Tobacco', state);
     }
 
+    // Buy Wilson Analytics and AdVert
     await buyWilsonAndAdvert(ns, 'Tobacco');
 
+    // Buy research upgrades
     await buyResearch(ns, 'Tobacco');
 
+    // General upgrades
     await upgradeProductionCapability(ns);
 }
 
-async function setupExportRoutes(ns, agDiv, chemDiv) {
-    // Only set up exports for cities where BOTH divisions have warehouses
+// ============================================================================
+// EXPORT MANAGEMENT
+// ============================================================================
+
+async function setupExportRoutes(ns, fromDiv, toDiv, material) {
+    const fromDivData = await execCorpFunc(ns, 'getDivision(ns.args[0])', fromDiv);
+    const toDivData = await execCorpFunc(ns, 'getDivision(ns.args[0])', toDiv);
+    
     for (const city of CITIES) {
-        // Check Agriculture has warehouse in this city
-        if (!agDiv.cities.includes(city)) continue;
-        const agHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (!agHasWarehouse) continue;
+        // Check both divisions have warehouses in this city
+        if (!fromDivData.cities.includes(city) || !toDivData.cities.includes(city)) continue;
+        
+        const fromHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', fromDiv, city);
+        const toHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', toDiv, city);
+        
+        if (!fromHasWarehouse || !toHasWarehouse) continue;
 
-        // Check Chemical has warehouse in this city
-        if (!chemDiv.cities.includes(city)) continue;
-        const chemHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Chemical', city);
-        if (!chemHasWarehouse) continue;
-
-        // Both have warehouses - set up export routes
         try {
-            await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Agriculture', city, 'Chemical', city, 'Plants');
+            // Cancel existing export
+            await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', fromDiv, city, toDiv, city, material);
         } catch { }
         
         try {
-            await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', 'Agriculture', city, 'Chemical', city, 'Plants', '(IPROD+IINV/10)*(-1)');
-        } catch { }
-
-        try {
-            await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Chemical', city, 'Agriculture', city, 'Chemicals');
-        } catch { }
-        
-        try {
-            await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', 'Chemical', city, 'Agriculture', city, 'Chemicals', '(IPROD+IINV/10)*(-1)');
+            // Set up new export: export production + 10% of inventory
+            await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', fromDiv, city, toDiv, city, material, '(IPROD+IINV/10)*(-1)');
         } catch { }
     }
 }
 
-async function setupTobaccoExports(ns, agDiv, tobaccoDiv) {
-    for (const city of CITIES) {
-        // Check both divisions have warehouses
-        if (!agDiv.cities.includes(city)) continue;
-        const agHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (!agHasWarehouse) continue;
+// ============================================================================
+// PRODUCT MANAGEMENT
+// ============================================================================
 
-        if (!tobaccoDiv.cities.includes(city)) continue;
-        const tobaccoHasWarehouse = await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Tobacco', city);
-        if (!tobaccoHasWarehouse) continue;
-
-        try {
-            await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', 'Agriculture', city, 'Tobacco', city, 'Plants', '(IPROD+IINV/10)*(-1)');
-        } catch { }
-    }
-}
-
-async function buyBoostMaterials(ns, division) {
-    const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
-
-    for (const city of CITIES) {
-        // Skip cities where division hasn't expanded
-        if (!divData.cities.includes(city)) continue;
-
-        try {
-            if (!(await execCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', division, city))) continue;
-
-            const warehouse = await execCorpFunc(ns, 'getWarehouse(ns.args[0], ns.args[1])', division, city);
-            const freeSpace = warehouse.size - warehouse.sizeUsed;
-
-            if (freeSpace < 100) continue;
-
-            const optimal = calculateOptimalBoostMaterials(divData.type, freeSpace * 0.8);
-            if (!optimal) continue;
-
-            for (const [material, targetQty] of Object.entries(optimal)) {
-                const current = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', division, city, material);
-                const toBuy = targetQty - current.stored;
-
-                if (toBuy > 0) {
-                    await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, material, toBuy / 10);
-                }
-            }
-        } catch { }
-    }
-
-    await ns.sleep(10000);
-
-    for (const city of CITIES) {
-        if (!divData.cities.includes(city)) continue;
-        try {
-            await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, 'AI Cores', 0);
-            await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, 'Hardware', 0);
-            await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, 'Real Estate', 0);
-            await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', division, city, 'Robots', 0);
-        } catch { }
-    }
-}
-
-async function canDevelopNewProduct(ns, division, state) {
+async function canDevelopNewProduct(ns, division) {
     const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
 
     for (const productName of divData.products) {
@@ -812,31 +812,28 @@ async function canDevelopNewProduct(ns, division, state) {
         }
     }
 
-    if (divData.products.length >= 3) {
-        return true;
-    }
-
-    return divData.products.length < 3;
+    return true;
 }
 
 async function developNewProduct(ns, division, state) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
     const divData = await execCorpFunc(ns, 'getDivision(ns.args[0])', division);
 
+    // Discontinue worst product if at max
     if (divData.products.length >= 3) {
-        let oldestProduct = divData.products[0];
-        let oldestRating = Infinity;
+        let worstProduct = divData.products[0];
+        let worstRating = Infinity;
 
         for (const productName of divData.products) {
             const product = await execCorpFunc(ns, 'getProduct(ns.args[0], ns.args[1], ns.args[2])', division, 'Sector-12', productName);
-            if (product.developmentProgress >= 100 && product.effectiveRating < oldestRating) {
-                oldestRating = product.effectiveRating;
-                oldestProduct = productName;
+            if (product.developmentProgress >= 100 && product.effectiveRating < worstRating) {
+                worstRating = product.effectiveRating;
+                worstProduct = productName;
             }
         }
 
-        await execCorpFunc(ns, 'discontinueProduct(ns.args[0], ns.args[1])', division, oldestProduct);
-        log(ns, `Discontinued product: ${oldestProduct}`);
+        await execCorpFunc(ns, 'discontinueProduct(ns.args[0], ns.args[1])', division, worstProduct);
+        log(ns, `Discontinued product: ${worstProduct}`);
     }
 
     const productName = getProductName(division, state.productVersion++);
@@ -845,6 +842,10 @@ async function developNewProduct(ns, division, state) {
     await execCorpFunc(ns, 'makeProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', division, 'Sector-12', productName, investment, investment);
     log(ns, `Started developing product: ${productName}`);
 }
+
+// ============================================================================
+// UPGRADES
+// ============================================================================
 
 async function buyWilsonAndAdvert(ns, division) {
     const corpData = await execCorpFunc(ns, 'getCorporation()');
@@ -920,22 +921,21 @@ async function upgradeProductionCapability(ns) {
     }
 }
 
+// ============================================================================
+// INVESTMENT
+// ============================================================================
+
 async function checkInvestment(ns, state) {
     const offer = await execCorpFunc(ns, 'getInvestmentOffer()');
 
-    // Log investment status with the periodic status update
     if (offer && offer.funds > 0) {
-        const minimums = { 1: 100e9, 2: 200e9, 3: 5e12, 4: 50e12 };
-        const needed = minimums[state.round] || 0;
-        const canAccept = offer.funds >= needed;
-        if (Date.now() - state.lastStatusLog < 1000) {
-            log(ns, `Investment: ${formatMoney(offer.funds)} offered (need ${formatMoney(needed)})${canAccept ? ' - ACCEPTING!' : ''}`);
-        }
+        const corpData = await execCorpFunc(ns, 'getCorporation()');
+        log(ns, `Investment offer: ${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares (Round ${state.round})`);
     }
 
     if (shouldAcceptInvestment(offer, state.round, 0)) {
         await execCorpFunc(ns, 'acceptInvestmentOffer()');
-        log(ns, `Accepted investment offer: ${formatMoney(offer.funds)}`, true, 'success');
+        log(ns, `Accepted investment: ${formatMoney(offer.funds)}`, true, 'success');
         state.round++;
     }
 }
