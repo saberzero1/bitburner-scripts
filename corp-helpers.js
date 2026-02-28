@@ -283,11 +283,16 @@ export function getProductName(divisionName, version) {
 export function shouldAcceptInvestment(offer, round, targetValuation = 0) {
     if (!offer || offer.funds <= 0) return false;
 
+    // Reasonable minimums for progression
+    // Round 1: Enough to expand Agriculture to all cities + warehouses
+    // Round 2: Enough to set up Chemical division
+    // Round 3: Enough for Tobacco + product development
+    // Round 4: Going public, maximize value
     const minimums = {
-        1: 500e9,
-        2: 5e12,
-        3: 500e12,
-        4: 50e15
+        1: 1e9,      // $1 billion - just need something to start
+        2: 3e9,      // $3 billion - current offer is ~$3.2b
+        3: 100e9,    // $100 billion - for Tobacco setup
+        4: 1e12      // $1 trillion - going public
     };
 
     const minimum = minimums[round] || targetValuation;
