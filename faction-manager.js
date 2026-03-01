@@ -834,6 +834,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     nfLevelPurchased = Math.round(Math.log(augNf.price / (augCountMult ** numAugsAwaitingInstall * 750000 * bitNodeMults.AugmentationMoneyCost)) / Math.log(1.14));
     let nextNfLevel = nfLevelPurchased + 1;
     const baseAugCount = purchaseableAugs.length;
+    let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length;
     let getFrom = augNf.getFromJoined();
     const bestNfFaction = selectBestNfFaction(augNf, budget, totalAugCost, totalRepCost, purchaseFactionDonations, nfPurchased, baseAugCount);
     if (bestNfFaction) getFrom = bestNfFaction;
@@ -879,7 +880,6 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     for (let i = purchaseableAugs.length - 1; i >= 0 && purchaseableAugs[i].price < augNf.price; i--)
         nfAppendPosition--;
     // Start adding as many NeuroFlux levels as we can afford
-    let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length;
     let augNfFaction = factionData[getFrom ?? augNf.getFromJoined()];
     if (augNfFaction && (augNf.canAfford() || augNf.canAffordWithDonation()))
         log(ns, `Getting NF from faction ${augNfFaction.name} (rep: ${formatNumberShort(augNfFaction.reputation)}). Price of next NF (Level ${nextNfLevel}) is ` +
