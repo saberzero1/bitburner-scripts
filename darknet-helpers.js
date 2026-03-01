@@ -7,6 +7,7 @@ const PASSWORD_SOLVERS = {
     'ZeroLogon': solveZeroLogon,
     'SimplePin': solveSimplePin,
     'Captcha': solveCaptcha,
+    'DefaultPassword': solveDefaultPassword,
     'WordList': solveWordList,
     'Caesar': solveCaesar,
     'Vigenere': solveVigenere,
@@ -28,6 +29,7 @@ export function getDarknetPasswordSolver(modelId) {
     if (normalized.includes('zerologon') || normalized.includes('nopassword')) return PASSWORD_SOLVERS['ZeroLogon'];
     if (normalized.includes('captcha') || normalized.includes('cloudblare')) return PASSWORD_SOLVERS['Captcha'];
     if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return PASSWORD_SOLVERS['SimplePin'];
+    if (normalized.includes('freshinstall') || normalized.includes('defaultpassword')) return PASSWORD_SOLVERS['DefaultPassword'];
     if (normalized.includes('caesar')) return PASSWORD_SOLVERS['Caesar'];
     if (normalized.includes('vigenere')) return PASSWORD_SOLVERS['Vigenere'];
     if (normalized.includes('base64')) return PASSWORD_SOLVERS['Base64'];
@@ -158,6 +160,27 @@ async function solveCaptcha(ns, hostname, serverInfo) {
         candidate = candidate.slice(candidate.length - expectedLength);
     const result = await ns.dnet.authenticate(hostname, candidate);
     if (result.success) return candidate;
+    return null;
+}
+
+async function solveDefaultPassword(ns, hostname, serverInfo) {
+    const hint = (serverInfo.passwordHint || '').toLowerCase();
+    const defaults = [
+        'admin', 'password', 'root', 'guest', 'user', 'default', 'changeme', 'letmein',
+        'passw0rd', 'welcome', 'administrator', 'qwerty'
+    ];
+    if (hint) {
+        for (const word of defaults) {
+            if (hint.includes(word)) {
+                const result = await ns.dnet.authenticate(hostname, word);
+                if (result.success) return word;
+            }
+        }
+    }
+    for (const word of defaults) {
+        const result = await ns.dnet.authenticate(hostname, word);
+        if (result.success) return word;
+    }
     return null;
 }
 

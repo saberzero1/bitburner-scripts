@@ -82,6 +82,12 @@ async function authenticateServer(ns, hostname, details, passwords) {
         if (result.success) return knownPassword;
     }
     
+    const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
+    if (hintCandidate !== null) {
+        ns.toast(`Cracked ${hostname}`, 'success');
+        return hintCandidate;
+    }
+
     const solver = getSolver(details.modelId);
     if (solver) {
         const password = await solver(ns, hostname, details);
@@ -93,11 +99,6 @@ async function authenticateServer(ns, hostname, details, passwords) {
             }
         }
     } else {
-        const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
-        if (hintCandidate !== null) {
-            ns.toast(`Cracked ${hostname}`, 'success');
-            return hintCandidate;
-        }
         const fallback = await tryFormatBruteforce(ns, hostname, details);
         if (fallback !== null) {
             const result = await ns.dnet.authenticate(hostname, fallback);
@@ -252,6 +253,19 @@ function getSolver(modelId) {
                 return String.fromCharCode(base + (25 - (c.charCodeAt(0) - base)));
             });
         },
+        'DefaultPassword': async (ns, hostname, details) => {
+            const hint = (details.passwordHint || '').toLowerCase();
+            const defaults = [
+                'admin', 'password', 'root', 'guest', 'user', 'default', 'changeme', 'letmein',
+                'passw0rd', 'welcome', 'administrator', 'qwerty'
+            ];
+            if (hint) {
+                for (const word of defaults) {
+                    if (hint.includes(word)) return word;
+                }
+            }
+            return defaults[0];
+        },
     };
     
     if (!modelId) return null;
@@ -259,6 +273,7 @@ function getSolver(modelId) {
     if (normalized.includes('zerologon') || normalized.includes('nopassword')) return solvers['ZeroLogon'];
     if (normalized.includes('captcha') || normalized.includes('cloudblare')) return solvers['Captcha'];
     if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return solvers['SimplePin'];
+    if (normalized.includes('freshinstall') || normalized.includes('defaultpassword')) return solvers['DefaultPassword'];
     if (normalized.includes('caesar')) return solvers['Caesar'];
     if (normalized.includes('vigenere')) return solvers['Vigenere'];
     if (normalized.includes('base64')) return solvers['Base64'];

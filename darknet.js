@@ -245,6 +245,13 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     }
 
     // Try to solve based on model
+    const hintCandidate = await tryHintBasedAuth(ns, hostname, serverInfo);
+    if (hintCandidate !== null) {
+        log(ns, `SUCCESS: Cracked ${hostname} using hint/logs`);
+        state.addPassword(ns, hostname, hintCandidate);
+        return true;
+    }
+
     const solver = getDarknetPasswordSolver(serverInfo.modelId);
     if (!solver) {
         if (verbose) log(ns, `No solver for model ${serverInfo.modelId} on ${hostname} (hint: ${serverInfo.passwordHint ?? ''})`);
@@ -269,13 +276,6 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
             state.addPassword(ns, hostname, password);
             return true;
         }
-    }
-
-    const hintCandidate = await tryHintBasedAuth(ns, hostname, serverInfo);
-    if (hintCandidate !== null) {
-        log(ns, `SUCCESS: Cracked ${hostname} using hint/logs`);
-        state.addPassword(ns, hostname, hintCandidate);
-        return true;
     }
 
     // Try packet capture as fallback for difficult servers
