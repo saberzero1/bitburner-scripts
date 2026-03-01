@@ -659,6 +659,7 @@ export async function main(ns) {
             if (existingDaemon) {
                 daemonRelaunchMessage ??= `Relaunching daemon.js with new arguments since the current instance doesn't include all the args we want.`;
                 log(ns, daemonRelaunchMessage);
+                await killScript(ns, 'daemon.js', runningScripts, existingDaemon);
             }
             let daemonPid = launchScriptHelper(ns, 'daemon.js', daemonArgs);
             daemonStartTime = Date.now();
