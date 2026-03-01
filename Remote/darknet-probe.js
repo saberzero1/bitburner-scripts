@@ -3,7 +3,10 @@
  * Designed to be deployed to darknet servers and spread autonomously.
  */
 export async function main(ns) {
+    const PROBE_VERSION = 2;
     const SCRIPT_NAME = ns.getScriptName();
+    const targetVersion = Number(ns.args?.[0] ?? PROBE_VERSION);
+    if (targetVersion !== PROBE_VERSION) return;
     const HOST = ns.getHostname();
     const LOOP_INTERVAL = 5000;
     const PASSWORD_FILE = '/data/darknet-passwords.txt';

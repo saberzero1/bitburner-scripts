@@ -74,6 +74,7 @@ class DarknetState {
         this.lastRefresh = 0;
         this.lastStatusLog = 0;
         this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
+        this.probeVersion = 2;
 
         // Load persisted passwords from file
         this.loadPasswords(ns);
@@ -246,7 +247,7 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     // Try to solve based on model
     const solver = getDarknetPasswordSolver(serverInfo.modelId);
     if (!solver) {
-        if (verbose) log(ns, `No solver for model ${serverInfo.modelId} on ${hostname}`);
+        if (verbose) log(ns, `No solver for model ${serverInfo.modelId} on ${hostname} (hint: ${serverInfo.passwordHint ?? ''})`);
         return false;
     }
 
@@ -367,8 +368,17 @@ async function deployProbe(ns, state, hostname, options) {
         // Copy probe script
         ns.scp(probeScript, hostname, 'home');
 
+        const procs = ns.ps(hostname).filter(p => p.filename === probeScript);
+        const hasMatching = procs.some(p => Number(p.args?.[0]) === state.probeVersion);
+        for (const proc of procs) {
+            if (Number(proc.args?.[0]) !== state.probeVersion) {
+                try { ns.kill(proc.pid); } catch { }
+            }
+        }
+        if (hasMatching) return true;
+
         // Execute probe
-        const pid = ns.exec(probeScript, hostname, { preventDuplicates: true });
+        const pid = ns.exec(probeScript, hostname, { preventDuplicates: true }, state.probeVersion);
         if (pid > 0) {
             state.activeProbes.add(hostname);
             log(ns, `Deployed probe to ${hostname} (pid: ${pid})`);
@@ -386,10 +396,16 @@ async function ensureHomeProbes(ns, state, options) {
     
     // Check for probe on home
     const homeProcs = ns.ps('home');
-    const hasHomeProbe = homeProcs.some(p => p.filename === probeScript);
+    const homeProbeProcs = homeProcs.filter(p => p.filename === probeScript);
+    const hasHomeProbe = homeProbeProcs.some(p => Number(p.args?.[0]) === state.probeVersion);
+    for (const proc of homeProbeProcs) {
+        if (Number(proc.args?.[0]) !== state.probeVersion) {
+            try { ns.kill(proc.pid); } catch { }
+        }
+    }
 
     if (!hasHomeProbe && ns.fileExists(probeScript, 'home')) {
-        const pid = ns.exec(probeScript, 'home', { preventDuplicates: true });
+        const pid = ns.exec(probeScript, 'home', { preventDuplicates: true }, state.probeVersion);
         if (pid > 0) {
             state.activeProbes.add('home');
         }
