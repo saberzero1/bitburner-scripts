@@ -21,7 +21,10 @@ import {
     calculateWarehouseSpaceBudget, calculateOptimalBoostMaterials, calculateProductionMultiplier,
     calculateOptimalEmployeeDistribution, calculateSmartSupplyQuantities, checkWarehouseHealth,
     calculateOptimalPrice, calculateOptimalPartyCost, getProductName,
-    shouldAcceptInvestment, diagnoseZeroProduction
+    shouldAcceptInvestment, diagnoseZeroProduction,
+    // Quality-focused helpers (post-2022 rework)
+    findBestQualityCity, checkExportDilution, calculateQualityThreshold,
+    checkProductReadiness, calculateQualityFocusedDistribution, determineCityRole
 } from './corp-helpers.js'
 
 const argsSchema = [
@@ -238,7 +241,9 @@ async function logCorpStatus(ns, corpData, state) {
             if (industry.outputMaterials?.length > 0) {
                 for (const mat of industry.outputMaterials) {
                     const matData = await readCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, mat);
-                    log(ns, `    ${mat}: ${matData.stored.toFixed(0)} (prod=${matData.productionAmount.toFixed(2)}/s, sell=${matData.actualSellAmount.toFixed(2)}/s)`);
+                    // Show quality for export chain optimization
+                    const qualityStr = matData.quality ? ` Q=${matData.quality.toFixed(1)}` : '';
+                    log(ns, `    ${mat}: ${matData.stored.toFixed(0)}${qualityStr} (prod=${matData.productionAmount.toFixed(2)}/s, sell=${matData.actualSellAmount.toFixed(2)}/s)`);
                 }
             }
             
@@ -302,11 +307,29 @@ async function maintainEmployees(ns) {
 }
 
 /**
- * Assign employees to optimal production distribution
+ * Assign employees to optimal distribution based on division focus
+ * Material divisions: Quality-focused (60-70% Engineers) for export chain
+ * Product divisions: Balanced for product development
+ * 
+ * @param {NS} ns
+ * @param {string} divName - Division name
+ * @param {string} city - City name
+ * @param {boolean} forProducts - If true, optimize for product development
+ * @param {string} qualityFocus - 'quality' for export hubs, 'production' for local sales
  */
-async function assignEmployeesToProduction(ns, divName, city, forProducts = false) {
+async function assignEmployeesToProduction(ns, divName, city, forProducts = false, qualityFocus = 'quality') {
     const office = await readCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
-    const distribution = calculateOptimalEmployeeDistribution(office.numEmployees, forProducts);
+    
+    // Use quality-focused distribution for material divisions that export
+    // Use production-focused for local sales cities
+    // Use product-focused for Tobacco/product divisions
+    let distribution;
+    if (forProducts) {
+        distribution = calculateQualityFocusedDistribution(office.numEmployees, 'product');
+    } else {
+        // Material divisions: use quality focus for export cities
+        distribution = calculateQualityFocusedDistribution(office.numEmployees, qualityFocus);
+    }
     
     // Clear all assignments first
     for (const job of ['Operations', 'Engineer', 'Business', 'Management', 'Research & Development']) {
@@ -898,10 +921,39 @@ async function runRound3Plus(ns, state) {
         return;
     }
 
-    // Create Tobacco division
+    // ========================================================================
+    // QUALITY GATE: Check if Agriculture Plants quality is high enough for Tobacco
+    // Products are input-capped when avgInputQuality < sqrt(productRating)
+    // ========================================================================
+    
+    // Get Plants quality from Agriculture's best city
+    const agDiv = await readCorpFunc(ns, 'getDivision(ns.args[0])', 'Agriculture');
+    const plantsQualityByCity = {};
+    for (const city of agDiv.cities) {
+        const hasWarehouse = await readCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Agriculture', city);
+        if (!hasWarehouse) continue;
+        const plantsData = await readCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 'Plants');
+        plantsQualityByCity[city] = plantsData;
+    }
+    
+    const { bestCity: bestPlantsCity, bestQuality: bestPlantsQuality } = findBestQualityCity(plantsQualityByCity);
+    
+    // Check if we're ready for Tobacco (need quality >= sqrt(50) ≈ 7 for initial products)
+    const readiness = checkProductReadiness(bestPlantsQuality, 50);
+    
+    // Create Tobacco division - only if quality is sufficient OR we have lots of funds
     if (!corpData.divisions.includes('Tobacco')) {
+        if (!readiness.isReady && corpData.funds < 100e9) {
+            // Quality too low and not enough funds to brute force
+            if (verbose) {
+                log(ns, `Round 3+: Delaying Tobacco - Plants quality ${bestPlantsQuality.toFixed(1)} < threshold ${readiness.threshold.toFixed(1)} (${readiness.effectiveRatingPercent.toFixed(0)}% effective)`);
+            }
+            log(ns, `Focusing on Agriculture quality in ${bestPlantsCity} (Q=${bestPlantsQuality.toFixed(1)})`);
+            return;
+        }
+        
         if (corpData.funds > 20e9) {
-            log(ns, 'Round 3+: Creating Tobacco division');
+            log(ns, `Round 3+: Creating Tobacco division (Plants Q=${bestPlantsQuality.toFixed(1)}, threshold=${readiness.threshold.toFixed(1)})`);
             await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Tobacco', 'Tobacco');
             await ns.sleep(500);
         }
@@ -975,6 +1027,22 @@ async function setupExportRoutes(ns, fromDiv, toDiv, material) {
     const fromDivData = await readCorpFunc(ns, 'getDivision(ns.args[0])', fromDiv);
     const toDivData = await readCorpFunc(ns, 'getDivision(ns.args[0])', toDiv);
     
+    // Collect material quality from all source cities
+    const materialDataByCity = {};
+    for (const city of fromDivData.cities) {
+        const hasWarehouse = await readCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', fromDiv, city);
+        if (!hasWarehouse) continue;
+        const matData = await readCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', fromDiv, city, material);
+        materialDataByCity[city] = matData;
+    }
+    
+    // Find the best quality city for exports
+    const { bestCity, bestQuality, allQualities } = findBestQualityCity(materialDataByCity);
+    
+    if (bestCity) {
+        log(ns, `Export ${material}: Best quality city is ${bestCity} (Q=${bestQuality.toFixed(1)})`);
+    }
+    
     for (const city of CITIES) {
         // Check both divisions have warehouses in this city
         if (!fromDivData.cities.includes(city) || !toDivData.cities.includes(city)) continue;
@@ -984,15 +1052,26 @@ async function setupExportRoutes(ns, fromDiv, toDiv, material) {
         
         if (!fromHasWarehouse || !toHasWarehouse) continue;
 
+        // Determine this city's role based on quality
+        const cityQuality = allQualities[city] || 0;
+        const cityRole = determineCityRole(cityQuality, bestQuality, 5);
+
         try {
-            // Cancel existing export
+            // Cancel existing export first
             await execCorpFunc(ns, 'cancelExportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', fromDiv, city, toDiv, city, material);
         } catch (e) { }
         
-        try {
-            // Set up new export: export production + 10% of inventory
-            await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', fromDiv, city, toDiv, city, material, '(IPROD+IINV/10)*(-1)');
-        } catch (e) { }
+        if (cityRole.role === 'export' || cityRole.role === 'secondary') {
+            // This city has good quality - set up export
+            try {
+                // Export production + 10% of inventory
+                await execCorpFunc(ns, 'exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])', fromDiv, city, toDiv, city, material, '(IPROD+IINV/10)*(-1)');
+            } catch (e) { }
+        } else {
+            // Low quality city - don't export, sell locally instead
+            // This prevents quality dilution in the destination
+            log(ns, `Skipping export from ${city} (Q=${cityQuality.toFixed(1)}) - selling locally to avoid dilution`);
+        }
     }
 }
 

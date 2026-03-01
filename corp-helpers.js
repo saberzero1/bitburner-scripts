@@ -691,3 +691,195 @@ export function diagnoseZeroProduction(divData, warehouse, office, materials) {
         issues
     };
 }
+
+// ============================================================================
+// QUALITY TRACKING & OPTIMIZATION (Post-2022 Rework)
+// ============================================================================
+
+/**
+ * Find the best quality city for exporting a specific material
+ * Only export from the highest-quality source to avoid dilution
+ * 
+ * @param {Object} materialDataByCity - { cityName: materialData } from getMaterial API
+ * @returns {Object} { bestCity, bestQuality, allQualities }
+ */
+export function findBestQualityCity(materialDataByCity) {
+    let bestCity = null;
+    let bestQuality = 0;
+    const allQualities = {};
+    
+    for (const [city, matData] of Object.entries(materialDataByCity)) {
+        const quality = matData.quality || 0;
+        allQualities[city] = quality;
+        if (quality > bestQuality) {
+            bestQuality = quality;
+            bestCity = city;
+        }
+    }
+    
+    return { bestCity, bestQuality, allQualities };
+}
+
+/**
+ * Check if adding a new export source would dilute quality
+ * Based on weighted average formula: newQ = (destQ × destS + srcQ × amt) / (destS + amt)
+ * 
+ * @param {number} destQuality - Current destination quality
+ * @param {number} destStored - Current destination stored amount
+ * @param {number} srcQuality - Source material quality
+ * @param {number} srcAmount - Amount to export
+ * @returns {Object} { wouldDilute, newQuality, qualityChange }
+ */
+export function checkExportDilution(destQuality, destStored, srcQuality, srcAmount) {
+    if (destStored === 0) {
+        // Empty destination - no dilution possible
+        return { wouldDilute: false, newQuality: srcQuality, qualityChange: srcQuality };
+    }
+    
+    const newQuality = Math.max(0.1, 
+        (destQuality * destStored + srcQuality * srcAmount) / (destStored + srcAmount));
+    const qualityChange = newQuality - destQuality;
+    
+    return {
+        wouldDilute: srcQuality < destQuality,
+        newQuality,
+        qualityChange
+    };
+}
+
+/**
+ * Calculate the quality threshold needed for Tobacco products
+ * Products are input-capped when: avgInputQuality < sqrt(productRating)
+ * 
+ * @param {number} productRating - The product's base rating
+ * @returns {number} Minimum input quality needed to avoid capping
+ */
+export function calculateQualityThreshold(productRating) {
+    // effectiveRating = min(rating, avgInputQuality × sqrt(rating))
+    // To be uncapped: avgInputQuality × sqrt(rating) >= rating
+    // Therefore: avgInputQuality >= sqrt(rating)
+    return Math.sqrt(productRating);
+}
+
+/**
+ * Check if a division is ready to expand to products
+ * Based on input material quality meeting the threshold
+ * 
+ * @param {number} avgInputQuality - Average quality of input materials
+ * @param {number} targetProductRating - Expected product rating (estimate 50-100 initially)
+ * @returns {Object} { isReady, currentQuality, threshold, qualityGap }
+ */
+export function checkProductReadiness(avgInputQuality, targetProductRating = 50) {
+    const threshold = calculateQualityThreshold(targetProductRating);
+    const isReady = avgInputQuality >= threshold;
+    
+    return {
+        isReady,
+        currentQuality: avgInputQuality,
+        threshold,
+        qualityGap: threshold - avgInputQuality,
+        // How much of product rating is being utilized
+        effectiveRatingPercent: isReady ? 100 : (avgInputQuality / threshold) * 100
+    };
+}
+
+/**
+ * Calculate optimal employee distribution for QUALITY focus
+ * Engineers directly affect quality: tempQlt = Engineers/90 + ...
+ * 
+ * @param {number} totalEmployees - Total employees in office
+ * @param {string} focus - 'quality' for material quality, 'production' for throughput, 'product' for products
+ * @returns {Object} Job assignments
+ */
+export function calculateQualityFocusedDistribution(totalEmployees, focus = 'quality') {
+    if (totalEmployees < 4) {
+        // Minimum viable: prioritize Engineer for quality
+        return {
+            Operations: Math.min(1, Math.max(0, totalEmployees - 1)),
+            Engineer: Math.min(1, totalEmployees),
+            Business: Math.min(1, Math.max(0, totalEmployees - 3)),
+            Management: Math.min(1, Math.max(0, totalEmployees - 2)),
+            'Research & Development': 0
+        };
+    }
+
+    if (focus === 'quality') {
+        // Quality focus: Engineers drive quality formula (Engineers/90 term)
+        // 60-70% Engineers as recommended by Oracle
+        return {
+            Operations: Math.floor(totalEmployees * 0.15),
+            Engineer: Math.floor(totalEmployees * 0.65),
+            Business: Math.floor(totalEmployees * 0.05),
+            Management: Math.floor(totalEmployees * 0.10),
+            'Research & Development': Math.floor(totalEmployees * 0.05)
+        };
+    } else if (focus === 'product') {
+        // Product focus: Balance for rating development
+        return {
+            Operations: Math.floor(totalEmployees * 0.20),
+            Engineer: Math.floor(totalEmployees * 0.35),
+            Business: Math.floor(totalEmployees * 0.15),
+            Management: Math.floor(totalEmployees * 0.15),
+            'Research & Development': Math.floor(totalEmployees * 0.15)
+        };
+    } else {
+        // Production focus: Operations^0.4 + Engineer^0.3 for throughput
+        return {
+            Operations: Math.floor(totalEmployees * 0.35),
+            Engineer: Math.floor(totalEmployees * 0.25),
+            Business: Math.floor(totalEmployees * 0.15),
+            Management: Math.floor(totalEmployees * 0.15),
+            'Research & Development': Math.floor(totalEmployees * 0.10)
+        };
+    }
+}
+
+/**
+ * Determine if a city should be used for export vs local sales
+ * Export cities need high quality; local sales cities just need throughput
+ * 
+ * @param {number} cityQuality - Material quality in this city
+ * @param {number} bestQuality - Best quality across all cities
+ * @param {number} qualityThreshold - Minimum quality needed for export
+ * @returns {Object} { role, reason }
+ */
+export function determineCityRole(cityQuality, bestQuality, qualityThreshold = 10) {
+    if (cityQuality >= bestQuality * 0.95) {
+        // Within 5% of best - this is an export hub
+        return { role: 'export', reason: 'Highest quality - use for exports' };
+    } else if (cityQuality >= qualityThreshold) {
+        // Above threshold but not best - can be secondary export
+        return { role: 'secondary', reason: 'Good quality - secondary export source' };
+    } else {
+        // Below threshold - sell locally, don't export
+        return { role: 'local', reason: 'Low quality - sell locally to avoid dilution' };
+    }
+}
+
+/**
+ * Calculate maximum safe export amount to maintain quality floor
+ * 
+ * @param {number} destQuality - Destination quality
+ * @param {number} destStored - Destination stored amount
+ * @param {number} srcQuality - Source quality (lower)
+ * @param {number} minQuality - Minimum quality to maintain
+ * @returns {number} Maximum amount that can be exported while staying above minQuality
+ */
+export function calculateMaxExportWithoutDilution(destQuality, destStored, srcQuality, minQuality) {
+    // newQ = (destQ × destS + srcQ × amt) / (destS + amt) >= minQ
+    // Solving for amt:
+    // destQ × destS + srcQ × amt >= minQ × (destS + amt)
+    // destQ × destS + srcQ × amt >= minQ × destS + minQ × amt
+    // srcQ × amt - minQ × amt >= minQ × destS - destQ × destS
+    // amt × (srcQ - minQ) >= destS × (minQ - destQ)
+    // amt <= destS × (destQ - minQ) / (minQ - srcQ)  [when srcQ < minQ]
+    
+    if (srcQuality >= minQuality) {
+        return Infinity; // No limit - source quality is above floor
+    }
+    if (destQuality <= minQuality) {
+        return 0; // Destination already at or below floor
+    }
+    
+    return destStored * (destQuality - minQuality) / (minQuality - srcQuality);
+}
