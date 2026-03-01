@@ -155,19 +155,11 @@ function getSolver(modelId) {
         'ZeroLogon': async () => '',
         
         'SimplePin': async (ns, hostname, details) => {
-            const format = (details.passwordFormat || '').trim();
-            const length = (() => {
-                if (!format) return details.passwordHint && /^\d+$/.test(details.passwordHint) ? details.passwordHint.length : 4;
-                const digits = format.match(/\d/g) || [];
-                if (digits.length > 0) return digits.length;
-                const placeholders = format.match(/[dDnN#]/g) || [];
-                if (placeholders.length > 0) return placeholders.length;
-                const explicit = format.match(/\b(\d+)\b/);
-                if (explicit) return Number(explicit[1]);
-                return details.passwordHint && /^\d+$/.test(details.passwordHint) ? details.passwordHint.length : 4;
-            })();
+            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
+                ? details.passwordLength
+                : (details.passwordHint && /^\d+$/.test(details.passwordHint) ? details.passwordHint.length : 4);
             for (let i = 0; i < Math.pow(10, length); i++) {
-                const pin = i.toString().padStart(length, '0');
+                const pin = i.toString();
                 const result = await ns.dnet.authenticate(hostname, pin);
                 if (result.success) return pin;
             }

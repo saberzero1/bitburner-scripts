@@ -36,20 +36,13 @@ async function solveZeroLogon(ns, hostname, serverInfo) {
 async function solveSimplePin(ns, hostname, serverInfo) {
     const hint = serverInfo.passwordHint || '';
     const format = (serverInfo.passwordFormat || '').trim();
-    const pinLength = (() => {
-        if (!format) return hint && /^\d+$/.test(hint) ? hint.length : 4;
-        const digits = format.match(/\d/g) || [];
-        if (digits.length > 0) return digits.length;
-        const placeholders = format.match(/[dDnN#]/g) || [];
-        if (placeholders.length > 0) return placeholders.length;
-        const explicit = format.match(/\b(\d+)\b/);
-        if (explicit) return Number(explicit[1]);
-        return hint && /^\d+$/.test(hint) ? hint.length : 4;
-    })();
+    const pinLength = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : (hint && /^\d+$/.test(hint) ? hint.length : 4);
     const maxAttempts = Math.pow(10, pinLength);
     
     for (let i = 0; i < maxAttempts; i++) {
-        const pin = i.toString().padStart(pinLength, '0');
+        const pin = i.toString();
         const result = await ns.dnet.authenticate(hostname, pin);
         if (result.success) return pin;
     }
