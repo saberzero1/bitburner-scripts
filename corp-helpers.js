@@ -405,60 +405,80 @@ export function checkWarehouseHealth(warehouse) {
  * @param {boolean} isProduct - Whether the item is a product
  * @returns {number} Optimal price
  */
-export function calculateOptimalPrice(item, divData, office, isProduct) {
-    let marketPrice, markupLimit;
-
-    if (isProduct) {
-        marketPrice = item.productionCost;
-        const effectiveRating = Math.max(item.effectiveRating, 0.001);
-        // Simplified markup calculation
-        const quality = item.stats?.quality || 1;
-        const businessRatio = 0.2;
-        const productMarkup = 100 / (1.01 * Math.pow(quality + 0.001, 0.65) * businessRatio);
-        markupLimit = effectiveRating / productMarkup;
-    } else {
-        marketPrice = item.marketPrice;
-        const quality = Math.max(item.quality, 0.001);
-        markupLimit = quality / 1;
-    }
-
-    const stored = item.stored;
-    const expectedSalesVolume = stored / 10;
+export function calculateOptimalPrice(item, divData, office, isProduct, productionAmount = null) {
+    // Implementation based on BitBurner source: Division.ts#L370-396
+    // Market-TA.II formula: optimalPrice = markupLimit / sqrt(sellAmt / sqrtDenominator) + marketPrice
     
-    // Calculate potential sales volume
     const industry = INDUSTRIES[divData.type];
-    if (!industry) return marketPrice + markupLimit;
-
-    let itemMult;
+    if (!industry) return item.marketPrice || 1;
+    
+    // Get market price and markup limit
+    let marketPrice, markupLimit, qualityFactor;
+    
     if (isProduct) {
-        itemMult = 0.5 * Math.pow(Math.max(item.effectiveRating, 0.001), 0.65);
+        marketPrice = item.productionCost || 0;
+        const effectiveRating = Math.max(item.effectiveRating || 0.001, 0.001);
+        qualityFactor = 0.5 * Math.pow(effectiveRating, 0.65);
+        // Product markup calculation
+        const quality = item.stats?.quality || 1;
+        const markup = 100 / (1.01 * Math.pow(quality + 0.001, 0.65) * 0.2);
+        markupLimit = effectiveRating / markup;
     } else {
-        itemMult = Math.max(item.quality, 0.001);
+        marketPrice = item.marketPrice || 1;
+        const quality = Math.max(item.quality || 0.001, 0.001);
+        qualityFactor = quality + 0.001;
+        markupLimit = quality;  // For materials, markupLimit = quality
     }
-
-    const businessProd = 1 + (office.employeeProductionByJob?.Business || 0);
-    const businessFactor = Math.pow(businessProd, 0.26) + businessProd * 0.0001;
-
+    
+    // Calculate all the factors (matching BitBurner source)
+    // businessFactor = calculateEffectWithFactors(1 + businessProd, 0.26, 10e3)
+    const businessProd = office.employeeProductionByJob?.Business || 0;
+    const businessFactor = Math.pow(1 + businessProd, 0.26) + (1 + businessProd) / 10000;
+    
+    // marketFactor = max(0.1, demand * (100 - competition) / 100)
+    const demand = item.demand ?? 50;
+    const competition = item.competition ?? 50;
+    const marketFactor = Math.max(0.1, (demand * (100 - competition)) / 100);
+    
+    // advertisingFactor from getAdvertisingFactors()
     const awareness = divData.awareness + 1;
     const popularity = divData.popularity + 1;
-    const advertFactor = industry.advertisingFactor;
-
-    const awarenessFactor = Math.pow(awareness, advertFactor);
-    const popularityFactor = Math.pow(popularity, advertFactor);
-    const ratioFactor = awareness > 1 ? Math.max(0.01, (popularity - 1 + 0.001) / (awareness - 1)) : 0.01;
-    const advertMult = Math.pow(awarenessFactor * popularityFactor * ratioFactor, 0.85);
-
-    const demand = item.demand || 50;
-    const competition = item.competition || 50;
-    const marketFactor = Math.max(0.1, demand * (100 - competition) * 0.01);
-
-    const potentialSalesVolume = itemMult * businessFactor * advertMult * marketFactor;
-
-    if (potentialSalesVolume <= expectedSalesVolume || expectedSalesVolume === 0) {
+    const ratio = awareness > 0 ? popularity / awareness : 0.01;
+    const advertisingFactor = Math.pow(awareness, industry.advertisingFactor) *
+                              Math.pow(popularity, industry.advertisingFactor) *
+                              Math.pow(ratio, 0.85);
+    
+    // Assume salesMult = 1 (no upgrades accounted for here)
+    const salesMult = 1;
+    
+    // The sell amount we want to achieve (production rate)
+    // If not provided, use stored / 10 as estimate
+    const sellAmt = productionAmount || item.productionAmount || (item.stored / 10) || 1;
+    
+    // sqrtDenominator = qualityFactor * marketFactor * businessFactor * salesMult * advertisingFactor
+    const sqrtDenominator = qualityFactor * marketFactor * businessFactor * salesMult * advertisingFactor;
+    
+    // Handle edge cases
+    if (sqrtDenominator <= 0 || sellAmt <= 0) {
         return marketPrice + markupLimit;
     }
-
-    const optimalPrice = (markupLimit * Math.sqrt(potentialSalesVolume)) / Math.sqrt(expectedSalesVolume) + marketPrice;
+    
+    // Market-TA.II formula: optimalPrice = markupLimit / sqrt(sellAmt / sqrtDenominator) + marketPrice
+    const denominator = Math.sqrt(sellAmt / sqrtDenominator);
+    
+    if (denominator <= 0) {
+        return marketPrice + markupLimit;
+    }
+    
+    const optimalPrice = markupLimit / denominator + marketPrice;
+    
+    // Sanity check: if optimal price is > 2x market price, it's probably too high
+    // for early-game when awareness/popularity are low. Use market price instead.
+    if (optimalPrice > marketPrice * 2 && awareness < 10) {
+        return marketPrice;  // Fall back to market price for better sales
+    }
+    
+    // Price must be at least market price
     return Math.max(optimalPrice, marketPrice);
 }
 
