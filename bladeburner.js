@@ -271,14 +271,20 @@ async function mainLoop(ns) {
         //   focus on actions that improve the population estimate, otherwise, reserve these actions for later
         let populationActionsByEffectiveness = populationActions;
         if (populationUncertain) {
-            const populationActionTypes = Object.fromEntries(populationActions.map(actionName => ([
-                actionName,
-                operationNames.includes(actionName) ? "Operations" : contractNames.includes(actionName) ? "Contracts" : "General"
-            ])));
-            const populationActionTimes = await getBBDict(ns,
-                'getActionTime(ns.args[1], %)',
-                populationActions,
-                JSON.stringify(populationActionTypes));
+            const operationPopulationActions = populationActions.filter(actionName => operationNames.includes(actionName));
+            const contractPopulationActions = populationActions.filter(actionName => contractNames.includes(actionName));
+            const generalPopulationActions = populationActions.filter(actionName => generalActionNames.includes(actionName));
+            const populationActionTimes = {
+                ...(operationPopulationActions.length > 0
+                    ? await getBBDictByActionType(ns, 'getActionTime', "Operations", operationPopulationActions)
+                    : {}),
+                ...(contractPopulationActions.length > 0
+                    ? await getBBDictByActionType(ns, 'getActionTime', "Contracts", contractPopulationActions)
+                    : {}),
+                ...(generalPopulationActions.length > 0
+                    ? await getBBDictByActionType(ns, 'getActionTime', "General", generalPopulationActions)
+                    : {}),
+            };
             const getEffectiveness = actionName => ((minChance(actionName) + maxChance(actionName)) / 2) / (populationActionTimes[actionName] || 1);
             populationActionsByEffectiveness = populationActions.slice().sort((a, b) => getEffectiveness(b) - getEffectiveness(a));
         }
