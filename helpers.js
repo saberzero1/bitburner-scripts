@@ -202,7 +202,8 @@ function checkBackwardsCompatibility(ns, command) {
         .replaceAll("cloud.deleteServer", "deleteServer")
         .replaceAll("cloud.getServerNames", "getPurchasedServers")
         .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
-        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
+        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam")
+        .replaceAll("corporation.setJobAssignment", "corporation.setAutoJobAssignment");
 
     // Log altered commands to assist with troubleshooting.
     if (alteredCommand != command)
@@ -1015,7 +1016,7 @@ function isV3(ns) {
 
 export function formatTime(ns, milliseconds, milliPrecision) {
     if (isV3(ns)) {
-        return ns.ui.time(milliseconds, milliPrecision);
+        return ns.format.time(milliseconds, milliPrecision);
     }
     return ns.tFormat(milliseconds, milliPrecision);
 }
