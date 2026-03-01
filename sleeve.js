@@ -38,11 +38,13 @@ const sleeveBbContractNames = ["Tracking", "Bounty Hunter", "Retirement"];
 const minBbContracts = 2; // There should be this many contracts remaining before sleeves attempt them
 const minBbProbability = 0.99; // Player chance should be this high before sleeves attempt contracts
 const waitForContractCooldown = 60 * 1000; // 1 minute - Cooldown when contract count or probability gets too low
+const unsupportedFactionWorkCooldown = 10 * 60 * 1000;
 
 let cachedCrimeStats, workByFaction; // Cache of crime statistics and which factions support which work
 let task, lastStatusUpdateTime, lastPurchaseTime, lastPurchaseStatusUpdate, availableAugs, cacheExpiry,
     shockChance, lastRerollTime, bladeburnerCooldown, lastSleeveHp, lastSleeveShock; // State by sleeve
 let factionWorkCache = [], factionWorkCacheExpiry = 0, factionRepCache = {};
+let unsupportedFactionWork = {};
 let numSleeves, ownedSourceFiles, playerInGang, playerInBladeburner, bladeburnerCityChaos, bladeburnerContractChances, bladeburnerContractCounts, followPlayerSleeve;
 let options;
 
@@ -60,7 +62,7 @@ export async function main(ns) {
     // Ensure the global state is reset (e.g. after entering a new bitnode)
     task = [], lastStatusUpdateTime = [], lastPurchaseTime = [], lastPurchaseStatusUpdate = [], availableAugs = [],
         cacheExpiry = [], shockChance = [], lastRerollTime = [], bladeburnerCooldown = [], lastSleeveHp = [], lastSleeveShock = [];
-    workByFaction = {}, cachedCrimeStats = {};
+    workByFaction = {}, cachedCrimeStats = {}, unsupportedFactionWork = {};
     playerInGang = playerInBladeburner = false;
     // Ensure we have access to sleeves
     ownedSourceFiles = await getActiveSourceFiles(ns);
@@ -143,7 +145,7 @@ async function getFactionWorkTargets(ns, playerInfo) {
             unownedCount: factionAugMap[name].filter(aug => !ownedAugs.includes(aug)).length,
             rep: factionRepCache[name] ?? 0
         }))
-        .filter(entry => entry.unownedCount > 0)
+        .filter(entry => entry.unownedCount > 0 && !(unsupportedFactionWork[entry.name] > Date.now()))
         .sort((a, b) => (b.unownedCount - a.unownedCount) || (a.rep - b.rep) || a.name.localeCompare(b.name));
     factionWorkCacheExpiry = Date.now() + 60000;
     return factionWorkCache;
@@ -321,15 +323,17 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
         const faction = playerWorkInfo.factionName;
-        const preferredIndex = getPreferredFactionWorkIndex(sleeve);
-        workByFaction[faction] ??= preferredIndex;
-        const work = works[workByFaction[faction] || 0];
-        return [
-            `work for faction '${faction}' (${work})`,
-            `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-            [i, faction, work],
-            `helping earn rep with faction ${faction} by doing ${work} work.`
-        ];
+        if (!(unsupportedFactionWork[faction] > Date.now())) {
+            const preferredIndex = getPreferredFactionWorkIndex(sleeve);
+            workByFaction[faction] ??= preferredIndex;
+            const work = works[workByFaction[faction] || 0];
+            return [
+                `work for faction '${faction}' (${work})`,
+                `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                [i, faction, work],
+                `helping earn rep with faction ${faction} by doing ${work} work.`
+            ];
+        }
     }
     if (i != followPlayerSleeve) {
         const factionTargets = await getFactionWorkTargets(ns, playerInfo);
@@ -455,6 +459,7 @@ async function setSleeveTask(ns, i, designatedTask, command, args) {
         let nextWorkIndex = (workByFaction[faction] || 0) + 1;
         if (nextWorkIndex >= works.length) {
             log(ns, `WARN: Failed to ${strAction}. None of the ${works.length} work types appear to be supported. Will loop back and try again.`, true, 'warning');
+            unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
             nextWorkIndex = 0;
         } else
             log(ns, `INFO: Failed to ${strAction} - work type may not be supported. Trying the next work type (${works[nextWorkIndex]})`);
