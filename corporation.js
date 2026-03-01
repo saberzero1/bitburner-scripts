@@ -520,16 +520,16 @@ async function manageWarehouses(ns, state) {
                 if (state.options['smart-supply'] && industry.inputMaterials && health.isHealthy) {
                     const utilization = warehouse.sizeUsed / warehouse.size;
                     
-                    if (utilization < 0.8) {
-                        // Only buy when we have headroom
-                        const supplies = calculateSmartSupplyQuantities(divData, warehouse, materials, 0.5);  // Target 50%, not 70%
+                    if (utilization < 0.85) {
+                        // Buy inputs more aggressively - target 70% utilization
+                        const supplies = calculateSmartSupplyQuantities(divData, warehouse, materials, 0.70);
                         for (const [mat, amount] of Object.entries(supplies)) {
                             if (amount > 0) {
                                 await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, amount);
                             }
                         }
                     } else {
-                        // Stop all input buying when warehouse > 80%
+                        // Stop all input buying when warehouse > 85%
                         for (const mat of Object.keys(industry.inputMaterials)) {
                             await execCorpFunc(ns, 'buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, mat, 0);
                         }
@@ -615,25 +615,30 @@ async function expandAllDivisions(ns) {
                 }
             } catch (e) { }
             
-            // Hire employees up to office size (target: 9 for support, 30 for main)
+            // Continuously scale employees - more employees = more production
             try {
                 const office = await readCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
                 const isMainCity = city === 'Sector-12';
                 const targetSize = industry?.makesProducts ? (isMainCity ? 30 : 9) : 9;
                 
-                // Upgrade office size if needed
-                if (office.size < targetSize && corpData.funds > 500e6) {  // Lowered from 2e9 to 500m
-                    const toAdd = Math.min(3, targetSize - office.size);  // Add 3 at a time
+                // Upgrade office size if needed and we can afford it
+                // Office upgrades are relatively cheap - $50M threshold
+                if (office.size < targetSize && corpData.funds > 50e6) {
+                    const toAdd = Math.min(3, targetSize - office.size);
                     await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', divName, city, toAdd);
+                    log(ns, `Upgraded ${divName} office in ${city} (+${toAdd} slots)`);
+                    corpData = await readCorpFunc(ns, 'getCorporation()');
                 }
                 
-                // Hire employees up to office size
-                if (office.numEmployees < office.size) {
+                // Hire employees up to office size - employees are very cheap (~$50K)
+                if (office.numEmployees < office.size && corpData.funds > 1e6) {
                     for (let i = office.numEmployees; i < office.size; i++) {
                         await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', divName, city);
                     }
-                    // Assign to production roles
-                    await assignEmployeesToProduction(ns, divName, city, industry?.makesProducts || false);
+                    // Quality-focused for material divisions, product-focused for products
+                    const focus = industry?.makesProducts ? 'product' : 'quality';
+                    await assignEmployeesToProduction(ns, divName, city, industry?.makesProducts || false, focus);
+                    log(ns, `Hired employees for ${divName} in ${city} (now ${office.size})`);
                 }
             } catch (e) { }
         }
@@ -749,31 +754,35 @@ async function runRound1(ns, state) {
         }
 
         // Hire employees and assign to production roles
+        // Target 9 employees per city (more production capacity)
         const office = await readCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Agriculture', city);
-        if (office.numEmployees < 4) {
-            if (corpData.funds > 1e9) {
-                if (office.size < 4) {
-                    await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, 4 - office.size);
+        const targetEmployees = 9;  // Increased from 4
+        
+        if (office.numEmployees < targetEmployees) {
+            // Employees are cheap - use lower threshold ($10M instead of $1B)
+            if (corpData.funds > 10e6) {
+                if (office.size < targetEmployees) {
+                    const toAdd = Math.min(3, targetEmployees - office.size);  // Add 3 at a time
+                    await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Agriculture', city, toAdd);
                 }
-                for (let i = office.numEmployees; i < 4; i++) {
+                for (let i = office.numEmployees; i < Math.min(targetEmployees, office.size); i++) {
                     await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Agriculture', city);
                 }
-                // Assign to PRODUCTION roles immediately (not R&D!)
-                await assignEmployeesToProduction(ns, 'Agriculture', city, false);
-                log(ns, `Round 1: Hired employees in ${city} and assigned to production`);
+                // Quality-focused distribution (65% Engineers)
+                await assignEmployeesToProduction(ns, 'Agriculture', city, false, 'quality');
+                log(ns, `Round 1: Hired employees in ${city} (${office.numEmployees}→${Math.min(targetEmployees, office.size)})`);
             }
             allCitiesReady = false;
             continue;
         }
         
-        // Check if employees are in production roles
-        const opsCount = office.employeeJobs['Operations'] || 0;
-        if (opsCount === 0 && office.numEmployees >= 4) {
-            // Switch from R&D to production
-            await assignEmployeesToProduction(ns, 'Agriculture', city, false);
-            log(ns, `Round 1: Reassigned ${city} employees to production`);
+        // Check if employees are in quality-focused distribution
+        const engCount = office.employeeJobs['Engineer'] || 0;
+        if (engCount < office.numEmployees * 0.5) {
+            // Switch to quality-focused distribution
+            await assignEmployeesToProduction(ns, 'Agriculture', city, false, 'quality');
+            log(ns, `Round 1: Reassigned ${city} employees to quality focus`);
             allCitiesReady = false;
-        }
     }
 
     if (!allCitiesReady) {
@@ -936,15 +945,20 @@ async function runRound2(ns, state) {
         }
 
         const office = await readCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Chemical', city);
-        if (office.numEmployees < 3) {
-            if (corpData.funds > 1e6) {
-                for (let i = office.numEmployees; i < 3; i++) {
+        const targetEmployees = 9;  // Increased from 3
+        
+        if (office.numEmployees < targetEmployees) {
+            if (corpData.funds > 10e6) {  // Lowered threshold
+                if (office.size < targetEmployees) {
+                    const toAdd = Math.min(3, targetEmployees - office.size);
+                    await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Chemical', city, toAdd);
+                }
+                for (let i = office.numEmployees; i < Math.min(targetEmployees, office.size); i++) {
                     await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Chemical', city);
                 }
-                await assignEmployeesToProduction(ns, 'Chemical', city, false);
+                await assignEmployeesToProduction(ns, 'Chemical', city, false, 'quality');
                 log(ns, `Round 2: Hired employees for Chemical in ${city}`);
             }
-        }
     }
 
     // Set up export routes: Agriculture -> Chemical (Plants)
