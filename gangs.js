@@ -36,6 +36,7 @@ let lastMemberReset = {}; // Tracks when each member last ascended
 
 // Global state
 let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information about the current bitnode
+let bitNodeMults;
 let ownedSourceFiles;
 let myGangFaction = "";
 let isHackGang = false;
@@ -98,6 +99,7 @@ async function initialize(ns) {
     let loggedWaiting = false;
     is4sBought = false;
     resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
+    bitNodeMults = await tryGetBitNodeMultipliers(ns);
     const bitNode = resetInfo.currentNode;
     let haveJoinedAGang = false;
     while (!haveJoinedAGang) {
@@ -117,7 +119,6 @@ async function initialize(ns) {
         }
         await ns.sleep(1000);
     }
-    const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     log(ns, "Collecting gang information...");
     const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
     myGangFaction = myGangInfo.faction;
@@ -370,18 +371,33 @@ async function optimizeGangCrime(ns, myGangInfo) {
 /** @param {NS} ns
  * Logic to reduce crime tiers when we're generating a wanted level **/
 async function fixWantedGainRate(ns, myGangInfo, wantedGainTolerance = 0) {
-    // TODO: steal actual wanted level calcs and strategically pick the member(s) who can bridge the gap while losing the least rep/sec
     let lastWantedLevelGainRate = myGangInfo.wantedLevelGainRate;
-    log(ns, `WARNING: Generating wanted levels (${lastWantedLevelGainRate.toPrecision(3)}/sec > ${wantedGainTolerance.toPrecision(3)}/sec), temporarily assigning random members to Vigilante Justice...`, false, 'warning');
-    for (const member of shuffleArray(myGangMembers.slice())) {
-        if (!crimes.includes(assignedTasks[member])) continue; // This member isn't doing crime, so they aren't contributing to wanted
-        assignedTasks[member] = strWantedReduction;
+    log(ns, `WARNING: Generating wanted levels (${lastWantedLevelGainRate.toPrecision(3)}/sec > ${wantedGainTolerance.toPrecision(3)}/sec), reassigning members to ${strWantedReduction}...`, false, 'warning');
+    const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation');
+    const candidateMembers = Object.values(dictMembers)
+        .filter(member => crimes.includes(assignedTasks[member.name]) && assignedTasks[member.name] !== strWantedReduction)
+        .map(member => {
+            const currentTask = assignedTasks[member.name];
+            const currentWanted = computeWantedGains(myGangInfo, currentTask, member);
+            const reductionWanted = computeWantedGains(myGangInfo, strWantedReduction, member);
+            const currentRep = computeRepGains(myGangInfo, currentTask, member);
+            const reductionRep = computeRepGains(myGangInfo, strWantedReduction, member);
+            const wantedReduction = currentWanted - reductionWanted;
+            const repLoss = currentRep - reductionRep;
+            const score = repLoss <= 0 ? Number.POSITIVE_INFINITY : wantedReduction / repLoss;
+            return { name: member.name, wantedReduction, repLoss, score };
+        })
+        .filter(entry => entry.wantedReduction > 0);
+    candidateMembers.sort((a, b) => b.score - a.score || b.wantedReduction - a.wantedReduction);
+    for (const candidate of candidateMembers) {
+        assignedTasks[candidate.name] = strWantedReduction;
         await updateMemberActivities(ns);
         const wantedLevelGainRate = (myGangInfo = await waitForGameUpdate(ns, myGangInfo)).wantedLevelGainRate;
-        if (wantedLevelGainRate < wantedGainTolerance) return;
+        if (wantedLevelGainRate <= wantedGainTolerance) return;
         if (lastWantedLevelGainRate == wantedLevelGainRate)
-            log(ns, `Warning: Attempt to rollback crime of ${member} to ${assignedTasks[member]} resulted in no change in wanted level gain rate ` +
+            log(ns, `Warning: Attempt to rollback crime of ${candidate.name} to ${assignedTasks[candidate.name]} resulted in no change in wanted level gain rate ` +
                 `(${lastWantedLevelGainRate.toPrecision(3)})`, false, 'warning');
+        lastWantedLevelGainRate = wantedLevelGainRate;
     }
 }
 
@@ -435,10 +451,14 @@ async function tryUpgradeMembers(ns, dictMembers) {
     const maxBudget = 0.99; // Note: To avoid rounding issues and micro-spend race-conditions, only allow budgeting up to 99% of money per tick
     let budget = Math.min(maxBudget, (options['equipment-budget'] || defaultMaxSpendPerTickTransientEquipment)) * homeMoney;
     let augBudget = Math.min(maxBudget, (options['augmentations-budget'] || defaultMaxSpendPerTickPermanentEquipment)) * homeMoney;
-    // Hack: Default aug budget is cut by 1/100 in a few situations (TODO: Add more, like when BitnodeMults are such that gang income is severely nerfed)
     if (!is4sBought)
         is4sBought = await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`);
     if (!is4sBought || resetInfo.currentNode === 8) {
+        budget /= 100;
+        augBudget /= 100;
+    }
+    const gangSoftcap = bitNodeMults?.GangSoftcap ?? 1;
+    if (gangSoftcap <= 0.3) {
         budget /= 100;
         augBudget /= 100;
     }
