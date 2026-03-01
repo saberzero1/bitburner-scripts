@@ -131,16 +131,28 @@ class CorpState {
 
 async function initCorporation(ns, state) {
     const options = state.options;
-    log(ns, `Creating corporation: ${options['corp-name']}`);
-
-    if (options['self-fund']) {
+    
+    // Check what BitNode we're in
+    const resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
+    const currentBitNode = resetInfo.currentNode;
+    const isInBN3 = currentBitNode === 3;
+    
+    // Outside BN3, you MUST self-fund (seed money not available)
+    // In BN3, you can use seed money (free $150B)
+    const mustSelfFund = !isInBN3 || options['self-fund'];
+    
+    if (mustSelfFund) {
         const cost = 150e9;
-        if (ns.getServerMoneyAvailable('home') < cost) {
-            log(ns, `Need ${formatMoney(cost)} to self-fund corporation`, true, 'error');
+        const currentMoney = ns.getServerMoneyAvailable('home');
+        if (currentMoney < cost) {
+            log(ns, `Need ${formatMoney(cost)} to create corporation outside BN3 (have ${formatMoney(currentMoney)})`, true, 'warning');
+            log(ns, `Corporation requires self-funding outside of BitNode 3`, true, 'info');
             return false;
         }
+        log(ns, `Creating self-funded corporation: ${options['corp-name']} (cost: ${formatMoney(cost)})`);
         await execCorpFunc(ns, 'createCorporation(ns.args[0], ns.args[1])', options['corp-name'], true);
     } else {
+        log(ns, `Creating corporation with seed money (BN3): ${options['corp-name']}`);
         await execCorpFunc(ns, 'createCorporation(ns.args[0], ns.args[1])', options['corp-name'], false);
     }
 
