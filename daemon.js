@@ -268,7 +268,6 @@ export async function main(ns) {
 
         disableLogs(ns, ['getServerMaxRam', 'getServerUsedRam', 'getServerMoneyAvailable', 'getServerGrowth', 'getServerSecurityLevel', 'exec', 'scan', 'sleep']);
         // Reset global vars on startup since they persist in memory in certain situations (such as on Augmentation)
-        // TODO: Can probably get rid of all of this now that the entire script is wrapped in the main function.
         lastUpdate = "";
         lastUpdateTime = Date.now();
         maxTargets = 2;
@@ -1027,7 +1026,7 @@ export async function main(ns) {
         dictServerNumPortsRequired = await getServersDict(ns, 'getServerNumPortsRequired');
         dictServerGrowths = await getServersDict(ns, 'getServerGrowth');
         // The "GetServer" object result is used with the formulas API (due to type checking that the parameter is a valid "server" instance)
-        // TODO: There is now a "ns.formulas.mockServer()" function that we can switch to
+        // Note: Could also use ns.formulas.mockServer() for synthetic server objects
         dictInitialServerInfos = await getServersDict(ns, 'getServer');
         // Also immediately retrieve the data which is occasionally updated
         await updateCachedServerData(ns);
