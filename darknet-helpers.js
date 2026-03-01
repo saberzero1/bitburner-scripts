@@ -55,6 +55,16 @@ export async function tryHintBasedAuth(ns, hostname, serverInfo) {
         candidates.add(hint.toLowerCase());
         candidates.add(hint.toUpperCase());
         if (/^\d+$/.test(hint)) candidates.add(Number(hint).toString());
+        const hintDigits = hint.match(/\d/g);
+        if (hintDigits) {
+            const joined = hintDigits.join('');
+            candidates.add(joined);
+            const length = Number.isFinite(serverInfo.passwordLength) ? serverInfo.passwordLength : null;
+            if (length && joined.length >= length) {
+                for (let i = 0; i <= joined.length - length; i++)
+                    candidates.add(joined.slice(i, i + length));
+            }
+        }
     }
     try {
         const logs = await ns.dnet.heartbleed(hostname, { peek: true });

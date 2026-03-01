@@ -75,6 +75,7 @@ class DarknetState {
         this.lastStatusLog = 0;
         this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
         this.probeVersion = 2;
+        this.lastAuthLog = new Map();
 
         // Load persisted passwords from file
         this.loadPasswords(ns);
@@ -264,6 +265,7 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
                 return true;
             }
         }
+        logAuthFailure(ns, state, hostname, serverInfo);
         return false;
     }
 
@@ -294,7 +296,17 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
         // Packet capture failed
     }
 
+    logAuthFailure(ns, state, hostname, serverInfo);
     return false;
+}
+
+function logAuthFailure(ns, state, hostname, serverInfo) {
+    const now = Date.now();
+    const last = state.lastAuthLog.get(hostname) ?? 0;
+    if (now - last < 60000) return;
+    state.lastAuthLog.set(hostname, now);
+    log(ns, `WARN: Unable to auth ${hostname} (model: ${serverInfo.modelId}, format: ${serverInfo.passwordFormat}, ` +
+        `length: ${serverInfo.passwordLength}, hint: ${serverInfo.passwordHint ?? ''})`, false, 'warning');
 }
 
 /**
