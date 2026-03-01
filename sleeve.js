@@ -43,9 +43,9 @@ const unsupportedFactionWorkCooldown = 10 * 60 * 1000;
 let cachedCrimeStats, workByFaction; // Cache of crime statistics and which factions support which work
 let task, lastStatusUpdateTime, lastPurchaseTime, lastPurchaseStatusUpdate, availableAugs, cacheExpiry,
     shockChance, lastRerollTime, bladeburnerCooldown, lastSleeveHp, lastSleeveShock; // State by sleeve
-let factionWorkCache = [], factionWorkCacheExpiry = 0, factionRepCache = {}, factionWorkTypesCache = {};
+let factionWorkCache = [], factionWorkCacheExpiry = 0, factionRepCache = {}, factionWorkTypesCache = {}, factionWorkTypesCacheExpiry = 0;
 let unsupportedFactionWork = {};
-let numSleeves, ownedSourceFiles, playerInGang, playerInBladeburner, bladeburnerCityChaos, bladeburnerContractChances, bladeburnerContractCounts, followPlayerSleeve;
+let numSleeves, ownedSourceFiles, playerInGang, playerInBladeburner, bladeburnerCityChaos, bladeburnerContractChances, bladeburnerContractCounts, followPlayerSleeve, gangFactionName;
 let options;
 
 export function autocomplete(data, _) {
@@ -62,8 +62,9 @@ export async function main(ns) {
     // Ensure the global state is reset (e.g. after entering a new bitnode)
     task = [], lastStatusUpdateTime = [], lastPurchaseTime = [], lastPurchaseStatusUpdate = [], availableAugs = [],
         cacheExpiry = [], shockChance = [], lastRerollTime = [], bladeburnerCooldown = [], lastSleeveHp = [], lastSleeveShock = [];
-    workByFaction = {}, cachedCrimeStats = {}, unsupportedFactionWork = {}, factionWorkTypesCache = {};
+    workByFaction = {}, cachedCrimeStats = {}, unsupportedFactionWork = {}, factionWorkTypesCache = {}, factionWorkTypesCacheExpiry = 0;
     playerInGang = playerInBladeburner = false;
+    gangFactionName = null;
     // Ensure we have access to sleeves
     ownedSourceFiles = await getActiveSourceFiles(ns);
     if (!(10 in ownedSourceFiles))
@@ -146,8 +147,10 @@ async function getFactionWorkTargets(ns, playerInfo) {
             '/Temp/faction-work-types.txt',
             factions
         ) : {};
+        factionWorkTypesCacheExpiry = Date.now() + 60000;
     } catch {
         factionWorkTypesCache = {};
+        factionWorkTypesCacheExpiry = Date.now() + 60000;
     }
     factionWorkCache = Object.keys(factionAugMap)
         .map(name => ({
@@ -189,6 +192,11 @@ async function mainLoop(ns) {
         playerInBladeburner = await getNsDataThroughFile(ns, 'ns.bladeburner.inBladeburner()');
     const playerWorkInfo = await getCurrentWorkInfo(ns);
     if (!playerInGang) playerInGang = !(2 in ownedSourceFiles) ? false : await getNsDataThroughFile(ns, 'ns.gang.inGang()');
+    if (playerInGang && !gangFactionName) {
+        try {
+            gangFactionName = (await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()')).faction;
+        } catch { }
+    }
     let globalReserve = Number(ns.read("reserve.txt") || 0);
     let budget = (playerInfo.money - (options['reserve'] || globalReserve)) * options['aug-budget'];
     // Estimate the cost of sleeves training over the next time interval to see if (ignoring income) we would drop below our reserve.
@@ -335,6 +343,11 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
         const faction = playerWorkInfo.factionName;
+        if (assignedFactions.has(faction)) return;
+        if (gangFactionName && faction === gangFactionName) {
+            unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+            return;
+        }
         if (!(unsupportedFactionWork[faction] > Date.now())) {
             const supportedWorks = (factionWorkTypesCache[faction] ?? works).map(w => w.toLowerCase());
             const allowedWorks = supportedWorks.filter(w => works.includes(w));
@@ -359,6 +372,10 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         const nextFaction = factionTargets.find(f => !assignedFactions.has(f.name));
         if (nextFaction) {
             const faction = nextFaction.name;
+            if (gangFactionName && faction === gangFactionName) {
+                unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+                return;
+            }
             const allowedWorks = (nextFaction.supportedWorks ?? works).filter(w => works.includes(w));
             if (allowedWorks.length == 0) {
                 unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
