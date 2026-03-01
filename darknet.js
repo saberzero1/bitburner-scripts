@@ -2,7 +2,7 @@ import {
     log, getFilePath, getConfiguration, disableLogs, formatMoney, formatRam, formatDuration,
     getNsDataThroughFile, getActiveSourceFiles, getErrorInfo
 } from './helpers.js'
-import { getDarknetPasswordSolver, tryFormatBruteforce } from './darknet-helpers.js'
+import { getDarknetPasswordSolver, tryFormatBruteforce, tryHintBasedAuth } from './darknet-helpers.js'
 
 /**
  * Darknet Orchestrator for BitNode 15
@@ -269,6 +269,13 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
             state.addPassword(ns, hostname, password);
             return true;
         }
+    }
+
+    const hintCandidate = await tryHintBasedAuth(ns, hostname, serverInfo);
+    if (hintCandidate !== null) {
+        log(ns, `SUCCESS: Cracked ${hostname} using hint/logs`);
+        state.addPassword(ns, hostname, hintCandidate);
+        return true;
     }
 
     // Try packet capture as fallback for difficult servers

@@ -22,7 +22,53 @@ const PASSWORD_SOLVERS = {
 };
 
 export function getDarknetPasswordSolver(modelId) {
+    if (!modelId) return null;
+    const normalized = modelId.toLowerCase();
+    if (normalized.includes('zerologon') || normalized.includes('nopassword')) return PASSWORD_SOLVERS['ZeroLogon'];
+    if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return PASSWORD_SOLVERS['SimplePin'];
+    if (normalized.includes('caesar')) return PASSWORD_SOLVERS['Caesar'];
+    if (normalized.includes('vigenere')) return PASSWORD_SOLVERS['Vigenere'];
+    if (normalized.includes('base64')) return PASSWORD_SOLVERS['Base64'];
+    if (normalized.includes('hex')) return PASSWORD_SOLVERS['Hexadecimal'];
+    if (normalized.includes('binary')) return PASSWORD_SOLVERS['Binary'];
+    if (normalized.includes('rot13')) return PASSWORD_SOLVERS['ROT13'];
+    if (normalized.includes('reverse')) return PASSWORD_SOLVERS['Reverse'];
+    if (normalized.includes('atbash')) return PASSWORD_SOLVERS['Atbash'];
+    if (normalized.includes('morse')) return PASSWORD_SOLVERS['MorseCode'];
+    if (normalized.includes('date')) return PASSWORD_SOLVERS['DateFormat'];
+    if (normalized.includes('phone')) return PASSWORD_SOLVERS['PhoneWords'];
+    if (normalized.includes('leet')) return PASSWORD_SOLVERS['LeetSpeak'];
+    if (normalized.includes('word')) return PASSWORD_SOLVERS['WordList'];
     return PASSWORD_SOLVERS[modelId] || null;
+}
+
+export async function tryHintBasedAuth(ns, hostname, serverInfo) {
+    const hint = (serverInfo.passwordHint || '').trim();
+    const candidates = new Set();
+    if (hint) {
+        candidates.add(hint);
+        candidates.add(hint.replace(/\s+/g, ''));
+        candidates.add(hint.toLowerCase());
+        candidates.add(hint.toUpperCase());
+        if (/^\d+$/.test(hint)) candidates.add(Number(hint).toString());
+    }
+    try {
+        const logs = await ns.dnet.heartbleed(hostname, { peek: true });
+        if (logs?.logs) {
+            const parsed = parseDarknetLogs(logs.logs);
+            for (const p of parsed.passwords) candidates.add(p);
+            for (const h of parsed.hints) {
+                candidates.add(h);
+                candidates.add(h.replace(/\s+/g, ''));
+            }
+        }
+    } catch { }
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        const result = await ns.dnet.authenticate(hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
 }
 
 export async function tryFormatBruteforce(ns, hostname, serverInfo) {

@@ -93,6 +93,11 @@ async function authenticateServer(ns, hostname, details, passwords) {
             }
         }
     } else {
+        const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
+        if (hintCandidate !== null) {
+            ns.toast(`Cracked ${hostname}`, 'success');
+            return hintCandidate;
+        }
         const fallback = await tryFormatBruteforce(ns, hostname, details);
         if (fallback !== null) {
             const result = await ns.dnet.authenticate(hostname, fallback);
@@ -291,6 +296,49 @@ function buildCandidate(index, charset, length) {
         value = Math.floor(value / charset.length);
     }
     return output;
+}
+
+async function tryHintBasedAuth(ns, hostname, details) {
+    const hint = (details.passwordHint || '').trim();
+    const candidates = new Set();
+    if (hint) {
+        candidates.add(hint);
+        candidates.add(hint.replace(/\s+/g, ''));
+        candidates.add(hint.toLowerCase());
+        candidates.add(hint.toUpperCase());
+        if (/^\d+$/.test(hint)) candidates.add(Number(hint).toString());
+    }
+    try {
+        const logs = await ns.dnet.heartbleed(hostname, { peek: true });
+        if (logs?.logs) {
+            const parsed = parseDarknetLogs(logs.logs);
+            for (const p of parsed.passwords) candidates.add(p);
+            for (const h of parsed.hints) {
+                candidates.add(h);
+                candidates.add(h.replace(/\s+/g, ''));
+            }
+        }
+    } catch { }
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        const result = await ns.dnet.authenticate(hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
+}
+
+function parseDarknetLogs(logs) {
+    const passwords = [];
+    const hints = [];
+    for (const log of logs) {
+        const pwdMatch = log.match(/password[:\s]+['"]?([^'"}\s]+)/i);
+        if (pwdMatch) passwords.push(pwdMatch[1]);
+        const authMatch = log.match(/auth(?:enticate)?[:\s]+['"]?([^'"}\s]+)/i);
+        if (authMatch) passwords.push(authMatch[1]);
+        const hintMatch = log.match(/hint[:\s]+(.+)/i);
+        if (hintMatch) hints.push(hintMatch[1].trim());
+    }
+    return { passwords, hints };
 }
 
 export function autocomplete(data) {
