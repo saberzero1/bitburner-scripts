@@ -7,7 +7,7 @@ const argsSchema = [
     ['new-file', []], // If a repository listing fails, only files returned by ns.ls() will be downloaded. You can add additional files to seek out here.
     ['subfolder', ''], // Can be set to download to a sub-folder that is not part of the remote repository structure
     ['extension', ['.js', '.ns', '.txt', '.script']], // Files to download by extension
-    ['omit-folder', ['Temp/']], // Folders to omit when getting a list of files to update (TODO: This may be obsolete now that we get a list of files from github itself.)
+    ['omit-folder', ['Temp/']],
 ];
 
 export function autocomplete(data, args) {
@@ -87,9 +87,10 @@ async function repositoryListing(ns, folder = '') {
         // Expect an array of objects: [{path:"", type:"[file|dir]" },{...},...]
         response = await response.json(); // Deserialized
         // Sadly, we must recursively retrieve folders, which eats into our 60 free API requests per day.
-        const folders = response.filter(f => f.type == "dir").map(f => f.path);
+        const folders = response.filter(f => f.type == "dir" && !options['omit-folder'].some(dir => f.path.startsWith(dir))).map(f => f.path);
         let files = response.filter(f => f.type == "file").map(f => f.path)
-            .filter(f => options.extension.some(ext => f.endsWith(ext)));
+            .filter(f => options.extension.some(ext => f.endsWith(ext)))
+            .filter(f => !options['omit-folder'].some(dir => f.startsWith(dir)));
         ns.print(`The following files exist at ${listUrl}\n${files.join(", ")}`);
         for (const folder of folders)
             files = files.concat((await repositoryListing(ns, folder))
@@ -100,7 +101,7 @@ async function repositoryListing(ns, folder = '') {
         ns.tprint(`WARNING: Failed to get a repository listing (GitHub API request limit of 60 reached?): ${listUrl}` +
             `\nResponse Contents (if available): ${JSON.stringify(response ?? '(N/A)')}\nError: ${String(error)}`);
         // Fallback, assume the user already has a copy of all files in the repo, and use it as a directory listing
-        return ns.ls('home').filter(name => options.extension.some(ext => f.endsWith(ext)) &&
+        return ns.ls('home').filter(name => options.extension.some(ext => name.endsWith(ext)) &&
             !options['omit-folder'].some(dir => name.startsWith(dir)));
     }
 }

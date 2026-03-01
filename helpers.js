@@ -10,6 +10,7 @@ export function formatMoney(num, maxSignificantFigures = 6, maxDecimalPlaces = 3
 }
 
 const symbols = ["", "k", "m", "b", "t", "q", "Q", "s", "S", "o", "n", "e33", "e36", "e39"];
+let nextCompletionPort = 1;
 
 /**
  * Return a formatted representation of the monetary amount using scale sympols (e.g. 6.50M)
@@ -25,8 +26,18 @@ export function formatNumberShort(num, maxSignificantFigures = 6, maxDecimalPlac
     if (Math.abs(num) > 10 ** (3 * symbols.length)) // If we've exceeded our max symbol, switch to exponential notation
         return num.toExponential(Math.min(maxDecimalPlaces, maxSignificantFigures - 1));
     for (var i = 0, sign = Math.sign(num), num = Math.abs(num); num >= 1000 && i < symbols.length; i++) num /= 1000;
-    // TODO: A number like 9.999 once rounded to show 3 sig figs, will become 10.00, which is now 4 sig figs.
-    return ((sign < 0) ? "-" : "") + num.toFixed(Math.max(0, Math.min(maxDecimalPlaces, maxSignificantFigures - Math.floor(1 + Math.log10(num))))) + symbols[i];
+    let decimals = Math.max(0, Math.min(maxDecimalPlaces, maxSignificantFigures - Math.floor(1 + Math.log10(num))));
+    let rounded = Number(num.toFixed(decimals));
+    if (rounded >= 1000 && i < symbols.length - 1) {
+        rounded = rounded / 1000;
+        i++;
+    }
+    const sigDigits = rounded === 0 ? 1 : Math.floor(1 + Math.log10(Math.abs(rounded)));
+    if (sigDigits > maxSignificantFigures) {
+        decimals = Math.max(0, maxSignificantFigures - sigDigits);
+        rounded = Number(rounded.toFixed(decimals));
+    }
+    return ((sign < 0) ? "-" : "") + rounded.toFixed(decimals) + symbols[i];
 }
 
 /** Convert a shortened number back into a value */
@@ -151,10 +162,18 @@ export function getFnIsAliveViaNsPs(ns) {
  * @param {string?} fName (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
  * @param {any[]?} args args to be passed in as arguments to command being run as a new script.
  * @param {boolean?} verbose (default false) If set to true, pid and result of command are logged.
- * TODO: Switch to an args object, this is getting ridiculous
  **/
 export async function getNsDataThroughFile(ns, command, fName = null, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50, silent = false) {
     checkNsInstance(ns, '"getNsDataThroughFile"');
+    if (fName && typeof fName === 'object' && !Array.isArray(fName)) {
+        const opts = fName;
+        fName = opts.fName ?? null;
+        args = opts.args ?? [];
+        verbose = opts.verbose ?? false;
+        maxRetries = opts.maxRetries ?? 5;
+        retryDelayMs = opts.retryDelayMs ?? 50;
+        silent = opts.silent ?? false;
+    }
     if (!verbose) disableLogs(ns, ['run', 'isRunning']);
     return await getNsDataThroughFile_Custom(ns, ns.run, command, fName, args, verbose, maxRetries, retryDelayMs, silent);
 }
@@ -191,17 +210,7 @@ function checkBackwardsCompatibility(ns, command) {
             `\nOriginal: ${command}` +
             `\n Updated: ${alteredCommand}`);
 
-    // Workaround for v2.3.0 deprecations. TODO: Remove when the warning is gone from all game versions
-    // Avoid serializing ns.getPlayer() properties that generate warnings. (This doesn't need to be logged)
-    if (command === "ns.getPlayer()")
-        alteredCommand = `( ()=> { let player = ns.getPlayer();
-            const excludeProperties = ['playtimeSinceLastAug', 'playtimeSinceLastBitnode', 'bitNodeN'];
-            return Object.keys(player).reduce((pCopy, key) => {
-                if (!excludeProperties.includes(key))
-                   pCopy[key] = player[key];
-                return pCopy;
-            }, {});
-        })()`;
+    // Note: v2.3.0 deprecation workarounds were removed - game is now v2.8.1+
 
     return alteredCommand;
 }
@@ -235,6 +244,15 @@ function getDefaultCommandFileName(command, ext = '.txt') {
  **/
 export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = null, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50, silent = false) {
     checkNsInstance(ns, '"getNsDataThroughFile_Custom"');
+    if (fName && typeof fName === 'object' && !Array.isArray(fName)) {
+        const opts = fName;
+        fName = opts.fName ?? null;
+        args = opts.args ?? [];
+        verbose = opts.verbose ?? false;
+        maxRetries = opts.maxRetries ?? 5;
+        retryDelayMs = opts.retryDelayMs ?? 50;
+        silent = opts.silent ?? false;
+    }
     // If any args were skipped by passing null or undefined, set them to the default
     if (args == null) args = []; if (verbose == null) verbose = false;
     if (maxRetries == null) maxRetries = 5; if (retryDelayMs == null) retryDelayMs = 50; if (silent == null) silent = false;
@@ -245,26 +263,25 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
 
     // Create a file that will store the results of whatever command is executed.
     fName = fName || getDefaultCommandFileName(command);
-    const fNameCommand = fName + '.js'
     // Pre-write contents to the file that will allow us to detect if our temp script never got run
     const initialContents = "<Insufficient RAM>";
     ns.write(fName, initialContents, 'w');
 
-    // Prepare a command that will write out a new file containing the results of the command
-    // unless it already exists with the same contents (saves time/ram to check first)
-    // If an error occurs, it will write the error message to the file (and this will be detected when we read the result)
-    // TODO: (Issue #481) Add special handling for null and undefined results, so that functions returning no value can also be invoked via this function.
-    const commandToFile = `let r;try{r=JSON.stringify(\n` +
-        `    ${command}\n` +
-        `, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}\n` +
-        `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w')`;
+    const completionPort = nextCompletionPort = (nextCompletionPort % 20) + 1;
+    ns.clearPort(completionPort);
+    const fNameCommand = `${fName}.${completionPort}.js`
+    const commandToFile = `let r;try{const v=(${command});` +
+        `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
+        `r=JSON.stringify({ $type:'result', $value:w }, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}` +
+        `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w');` +
+        `if (typeof ns.writePort === 'function') ns.writePort(${completionPort}, 1);`;
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, verbose, maxRetries, retryDelayMs, silent);
     // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
     const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
-    await waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose);
+    await waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose, completionPort);
     if (verbose) log(ns, `Process ${pid} is done. Reading the contents of ${fName}...`);
-    // Read the file, with auto-retries if it fails // TODO: Unsure reading a file can fail or needs retrying.
+    // Read the file, with auto-retries if it fails
     let lastRead;
     const fileData = await autoRetry(ns, () => ns.read(fName),
         f => (lastRead = f) !== undefined && f !== "" && f !== initialContents && !(typeof f == "string" && f.startsWith("ERROR: ")),
@@ -282,6 +299,10 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
 
 /** Allows us to serialize types not normally supported by JSON.serialize */
 export function jsonReplacer(key, val) {
+    if (val === undefined)
+        return { $type: 'undefined' };
+    if (val === null)
+        return { $type: 'null' };
     if (val === Infinity)
         return { $type: 'number', $value: 'Infinity' };
     if (val === -Infinity)
@@ -294,6 +315,8 @@ export function jsonReplacer(key, val) {
         return { $type: 'Map', $value: [...val] };
     if (val instanceof Set)
         return { $type: 'Set', $value: [...val] };
+    if (val && typeof val === 'object' && val.name === 'ScriptDeath')
+        return { $type: 'ScriptDeath', $value: { name: val.name, message: val.message, stack: val.stack } };
     return val;
 }
 
@@ -303,6 +326,14 @@ export function jsonReviver(key, val) {
         return val;
     if (val.$type == 'number')
         return Number.parseFloat(val.$value);
+    if (val.$type == 'undefined')
+        return undefined;
+    if (val.$type == 'null')
+        return null;
+    if (val.$type == 'ScriptDeath')
+        return val.$value;
+    if (val.$type == 'result')
+        return val.$value;
     if (val.$type == 'bigint')
         return BigInt(val.$value);
     if (val.$type === 'Map')
@@ -310,6 +341,24 @@ export function jsonReviver(key, val) {
     if (val.$type === 'Set')
         return new Set(val.$value);
     return val;
+}
+
+export async function measureRepGainRate(ns, fnSampleReputation, ticks = 1) {
+    checkNsInstance(ns, '"measureRepGainRate"');
+    const initial = await fnSampleReputation();
+    let last = initial;
+    let count = 0;
+    const start = Date.now();
+    while (count < ticks && Date.now() - start < 2000 * ticks) {
+        await ns.sleep(50);
+        const current = await fnSampleReputation();
+        if (current !== last) {
+            last = current;
+            count++;
+        }
+    }
+    const elapsed = (Date.now() - start) / 1000;
+    return elapsed > 0 ? (last - initial) / elapsed : 0;
 }
 
 /** Evaluate an arbitrary ns command by writing it to a new script and then running or executing it.
@@ -429,7 +478,7 @@ export async function waitForProcessToComplete(ns, pid, verbose = false) {
  * @param {(pid: number) => Promise<boolean>} fnIsAlive A single-argument function used to start the new sript, e.g. `ns.isRunning` or `pid => ns.ps("home").some(process => process.pid === pid)`
  * @param {number} pid The process id to monitor
  * @param {boolean?} verbose (default false) If set to true, pid and result of command are logged. **/
-export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose = false) {
+export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose = false, completionPort = null) {
     checkNsInstance(ns, '"waitForProcessToComplete_Custom"');
     if (!verbose) disableLogs(ns, ['sleep']);
     // Wait for the PID to stop running (cheaper than e.g. deleting (rm) a possibly pre-existing file and waiting for it to be recreated)
@@ -442,7 +491,13 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
             break; // Script is done running
         }
         if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
-        await ns.sleep(sleepMs); // TODO: If we can switch to `await nextPortWrite(pid)` for signalling temp script completion, it would return faster.
+        if (completionPort) {
+            if (ns.peek(completionPort) !== "NULL PORT DATA")
+                ns.readPort(completionPort);
+            else
+                await ns.sleep(sleepMs);
+        } else
+            await ns.sleep(sleepMs);
         sleepMs = Math.min(sleepMs * 2, 200);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
@@ -457,7 +512,7 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
 function asError(error) {
     return error instanceof Error ? error :
         new Error(typeof error === 'string' ? error :
-            JSON.stringify(error, jsonReplacer)); // TODO: jsonReplacer to support ScriptDeath objects and other custom Bitburner throws
+        JSON.stringify(error, jsonReplacer));
 }
 
 /** Helper to retry something that failed temporarily (can happen when e.g. we temporarily don't have enough RAM to run)
@@ -555,9 +610,7 @@ export function log(ns, message = "", alsoPrintToTerminal = false, toastStyle = 
     if (toastStyle) ns.toast(message.length <= maxToastLength ? message : message.substring(0, maxToastLength - 3) + "...", toastStyle);
     if (alsoPrintToTerminal) {
         ns.tprint(message);
-        // TODO: Find a way write things logged to the terminal to a "permanent" terminal log file, preferably without this becoming an async function.
-        //       Perhaps we copy logs to a port so that a separate script can optionally pop and append them to a file.
-        //ns.write("log.terminal.txt", message + '\n', 'a'); // Note: we should get away with not awaiting this promise since it's not a script file
+        ns.write("/Temp/terminal-log.txt", `${formatDateTime(new Date())} ${message}\n`, 'a');
     }
     return message;
 }
@@ -615,9 +668,8 @@ export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, in
 
     // If the user is currently in a given bitnode, they will have its features unlocked. Include these "effective" levels if requested;
     if (includeLevelsFromCurrentBitnode && resetInfo.currentNode != 0) {
-        // In some Bitnodes, we get the *effects* of source file level 3 just by being in the bitnode
-        // TODO: This is true of some BNs (BN4), but not others (BN14.2), Check them all!
-        let effectiveSfLevel = [4, 8].includes(resetInfo.currentNode) ? 3 : 1;
+        const effectiveLevelOverrides = { 4: 3, 8: 3 };
+        const effectiveSfLevel = effectiveLevelOverrides[resetInfo.currentNode] ?? 1;
         dictSourceFiles[resetInfo.currentNode] = Math.max(effectiveSfLevel, dictSourceFiles[resetInfo.currentNode] || 0);
     }
 
@@ -652,8 +704,7 @@ export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile
     if (canGetBitNodeMultipliers) {
         try {
             const mults = await fnGetNsDataThroughFile(ns, 'ns.getBitNodeMultipliers()', '/Temp/bitNode-multipliers.txt', null, null, null, null, /*silent:*/true);
-            // TODO: Remove after v3.0.0 is released on stable.
-            // If running an older version of the game, some property names need to be updated.
+            // Backwards-compatible property name mappings (v2.x → v3.x naming)
             mults.FavorToDonateToFaction ??= mults.RepToDonateToFaction;
             mults.CloudServerCost ??= mults.PurchasedServerCost;
             mults.CloudServerSoftcap ??= mults.PurchasedServerSoftcap;
@@ -850,11 +901,21 @@ export function getConfiguration(ns, argsSchema) {
     }
     // Return the result of using the in-game args parser to combine the defaults with the command line args provided
     try {
-        // TODO: ns.flags will aggressively convert args to the destination type, rather than produce an error.
-        // For example, passing in a value of "1m" for a numeric arg will result in a value of Number.NaN being passed,
-        // rather than appropriately notifying the user that "1m" is a string, so not a valid value (resulting in Bug #237 )
-        // As a result, we may wish to stop using ns.flags below and implement our own arg parsing, as painful as that may be.
         const finalOptions = ns.flags(overriddenSchema);
+        for (const [key, defaultValue] of Object.entries(dictArgsSchema)) {
+            const finalValue = finalOptions[key];
+            if (defaultValue == null) continue;
+            if (Array.isArray(defaultValue) && !Array.isArray(finalValue))
+                throw new Error(`Invalid value for --${key}. Expected array, got ${typeof finalValue}.`);
+            if (typeof defaultValue === 'number') {
+                if (typeof finalValue !== 'number' || Number.isNaN(finalValue))
+                    throw new Error(`Invalid numeric value for --${key}: ${finalValue}`);
+            }
+            if (typeof defaultValue === 'boolean' && typeof finalValue !== 'boolean')
+                throw new Error(`Invalid boolean value for --${key}: ${finalValue}`);
+            if (typeof defaultValue === 'string' && typeof finalValue !== 'string')
+                throw new Error(`Invalid string value for --${key}: ${finalValue}`);
+        }
         // Summarize the final set of settings the script is being run with
         log(ns, `INFO: Running ${scriptName} with the following settings:` +
             Object.keys(finalOptions).filter(a => a != "_").map(key => {

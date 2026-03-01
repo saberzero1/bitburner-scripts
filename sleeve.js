@@ -38,11 +38,14 @@ const sleeveBbContractNames = ["Tracking", "Bounty Hunter", "Retirement"];
 const minBbContracts = 2; // There should be this many contracts remaining before sleeves attempt them
 const minBbProbability = 0.99; // Player chance should be this high before sleeves attempt contracts
 const waitForContractCooldown = 60 * 1000; // 1 minute - Cooldown when contract count or probability gets too low
+const unsupportedFactionWorkCooldown = 10 * 60 * 1000;
 
 let cachedCrimeStats, workByFaction; // Cache of crime statistics and which factions support which work
 let task, lastStatusUpdateTime, lastPurchaseTime, lastPurchaseStatusUpdate, availableAugs, cacheExpiry,
     shockChance, lastRerollTime, bladeburnerCooldown, lastSleeveHp, lastSleeveShock; // State by sleeve
-let numSleeves, ownedSourceFiles, playerInGang, playerInBladeburner, bladeburnerCityChaos, bladeburnerContractChances, bladeburnerContractCounts, followPlayerSleeve;
+let factionWorkCache = [], factionWorkCacheExpiry = 0, factionRepCache = {}, factionWorkTypesCache = {}, factionWorkTypesCacheExpiry = 0;
+let unsupportedFactionWork = {};
+let numSleeves, ownedSourceFiles, playerInGang, playerInBladeburner, bladeburnerCityChaos, bladeburnerContractChances, bladeburnerContractCounts, followPlayerSleeve, gangFactionName;
 let options;
 
 export function autocomplete(data, _) {
@@ -59,8 +62,9 @@ export async function main(ns) {
     // Ensure the global state is reset (e.g. after entering a new bitnode)
     task = [], lastStatusUpdateTime = [], lastPurchaseTime = [], lastPurchaseStatusUpdate = [], availableAugs = [],
         cacheExpiry = [], shockChance = [], lastRerollTime = [], bladeburnerCooldown = [], lastSleeveHp = [], lastSleeveShock = [];
-    workByFaction = {}, cachedCrimeStats = {};
+    workByFaction = {}, cachedCrimeStats = {}, unsupportedFactionWork = {}, factionWorkTypesCache = {}, factionWorkTypesCacheExpiry = 0;
     playerInGang = playerInBladeburner = false;
+    gangFactionName = null;
     // Ensure we have access to sleeves
     ownedSourceFiles = await getActiveSourceFiles(ns);
     if (!(10 in ownedSourceFiles))
@@ -120,6 +124,56 @@ async function getCurrentWorkInfo(ns) {
     return (await getNsDataThroughFile(ns, 'ns.singularity.getCurrentWork()')) ?? {};
 }
 
+async function getFactionWorkTargets(ns, playerInfo) {
+    if (Date.now() < factionWorkCacheExpiry) return factionWorkCache;
+    const ownedAugs = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations(true)');
+    const factions = playerInfo.factions ?? [];
+    const factionAugMap = factions.length > 0 ? await getNsDataThroughFile(
+        ns,
+        'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getAugmentationsFromFaction(f)]))',
+        '/Temp/faction-augs.txt',
+        factions
+    ) : {};
+    factionRepCache = factions.length > 0 ? await getNsDataThroughFile(
+        ns,
+        'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionRep(f)]))',
+        '/Temp/faction-rep.txt',
+        factions
+    ) : {};
+    try {
+        factionWorkTypesCache = factions.length > 0 ? await getNsDataThroughFile(
+            ns,
+            'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionWorkTypes(f)]))',
+            '/Temp/faction-work-types.txt',
+            factions
+        ) : {};
+        factionWorkTypesCacheExpiry = Date.now() + 60000;
+    } catch {
+        factionWorkTypesCache = {};
+        factionWorkTypesCacheExpiry = Date.now() + 60000;
+    }
+    factionWorkCache = Object.keys(factionAugMap)
+        .map(name => ({
+            name,
+            unownedCount: factionAugMap[name].filter(aug => !ownedAugs.includes(aug)).length,
+            rep: factionRepCache[name] ?? 0,
+            supportedWorks: (factionWorkTypesCache[name] ?? works),
+            supportedWorksLower: (factionWorkTypesCache[name] ?? works).map(w => w.toLowerCase())
+        }))
+        .filter(entry => entry.unownedCount > 0 && !(unsupportedFactionWork[entry.name] > Date.now()))
+        .filter(entry => entry.supportedWorksLower.some(w => works.includes(w)))
+        .sort((a, b) => (b.unownedCount - a.unownedCount) || (a.rep - b.rep) || a.name.localeCompare(b.name));
+    factionWorkCacheExpiry = Date.now() + 60000;
+    return factionWorkCache;
+}
+
+function getPreferredFactionWorkIndex(sleeve) {
+    const physicalAvg = (sleeve.skills.strength + sleeve.skills.defense + sleeve.skills.dexterity + sleeve.skills.agility) / 4;
+    if (sleeve.skills.hacking >= physicalAvg && sleeve.skills.hacking >= sleeve.skills.charisma) return works.indexOf('hacking');
+    if (sleeve.skills.charisma >= physicalAvg) return works.indexOf('field');
+    return works.indexOf('security');
+}
+
 /** @param {NS} ns
  * @param {number} numSleeves
  * @returns {Promise<SleevePerson[]>} */
@@ -139,10 +193,15 @@ async function mainLoop(ns) {
         playerInBladeburner = await getNsDataThroughFile(ns, 'ns.bladeburner.inBladeburner()');
     const playerWorkInfo = await getCurrentWorkInfo(ns);
     if (!playerInGang) playerInGang = !(2 in ownedSourceFiles) ? false : await getNsDataThroughFile(ns, 'ns.gang.inGang()');
+    if (playerInGang && !gangFactionName) {
+        try {
+            gangFactionName = (await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()')).faction;
+        } catch { }
+    }
     let globalReserve = Number(ns.read("reserve.txt") || 0);
     let budget = (playerInfo.money - (options['reserve'] || globalReserve)) * options['aug-budget'];
     // Estimate the cost of sleeves training over the next time interval to see if (ignoring income) we would drop below our reserve.
-    const costByNextLoop = interval / 1000 * task.filter(t => t.startsWith("train")).length * 12000; // TODO: Training cost/sec seems to be a bug. Should be 1/5 this ($2400/sec)
+    const costByNextLoop = interval / 1000 * task.filter(t => t.startsWith("train")).length * 2400;
     // Get time in current bitnode (to cap how long we'll train sleeves)
     const timeInBitnode = Date.now() - (await getNsDataThroughFile(ns, 'ns.getResetInfo()')).lastNodeReset
     let canTrain = !options['disable-training'] &&
@@ -181,6 +240,12 @@ async function mainLoop(ns) {
             followPlayerSleeve ??= i; // Skips assignment if previously assigned
     followPlayerSleeve ??= 0; // If all have shock, use the first sleeve
 
+    const currentSleeveTasks = await getNsDataThroughFile(ns, `ns.args.map(i => ns.sleeve.getTask(i))`,
+        `/Temp/sleeve-getTask-all.txt`, [...Array(numSleeves).keys()]);
+    const assignedFactions = new Set(currentSleeveTasks
+        .filter(t => t?.type === 'FACTION')
+        .map(t => t.factionName)
+        .filter(Boolean));
     for (let i = 0; i < numSleeves; i++) {
         let sleeve = sleeveInfo[i]; // For convenience, merge all sleeve stats/info into one object
         // Manage sleeve augmentations (if available)
@@ -189,7 +254,11 @@ async function mainLoop(ns) {
 
         // Decide what we think the sleeve should be doing for the next little while
         let [designatedTask, command, args, statusUpdate] =
-            await pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain);
+            await pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain, assignedFactions);
+        if (typeof designatedTask === 'string' && designatedTask.startsWith("work for faction '")) {
+            const factionMatch = designatedTask.match(/work for faction '([^']+)'/);
+            if (factionMatch) assignedFactions.add(factionMatch[1]);
+        }
 
         // After picking sleeve tasks, take a note of the sleeve's health at the end of the prior loop so we can detect failures
         [lastSleeveHp[i], lastSleeveShock[i]] = [sleeve.hp.current, sleeve.shock];
@@ -208,13 +277,7 @@ async function mainLoop(ns) {
     }
 }
 
-/** Picks the best task for a sleeve, and returns the information to assign and give status updates for that task.
- * @param {NS} ns
- * @param {Player} playerInfo
- * @param {{ type: "COMPANY"|"FACTION"|"CLASS"|"CRIME", cyclesWorked: number, crimeType: string, classType: string, location: string, companyName: string, factionName: string, factionWorkType: string }} playerWorkInfo
- * @param {SleevePerson} sleeve
- * @returns {Promise<[string, string, any[], string]>} a 4-tuple of task name, command, args, and status message */
-async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain) {
+async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain, assignedFactions) {
     // Initialize sleeve dicts on first loop
     if (lastSleeveHp[i] === undefined) lastSleeveHp[i] = sleeve.hp.current;
     if (lastSleeveShock[i] === undefined) lastSleeveShock[i] = sleeve.shock;
@@ -280,17 +343,62 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     }
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
-        // TODO: We should be able to borrow logic from work-for-factions.js to have more sleeves work for useful factions / companies
-        // We'll cycle through work types until we find one that is supported. TODO: Auto-determine the most productive faction work to do.
         const faction = playerWorkInfo.factionName;
-        const work = works[workByFaction[faction] || 0];
-        return [
-            `work for faction '${faction}' (${work})`,
-            `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-            [i, faction, work],
-            `helping earn rep with faction ${faction} by doing ${work} work.`
-        ];
-    } // Same as above if player is currently working for a megacorp
+        if (!assignedFactions.has(faction)) {
+            if (gangFactionName && faction === gangFactionName)
+                unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+            else if (!(unsupportedFactionWork[faction] > Date.now())) {
+                const supportedWorksRaw = factionWorkTypesCache[faction] ?? works;
+                const supportedWorks = supportedWorksRaw.map(w => w.toLowerCase());
+                const allowedWorks = supportedWorks.filter(w => works.includes(w));
+                if (allowedWorks.length == 0) {
+                    unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+                } else {
+                    const preferredIndex = getPreferredFactionWorkIndex(sleeve);
+                    workByFaction[faction] ??= preferredIndex;
+                    let work = works[workByFaction[faction] || 0];
+                    if (!allowedWorks.includes(work)) work = allowedWorks[0];
+                    const workRaw = supportedWorksRaw.find(w => w.toLowerCase() == work) ?? supportedWorksRaw[0];
+                    return [
+                        `work for faction '${faction}' (${work})`,
+                        `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                        [i, faction, workRaw],
+                        `helping earn rep with faction ${faction} by doing ${work} work.`
+                    ];
+                }
+            }
+        }
+    }
+    if (i != followPlayerSleeve) {
+        const factionTargets = await getFactionWorkTargets(ns, playerInfo);
+        const nextFaction = factionTargets.find(f => !assignedFactions.has(f.name));
+        if (nextFaction) {
+            const faction = nextFaction.name;
+            if (gangFactionName && faction === gangFactionName)
+                unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+            else {
+                const supportedWorksRaw = nextFaction.supportedWorks ?? works;
+                const supportedWorksLower = nextFaction.supportedWorksLower ?? supportedWorksRaw.map(w => w.toLowerCase());
+                const allowedWorks = supportedWorksLower.filter(w => works.includes(w));
+                if (allowedWorks.length == 0)
+                    unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+                else {
+                    const preferredIndex = getPreferredFactionWorkIndex(sleeve);
+                    workByFaction[faction] ??= preferredIndex;
+                    let work = works[workByFaction[faction] || 0];
+                    if (!allowedWorks.includes(work)) work = allowedWorks[0];
+                    const workRaw = supportedWorksRaw.find(w => w.toLowerCase() == work) ?? supportedWorksRaw[0];
+                    return [
+                        `work for faction '${faction}' (${work})`,
+                        `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                        [i, faction, workRaw],
+                        `earning rep with faction ${faction} by doing ${work} work.`
+                    ];
+                }
+            }
+        }
+    }
+    // Same as above if player is currently working for a megacorp
     if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY") {
         const companyName = playerWorkInfo.companyName;
         return [
@@ -398,6 +506,7 @@ async function setSleeveTask(ns, i, designatedTask, command, args) {
         let nextWorkIndex = (workByFaction[faction] || 0) + 1;
         if (nextWorkIndex >= works.length) {
             log(ns, `WARN: Failed to ${strAction}. None of the ${works.length} work types appear to be supported. Will loop back and try again.`, true, 'warning');
+            unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
             nextWorkIndex = 0;
         } else
             log(ns, `INFO: Failed to ${strAction} - work type may not be supported. Trying the next work type (${works[nextWorkIndex]})`);

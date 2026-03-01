@@ -156,7 +156,21 @@ export async function main(ns) {
         await waitForProcessToComplete(ns, pid, true);
     }
 
-    // TODO: If in corporation, and buyback shares is available, buy as many as we can afford
+    try {
+        const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+        if (hasCorp) {
+            const corpInfo = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation()');
+            if (corpInfo.public && corpInfo.issuedShares > 0) {
+                const player = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+                const affordableShares = Math.floor(player.money / corpInfo.sharePrice);
+                const sharesToBuy = Math.min(corpInfo.issuedShares, affordableShares);
+                if (sharesToBuy > 0) {
+                    log(ns, `Buying back ${sharesToBuy} corporation shares...`, true, 'info');
+                    await getNsDataThroughFile(ns, 'ns.corporation.buyBackShares(ns.args[0])', null, [sharesToBuy]);
+                }
+            }
+        }
+    } catch { }
 
     // STEP 10: WAIT: For money to stop decreasing, so we know that external scripts have bought what they could.
     log(ns, 'Waiting for purchasing to stop...', true, 'info');
@@ -172,15 +186,16 @@ export async function main(ns) {
         lastMoney = money;
     }
 
-    // TODO STEP 11: Accept any outstanding faction invitations, and claim our +1 free favour if available.
-    /*
-    const factionInvites = ns.singularity.checkFactionInvitations()
-    if (factionInvites.length > 0)
-        factionInvites.forEach(factionName => ns.singularity.joinFaction(factionName));
-    if (ns.singularity.exportGameBonus())
-        ns.singularity.exportGame();
-    // TODO: No way to close the pop-up save dialog, which is a deal-breaker for me.
-    */
+    const factionInvites = await getNsDataThroughFile(ns, 'ns.singularity.checkFactionInvitations()');
+    if (factionInvites.length > 0) {
+        pid = await runCommand(ns, 'ns.args.forEach(f => ns.singularity.joinFaction(f))', '/Temp/join-factions.js', factionInvites);
+        await waitForProcessToComplete(ns, pid, true);
+    }
+    const canExport = await getNsDataThroughFile(ns, 'ns.singularity.exportGameBonus()');
+    if (canExport) {
+        log(ns, 'Exporting game to claim free faction favor...', true, 'info');
+        await getNsDataThroughFile(ns, 'ns.singularity.exportGame()');
+    }
 
     // STEP 4 REDUX: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
     log(ns, 'Seeing if we can afford any other augmentations...', true, 'info');

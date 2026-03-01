@@ -53,7 +53,7 @@ export async function main(ns) {
         2.1,  // Easy.   Unlocks gangs, which reduces the need to grind faction and company rep for getting access to most augmentations, speeding up all BNs
 
         // 2nd Priority: More new features, from Harder BNs. Things will slow down for a while, but the new features should pay in dividends for all future BNs
-        10.1, // Hard.   Unlock Sleeves (which tremendously speed along gangs outside of BN2) and grafting (can speed up slow rep-gain BNs). // TODO: Buying / upgrading sleeve mem has no API, requires manual interaction. Can we automate this with UI clicking like casino.js?
+        10.1, // Hard.   Unlock Sleeves (which tremendously speed along gangs outside of BN2) and grafting (can speed up slow rep-gain BNs).
         8.2,  // Hard.   8.1 immediately unlocks stocks, 8.2 doubles stock earning rate with shorts. Stocks are never nerfed in any BN (4S can be made too pricey though), and we have a good pre-4S stock script.
         13.1, // Hard.   Unlock Stanek's Gift. We've put a lot of effort into min/maxing the Tetris, so we should try to get it early, even though it's a hard BN. I might change my mind and push this down if it proves too slow.
         7.1,  // Hard.   Unlocks the bladeburner API (and bladeburner outside of BN 6/7). Many recommend it before BN9 since it ends up being a faster win condition in some of the tougher bitnodes ahead.
@@ -250,6 +250,7 @@ export async function main(ns) {
         await checkOnDaedalusStatus(ns, player, stocksValue);
         await checkIfBnIsComplete(ns, player);
         await maybeAcceptStaneksGift(ns, player);
+        await maybeUpgradeSleeveMemory(ns, player);
         await checkOnRunningScripts(ns, player);
         await maybeDoCasino(ns, player);
         await maybeInstallAugmentations(ns, player);
@@ -462,7 +463,7 @@ export async function main(ns) {
 
         // Use the new special singularity function to automate entering a new BN
         pid = await runCommand(ns, `ns.singularity.destroyW0r1dD43m0n(ns.args[0], ns.args[1]` +
-            `, { sourceFileOverrides: new Map() }` + // Work around a long-standing bug on bitburner-official.github.io TODO: Remove when no longer needed
+            `, { sourceFileOverrides: new Map() }` + // Explicit empty map for safety
             `)`, '/Temp/singularity-destroyW0r1dD43m0n.js', [nextBn, ns.getScriptName()]);
         if (pid) {
             log(ns, `SUCCESS: Initiated process ${pid} to execute 'singularity.destroyW0r1dD43m0n' with args: [${nextBn}, ${ns.getScriptName()}]`, true, 'success')
@@ -585,65 +586,58 @@ export async function main(ns) {
         let daemonArgs = []; // The args we currently want deamon to have
         let daemonRelaunchMessage; // Will hold any special messages we want to show the user if relaunching daemon.
 
-        // If daemon.js is already running in --looping-mode, we should not restart it, because
-        // TODO: currently daemon.js has no ability to kill it's loops on shutdown (so the next instance will be stuck with no RAM available)
-        if (existingDaemon?.args.includes("--looping-mode"))
-            daemonArgs = existingDaemon.args;
-        else {
-            // Determine the arguments we want to run daemon.js with. We will either pass these directly, or through stanek.js if we're running it first.
-            const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, tweak daemon to increase income rates
-            // When our hack level gets sufficiently high, hack/grow/weaken go so fast that spawning new scripts for each cycle becomes very
-            // expensive / laggy. To help with this, daemon.js supports "looping mode", to just spawn one long-lived script that does H/G/W in a loop.
-            if (false /* TODO: LOOPING MODE DISABLED UNTIL WORKING BETTER */ && player.skills.hacking >= hackThreshold) {
-                daemonArgs = ["--looping-mode", "--cycle-timing-delay", 40, "--queue-delay", 2000, "--initial-max-targets", 61, "--silent-misfires", "--no-share",
-                    "--recovery-thread-padding", Math.min(5.0, player.skills.hacking / hackThreshold)]; // Use more recovery thread padding as our hack level increases
-                // Log a special notice if we're going to be relaunching daemon.js for this reason
-                if (!existingDaemon || !(existingDaemon.args.includes("--looping-mode")))
-                    daemonRelaunchMessage = `Hack level (${player.skills.hacking}) is >= ${hackThreshold} (--high-hack-threshold): Starting daemon.js in high-performance hacking mode.`;
-            } else if (player.skills.hacking >= hackThreshold) { // "tight" mode. Tighter batches to increase income rate, at the cost of more frequent misfires
-                daemonArgs = ["--cycle-timing-delay", 40, "--queue-delay", 50, "--silent-misfires",
-                    "--recovery-thread-padding", Math.min(5.0, player.skills.hacking / hackThreshold)]; // Use more recovery thread padding as our hack level increases
-            }
-            else if (homeRam < 32) { // If we're in early BN 1.1 (i.e. with < 32GB home RAM), avoid squandering RAM
-                daemonArgs.push("--no-share", "--initial-max-targets", 1);
-            } else { // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
-                // Only do this if we aren't in --looping mode because TODO: currently it does not kill it's loops on shutdown, so they'd be stuck in hack exp mode
-                let useXpOnlyMode = prioritizeHackForDaedalus || prioritizeHackForWd ||
-                    // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8, because TODO: --xp-only doesn't handle stock manipulation)
-                    (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0 && resetInfo.currentNode != 8);
-                if (!useXpOnlyMode) { // Otherwise, respect the configured interval / duration
-                    const xpInterval = Number(options['xp-mode-interval-minutes']);
-                    const xpDuration = Number(options['xp-mode-duration-minutes']);
-                    const minutesInAug = getTimeInAug() / 60.0 / 1000.0;
-                    if (xpInterval > 0 && xpDuration > 0 && (minutesInAug % (xpInterval + xpDuration)) <= xpDuration)
-                        useXpOnlyMode = true; // We're in the time window where we should focus hack exp
-                    // If daemon.js was previously running in hack exp mode, prepare a message indicating that we 're switching back
-                    else if (existingDaemon?.args.includes("--xp-only"))
-                        daemonRelaunchMessage = `Time is up for "xp-mode", Relaunching daemon.js normally to focus on earning money for ${xpInterval} minutes (--xp-mode-interval-minutes)`;
-                }
-                if (useXpOnlyMode) {
-                    daemonArgs.push("--xp-only", "--silent-misfires", "--no-share");
-                    // If daemon.js isn't already running in hack exp mode, prepare a message to communicate the change
-                    if (!existingDaemon?.args.includes("--xp-only"))
-                        daemonRelaunchMessage = prioritizeHackForWd ? `We're close to the required hack level destroy the BN.` :
-                            prioritizeHackForDaedalus ? `Hack Level is the only missing requirement for Daedalus, so we will run daemon.js in --xp-only mode to try and speed along the invite.` :
-                                (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0) ?
-                                    `The current BitNode does not give any money from hacking, so we will run daemon.js in --xp-only mode.` :
-                                    `Relaunching daemon.js to focus on earning Hack Experience for ${options['xp-mode-duration-minutes']} minutes (--xp-mode-duration-minutes)`;
-                }
-            }
-            // Prevent daemon from starting "work-for-faction.js" since we now manage that script
-            daemonArgs.push('--disable-script', getFilePath('work-for-factions.js'));
-            // In BN8, always run in a mode that prioritizes stock market manipulation
-            if (resetInfo.currentNode == 8) daemonArgs.push("--stock-manipulation-focus");
-            // Don't run the script to join and manage bladeburner if it is explicitly disabled
-            if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
-            // Relay the option to suppress tail windows
-            if (options['no-tail-windows']) daemonArgs.push('--no-tail-windows');
-            // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
-            if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
-                daemonArgs.push('--reserved-ram', 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16));
+        // Determine the arguments we want to run daemon.js with. We will either pass these directly, or through stanek.js if we're running it first.
+        const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, tweak daemon to increase income rates
+        // When our hack level gets sufficiently high, hack/grow/weaken go so fast that spawning new scripts for each cycle becomes very
+        // expensive / laggy. To help with this, daemon.js supports "looping mode", to just spawn one long-lived script that does H/G/W in a loop.
+        if (player.skills.hacking >= hackThreshold) {
+            daemonArgs = ["--looping-mode", "--cycle-timing-delay", 40, "--queue-delay", 2000, "--initial-max-targets", 61, "--silent-misfires", "--no-share",
+                "--recovery-thread-padding", Math.min(5.0, player.skills.hacking / hackThreshold)]; // Use more recovery thread padding as our hack level increases
+            // Log a special notice if we're going to be relaunching daemon.js for this reason
+            if (!existingDaemon || !(existingDaemon.args.includes("--looping-mode")))
+                daemonRelaunchMessage = `Hack level (${player.skills.hacking}) is >= ${hackThreshold} (--high-hack-threshold): Starting daemon.js in high-performance hacking mode.`;
         }
+        else if (homeRam < 32) { // If we're in early BN 1.1 (i.e. with < 32GB home RAM), avoid squandering RAM
+            daemonArgs.push("--no-share", "--initial-max-targets", 1);
+        } else { // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
+            let useXpOnlyMode = prioritizeHackForDaedalus || prioritizeHackForWd ||
+                // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8)
+                (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0 && resetInfo.currentNode != 8);
+            if (!useXpOnlyMode) { // Otherwise, respect the configured interval / duration
+                const xpInterval = Number(options['xp-mode-interval-minutes']);
+                const xpDuration = Number(options['xp-mode-duration-minutes']);
+                const minutesInAug = getTimeInAug() / 60.0 / 1000.0;
+                if (xpInterval > 0 && xpDuration > 0 && (minutesInAug % (xpInterval + xpDuration)) <= xpDuration)
+                    useXpOnlyMode = true; // We're in the time window where we should focus hack exp
+                // If daemon.js was previously running in hack exp mode, prepare a message indicating that we 're switching back
+                else if (existingDaemon?.args.includes("--xp-only"))
+                    daemonRelaunchMessage = `Time is up for "xp-mode", Relaunching daemon.js normally to focus on earning money for ${xpInterval} minutes (--xp-mode-interval-minutes)`;
+            }
+            if (resetInfo.currentNode == 8 && useXpOnlyMode) {
+                useXpOnlyMode = false;
+            }
+            if (useXpOnlyMode) {
+                daemonArgs.push("--xp-only", "--silent-misfires", "--no-share");
+                // If daemon.js isn't already running in hack exp mode, prepare a message to communicate the change
+                if (!existingDaemon?.args.includes("--xp-only"))
+                    daemonRelaunchMessage = prioritizeHackForWd ? `We're close to the required hack level destroy the BN.` :
+                        prioritizeHackForDaedalus ? `Hack Level is the only missing requirement for Daedalus, so we will run daemon.js in --xp-only mode to try and speed along the invite.` :
+                            (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0) ?
+                                `The current BitNode does not give any money from hacking, so we will run daemon.js in --xp-only mode.` :
+                                `Relaunching daemon.js to focus on earning Hack Experience for ${options['xp-mode-duration-minutes']} minutes (--xp-mode-duration-minutes)`;
+            }
+        }
+        // Prevent daemon from starting "work-for-faction.js" since we now manage that script
+        daemonArgs.push('--disable-script', getFilePath('work-for-factions.js'));
+        // In BN8, always run in a mode that prioritizes stock market manipulation
+        if (resetInfo.currentNode == 8) daemonArgs.push("--stock-manipulation-focus");
+        // Don't run the script to join and manage bladeburner if it is explicitly disabled
+        if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
+        // Relay the option to suppress tail windows
+        if (options['no-tail-windows']) daemonArgs.push('--no-tail-windows');
+        // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
+        if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
+            daemonArgs.push('--reserved-ram', 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16));
 
         // Once stanek's gift is accepted, launch it once per reset before we launch daemon (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
         let stanekRunning = (13 in unlockedSFs) && findScript('stanek.js') !== undefined;
@@ -668,6 +662,7 @@ export async function main(ns) {
             if (existingDaemon) {
                 daemonRelaunchMessage ??= `Relaunching daemon.js with new arguments since the current instance doesn't include all the args we want.`;
                 log(ns, daemonRelaunchMessage);
+                await killScript(ns, 'daemon.js', runningScripts, existingDaemon);
             }
             let daemonPid = launchScriptHelper(ns, 'daemon.js', daemonArgs);
             daemonStartTime = Date.now();
@@ -701,10 +696,19 @@ export async function main(ns) {
             // If running with the wrong args, kill it so we can start it with the desired args
             if (wrongWork) await killScript(ns, 'work-for-factions.js', null, wrongWork);
 
-            // Start gangs immediately (even though daemon would eventually start it) since we want any income they provide right away after an ascend
-            // TODO: Consider monitoring gangs territory progress and increasing their budget / decreasing their reserve to help kick-start them
-            if (playerInGang && !findScript('gangs.js'))
-                launchScriptHelper(ns, 'gangs.js');
+            if (playerInGang) {
+                const gangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
+                const gangArgs = [];
+                if (gangInfo.territory < 0.2)
+                    gangArgs.push('--augmentations-budget', 0.4, '--equipment-budget', 0.02);
+                else if (gangInfo.territory < 0.5)
+                    gangArgs.push('--augmentations-budget', 0.25, '--equipment-budget', 0.01);
+                const existingGang = findScript('gangs.js');
+                if (existingGang && gangArgs.length > 0 && !gangArgs.every(a => existingGang.args.includes(a)))
+                    await killScript(ns, 'gangs.js', null, existingGang);
+                if (!findScript('gangs.js'))
+                    launchScriptHelper(ns, 'gangs.js', gangArgs);
+            }
         }
 
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
@@ -750,6 +754,28 @@ export async function main(ns) {
             log(ns, `WARNING: autopilot.js tried to accepted Stanek's Gift, but was denied.`, true, 'warning');
         // Whether we succeded or failed, don't try again - if we're denied entry (due to having an augmentation) we will never be allowed in
         acceptedStanek = true;
+    }
+
+    async function maybeUpgradeSleeveMemory(ns, player) {
+        if (resetInfo.currentNode != 10 || sleevesMaxedOut) return;
+        if (!(10 in unlockedSFs)) return;
+        try {
+            const doc = eval("document");
+            if (!doc) return;
+            const buttons = [...doc.querySelectorAll('button')]
+                .filter(b => /memory/i.test(b.innerText) && /upgrade|purchase|buy/i.test(b.innerText));
+            let clicked = false;
+            for (const button of buttons) {
+                if (button.disabled) continue;
+                button.click();
+                clicked = true;
+                await ns.sleep(50);
+            }
+            if (clicked)
+                log(ns, 'INFO: Attempted to purchase sleeve memory via UI.', false, 'info');
+        } catch (err) {
+            log(ns, `WARNING: Unable to automate sleeve memory upgrades: ${getErrorInfo(err)}`, false, 'warning');
+        }
     }
 
     /** Logic to steal 10b from the casino
@@ -991,9 +1017,12 @@ export async function main(ns) {
             const totalCost = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost +
                 (have4SData ? 0 : 1E9 * bitNodeMults.FourSigmaMarketDataCost);
             const ratio = totalWorth / totalCost;
-            // If we're e.g. 50% of the way there, hold off, regardless of the '--wait-for-4s' setting
-            // TODO: If ratio is > 1, we can afford it - but stockmaster won't buy until it has e.g. 20% more than the cost
-            //       (so it still has money to invest). It doesn't know we want to restart ASAP. Perhaps we should purchase ourselves?
+            if (ratio >= 1) {
+                await getNsDataThroughFile(ns, 'ns.stock.purchaseWseAccount()');
+                await getNsDataThroughFile(ns, 'ns.stock.purchaseTixApi()');
+                if (!have4SData) have4SData = await getNsDataThroughFile(ns, 'ns.stock.purchase4SMarketData()');
+                if (!have4STixApi) have4STixApi = await getNsDataThroughFile(ns, 'ns.stock.purchase4SMarketDataTixApi()');
+            }
             if (ratio >= options['wait-for-4s-threshold']) {
                 setStatus(ns, `Not installing until scripts purchase the 4SDataTixApi because we have ` +
                     `${(100 * totalWorth / totalCost).toFixed(0)}% of the cost (controlled by --wait-for-4s-threshold)`);
@@ -1036,8 +1065,30 @@ export async function main(ns) {
             return true;
         }
 
-        // TODO: Bladeburner black-op in progress
-        // TODO: Close to the rep needed for unlocking donations with a new faction?
+        if (7 in unlockedSFs && !options['disable-bladeburner']) {
+            const currentAction = await getNsDataThroughFile(ns, 'ns.bladeburner.getCurrentAction()');
+            if (currentAction?.type == 'BlackOp') {
+                setStatus(ns, `Not installing because a Bladeburner BlackOp is in progress (${currentAction.name}).`);
+                return true;
+            }
+        }
+        const favorToDonate = await getNsDataThroughFile(ns, 'ns.getFavorToDonate()');
+        const factions = player.factions;
+        if (factions.length > 0) {
+            const dictFavors = await getNsDataThroughFile(ns, 'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionFavor(f)]))',
+                '/Temp/faction-favor.txt', factions);
+            const dictReps = await getNsDataThroughFile(ns, 'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionRep(f)]))',
+                '/Temp/faction-rep.txt', factions);
+            const repToFavour = (rep) => Math.ceil(25500 * 1.02 ** (rep - 1) - 25000);
+            for (const fac of factions) {
+                const currentFavor = dictFavors[fac] ?? 0;
+                const repRequired = Math.max(0, repToFavour(favorToDonate) - repToFavour(currentFavor));
+                if (repRequired > 0 && repRequired <= 200000 && (dictReps[fac] ?? 0) >= repRequired * 0.5) {
+                    setStatus(ns, `Not installing because we are close to unlocking donations with ${fac}.`);
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
