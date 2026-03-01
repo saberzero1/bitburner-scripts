@@ -42,19 +42,20 @@ export async function main(ns) {
             ns.disableLog("ALL");
 
         let abort = false;
-        /*// TODO:
-        // Let the user know what's going on and give them an easy way to kill casino.js
         function showDialog(onCancel) {
+            if (!doc?.body) return;
+            const existing = doc.getElementById('casino-js-dialog');
+            if (existing) existing.remove();
             const dlg = doc.createElement('div');
-            dlg.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px;';
-            dlg.innerHTML = `<p>casino.js is running until it wins \$10b. It will reload the save if it loses too much.<br/>` +
-                `It should only take a minute or two, but you can cancel by clicking the button below.</p>` +
-                `<button>Cancel</button>`;
-            dlg.querySelector('button').onclick = () => { onCancel(); doc.body.removeChild(dlg); };
+            dlg.id = 'casino-js-dialog';
+            dlg.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;padding:12px 16px;background:#111;color:#ddd;border:1px solid #444;border-radius:6px;font:12px monospace;max-width:280px;';
+            dlg.innerHTML = `<div>casino.js is running until it wins \$10b.</div>` +
+                `<div>It will reload the save if it loses too much.</div>` +
+                `<div style="margin-top:6px;"><button style="cursor:pointer;">Cancel</button></div>`;
+            dlg.querySelector('button').onclick = () => { onCancel(); dlg.remove(); };
             doc.body.appendChild(dlg);
         }
         showDialog(() => abort = true);
-        //*/
 
         /** Helper function to detect if focus was stolen by (e.g.) faction|company work|studying|training and send that work to the background
          * @param {boolean} throwError (default true) If true, and we were doing focus work, throws an Error.
@@ -539,7 +540,7 @@ export async function main(ns) {
         try {
             // NOTE: We cannot actually log the xpath we're searching for because depending on the xpath, it might match our log!
             // So here's a trick to convert the characters into "look-alikes"
-            let logSafeXPath = xpath.substring(2, 20) + "..."; // TODO: Some trick to convert the characters into "look-alikes" (ạḅc̣ḍ...)
+            const logSafeXPath = makeLogSafeXPath(xpath);
             if (verbose)
                 log(ns, `INFO: ${(expectFailure ? "Checking if element is on screen" : "Searching for expected element")}: \"${logSafeXPath}\"`, false);
             // If enabled give the game some time to render an item before we try to find it on screen
@@ -572,6 +573,15 @@ export async function main(ns) {
             if (!expectFailure) throw e;
         }
         return null;
+    }
+
+    function makeLogSafeXPath(xpath) {
+        const map = {
+            a: 'ạ', b: 'ḅ', c: 'ċ', d: 'ḍ', e: 'ẹ', f: 'ƒ', g: 'ɡ', h: 'ḥ', i: 'į', j: 'ĵ', k: 'ḳ', l: 'ḷ', m: 'ṃ', n: 'ṇ', o: 'ọ', p: 'ṗ', q: 'ʠ', r: 'ṛ', s: 'ṣ', t: 'ṭ', u: 'ụ', v: 'ṿ', w: 'ẉ', x: 'ẋ', y: 'ỵ', z: 'ẓ',
+            A: 'Ạ', B: 'Ḅ', C: 'Ċ', D: 'Ḍ', E: 'Ẹ', F: 'Ƒ', G: 'Ɠ', H: 'Ḥ', I: 'Į', J: 'Ĵ', K: 'Ḳ', L: 'Ḷ', M: 'Ṃ', N: 'Ṇ', O: 'Ọ', P: 'Ṗ', Q: 'Ɋ', R: 'Ṛ', S: 'Ṣ', T: 'Ṭ', U: 'Ụ', V: 'Ṿ', W: 'Ẉ', X: 'Ẋ', Y: 'Ỵ', Z: 'Ẓ'
+        };
+        const converted = xpath.split('').map(ch => map[ch] ?? ch).join('');
+        return converted.length > 60 ? converted.slice(0, 60) + '...' : converted;
     }
 
     // Better logic for when to HIT / STAY (Partial credit @drider)
