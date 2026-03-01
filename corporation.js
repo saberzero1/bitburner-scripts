@@ -64,17 +64,33 @@ export async function main(ns) {
 
     const state = new CorpState(ns, options);
 
-    if (!(await readCorpFunc(ns, 'hasCorporation()'))) {
-        if (!await initCorporation(ns, state)) {
-            log(ns, 'ERROR: Failed to create corporation', true, 'error');
-            return;
-        }
-    }
-
-    log(ns, 'Corporation manager starting...', true, 'info');
-
+    // Main loop - handles both waiting for corporation creation and running cycles
+    let lastFundCheck = 0;
+    const FUND_CHECK_INTERVAL = 60000; // Check funds every 60 seconds when waiting
+    
     while (true) {
         try {
+            // Check if we have a corporation
+            const hasCorp = await readCorpFunc(ns, 'hasCorporation()');
+            
+            if (!hasCorp) {
+                // Try to create corporation
+                const created = await initCorporation(ns, state);
+                if (!created) {
+                    // Not enough funds - wait and retry periodically
+                    const now = Date.now();
+                    if (now - lastFundCheck > FUND_CHECK_INTERVAL) {
+                        lastFundCheck = now;
+                        const currentMoney = ns.getServerMoneyAvailable('home');
+                        log(ns, `Waiting for funds to create corporation... Have ${formatMoney(currentMoney)} / need ${formatMoney(150e9)}`);
+                    }
+                    await ns.sleep(5000); // Check every 5 seconds
+                    continue;
+                }
+                log(ns, 'Corporation created! Starting manager...', true, 'success');
+            }
+            
+            // Run normal corporation cycle
             await runCorpCycle(ns, state);
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -145,8 +161,7 @@ async function initCorporation(ns, state) {
         const cost = 150e9;
         const currentMoney = ns.getServerMoneyAvailable('home');
         if (currentMoney < cost) {
-            log(ns, `Need ${formatMoney(cost)} to create corporation outside BN3 (have ${formatMoney(currentMoney)})`, true, 'warning');
-            log(ns, `Corporation requires self-funding outside of BitNode 3`, true, 'info');
+            // Return false without logging - the main loop will log periodically
             return false;
         }
         log(ns, `Creating self-funded corporation: ${options['corp-name']} (cost: ${formatMoney(cost)})`);
