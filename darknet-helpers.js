@@ -25,6 +25,57 @@ export function getDarknetPasswordSolver(modelId) {
     return PASSWORD_SOLVERS[modelId] || null;
 }
 
+export async function tryFormatBruteforce(ns, hostname, serverInfo) {
+    const format = serverInfo.passwordFormat;
+    const length = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : null;
+    const charset = getCharsetForFormat(format);
+    if (!charset || !length) return null;
+    if (format === 'numeric') {
+        if (length > 4) return null;
+        const start = length === 1 ? 0 : Math.pow(10, length - 1);
+        const end = Math.pow(10, length) - 1;
+        for (let i = start; i <= end; i++) {
+            const pin = i.toString();
+            const result = await ns.dnet.authenticate(hostname, pin);
+            if (result.success) return pin;
+        }
+        return null;
+    }
+    const maxAttempts = Math.pow(charset.length, length);
+    if (!Number.isFinite(maxAttempts) || maxAttempts > 200000) return null;
+    const hint = serverInfo.passwordHint;
+    if (hint && hint.length === length && [...hint].every(ch => charset.includes(ch))) {
+        const result = await ns.dnet.authenticate(hostname, hint);
+        if (result.success) return hint;
+    }
+    for (let i = 0; i < maxAttempts; i++) {
+        const candidate = buildCandidate(i, charset, length);
+        const result = await ns.dnet.authenticate(hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
+}
+
+function getCharsetForFormat(format) {
+    if (!format) return null;
+    if (format === 'numeric') return '0123456789';
+    if (format === 'alphabetic') return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    if (format === 'alphanumeric') return '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    return null;
+}
+
+function buildCandidate(index, charset, length) {
+    let value = index;
+    let output = '';
+    for (let i = 0; i < length; i++) {
+        output = charset[value % charset.length] + output;
+        value = Math.floor(value / charset.length);
+    }
+    return output;
+}
+
 export function getAllModelIds() {
     return Object.keys(PASSWORD_SOLVERS);
 }

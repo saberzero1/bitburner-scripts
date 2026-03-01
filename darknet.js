@@ -2,7 +2,7 @@ import {
     log, getFilePath, getConfiguration, disableLogs, formatMoney, formatRam, formatDuration,
     getNsDataThroughFile, getActiveSourceFiles, getErrorInfo
 } from './helpers.js'
-import { getDarknetPasswordSolver } from './darknet-helpers.js'
+import { getDarknetPasswordSolver, tryFormatBruteforce } from './darknet-helpers.js'
 
 /**
  * Darknet Orchestrator for BitNode 15
@@ -248,6 +248,15 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     const solver = getDarknetPasswordSolver(serverInfo.modelId);
     if (!solver) {
         if (verbose) log(ns, `No solver for model ${serverInfo.modelId} on ${hostname} (hint: ${serverInfo.passwordHint ?? ''})`);
+        const fallback = await tryFormatBruteforce(ns, hostname, serverInfo);
+        if (fallback !== null) {
+            const result = await ns.dnet.authenticate(hostname, fallback);
+            if (result.success) {
+                log(ns, `SUCCESS: Cracked ${hostname} (format: ${serverInfo.passwordFormat})`);
+                state.addPassword(ns, hostname, fallback);
+                return true;
+            }
+        }
         return false;
     }
 
