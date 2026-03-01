@@ -157,10 +157,11 @@ async function getFactionWorkTargets(ns, playerInfo) {
             name,
             unownedCount: factionAugMap[name].filter(aug => !ownedAugs.includes(aug)).length,
             rep: factionRepCache[name] ?? 0,
-            supportedWorks: (factionWorkTypesCache[name] ?? works).map(w => w.toLowerCase())
+            supportedWorks: (factionWorkTypesCache[name] ?? works),
+            supportedWorksLower: (factionWorkTypesCache[name] ?? works).map(w => w.toLowerCase())
         }))
         .filter(entry => entry.unownedCount > 0 && !(unsupportedFactionWork[entry.name] > Date.now()))
-        .filter(entry => entry.supportedWorks.some(w => works.includes(w)))
+        .filter(entry => entry.supportedWorksLower.some(w => works.includes(w)))
         .sort((a, b) => (b.unownedCount - a.unownedCount) || (a.rep - b.rep) || a.name.localeCompare(b.name));
     factionWorkCacheExpiry = Date.now() + 60000;
     return factionWorkCache;
@@ -347,7 +348,8 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             if (gangFactionName && faction === gangFactionName)
                 unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
             else if (!(unsupportedFactionWork[faction] > Date.now())) {
-                const supportedWorks = (factionWorkTypesCache[faction] ?? works).map(w => w.toLowerCase());
+                const supportedWorksRaw = factionWorkTypesCache[faction] ?? works;
+                const supportedWorks = supportedWorksRaw.map(w => w.toLowerCase());
                 const allowedWorks = supportedWorks.filter(w => works.includes(w));
                 if (allowedWorks.length == 0) {
                     unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
@@ -356,10 +358,11 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
                     workByFaction[faction] ??= preferredIndex;
                     let work = works[workByFaction[faction] || 0];
                     if (!allowedWorks.includes(work)) work = allowedWorks[0];
+                    const workRaw = supportedWorksRaw.find(w => w.toLowerCase() == work) ?? supportedWorksRaw[0];
                     return [
                         `work for faction '${faction}' (${work})`,
                         `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-                        [i, faction, work],
+                        [i, faction, workRaw],
                         `helping earn rep with faction ${faction} by doing ${work} work.`
                     ];
                 }
@@ -374,7 +377,9 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             if (gangFactionName && faction === gangFactionName)
                 unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
             else {
-                const allowedWorks = (nextFaction.supportedWorks ?? works).filter(w => works.includes(w));
+                const supportedWorksRaw = nextFaction.supportedWorks ?? works;
+                const supportedWorksLower = nextFaction.supportedWorksLower ?? supportedWorksRaw.map(w => w.toLowerCase());
+                const allowedWorks = supportedWorksLower.filter(w => works.includes(w));
                 if (allowedWorks.length == 0)
                     unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
                 else {
@@ -382,10 +387,11 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
                     workByFaction[faction] ??= preferredIndex;
                     let work = works[workByFaction[faction] || 0];
                     if (!allowedWorks.includes(work)) work = allowedWorks[0];
+                    const workRaw = supportedWorksRaw.find(w => w.toLowerCase() == work) ?? supportedWorksRaw[0];
                     return [
                         `work for faction '${faction}' (${work})`,
                         `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-                        [i, faction, work],
+                        [i, faction, workRaw],
                         `earning rep with faction ${faction} by doing ${work} work.`
                     ];
                 }
