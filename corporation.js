@@ -59,7 +59,7 @@ export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
     if (!options) return;
 
-    if (options.tail) ns.tail();
+    if (options.tail) (ns.ui?.openTail ? ns.ui.openTail() : ns.tail());
     disableLogs(ns, ['sleep', 'getServerMoneyAvailable', 'run', 'read', 'write', 'isRunning']);
 
     const state = new CorpState(ns, options);
@@ -360,13 +360,13 @@ async function assignEmployeesToProduction(ns, divName, city, forProducts = fals
     
     // Clear all assignments first
     for (const job of ['Operations', 'Engineer', 'Business', 'Management', 'Research & Development']) {
-        await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, job, 0);
+        await execCorpFunc(ns, 'setJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, job, 0);
     }
     
     // Assign to optimal distribution
     for (const [job, count] of Object.entries(distribution)) {
         if (count > 0) {
-            await execCorpFunc(ns, 'setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, job, count);
+            await execCorpFunc(ns, 'setJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, job, count);
         }
     }
     

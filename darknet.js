@@ -34,7 +34,7 @@ export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
     if (!options) return;
 
-    if (options.tail) ns.tail();
+    if (options.tail) (ns.ui?.openTail ? ns.ui.openTail() : ns.tail());
 
     disableLogs(ns, ['sleep', 'scan', 'getServerMaxRam', 'getServerUsedRam', 'scp', 'exec']);
 
