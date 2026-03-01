@@ -240,9 +240,11 @@ async function mainLoop(ns) {
             followPlayerSleeve ??= i; // Skips assignment if previously assigned
     followPlayerSleeve ??= 0; // If all have shock, use the first sleeve
 
-    const assignedFactions = new Set(task
-        .filter(t => typeof t === 'string' && t.startsWith("work for faction '"))
-        .map(t => t.match(/work for faction '([^']+)'/)?.[1])
+    const currentSleeveTasks = await getNsDataThroughFile(ns, `ns.args.map(i => ns.sleeve.getTask(i))`,
+        `/Temp/sleeve-getTask-all.txt`, [...Array(numSleeves).keys()]);
+    const assignedFactions = new Set(currentSleeveTasks
+        .filter(t => t?.type === 'FACTION')
+        .map(t => t.factionName)
         .filter(Boolean));
     for (let i = 0; i < numSleeves; i++) {
         let sleeve = sleeveInfo[i]; // For convenience, merge all sleeve stats/info into one object
