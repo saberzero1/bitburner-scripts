@@ -12,13 +12,13 @@ const argsSchema = [
     ['reserved-ram', 32], // Don't use this RAM
     ['reserved-ram-ideal', 64], // Leave this amount of RAM free if it represents less than 5% of available RAM
     ['max-charges', 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
-    // By default, starting an augmentation with stanek.js will still spawn daemon.js, but will instruct it not to schedule any hack cycles against home by 'reserving' all its RAM
-    // TODO: Set these defaults in some way that the user can explicitly specify that they want to run **no** startup script and **no** completion script
     ['on-startup-script', null], // Spawn this script when stanek is launched
     ['on-startup-script-args', []], // Args for the above
+    ['no-startup-script', false],
     // When stanek completes, it will run daemon.js again (which will terminate the initial ram-starved daemon that is running)
     ['on-completion-script', null], // Spawn this script when max-charges is reached
     ['on-completion-script-args', []], // Optional args to pass to the script when launched
+    ['no-completion-script', false],
     ['no-tail', false], // By default, keeps a tail window open, because it's pretty important to know when this script is running (can't use home for anything else)
     ['reputation-threshold', 0.2], // By default, if we are this close to the rep needed for an unowned stanek upgrade (e.g. "Stanek's Gift - Serenity"), we will keep charging despite the 'max-charges' setting
 ];
@@ -56,6 +56,11 @@ export async function main(ns) {
     idealReservedRam = 32; // Reserve this much RAM, if it wouldnt make a big difference anyway. Leaves room for other temp-scripts to spawn.
     let startupScript = options['on-startup-script'];
     let startupArgs = unEscapeArrayArgs(options['on-startup-script-args']);
+    if (!startupScript && !options['no-startup-script']) {
+        startupScript = getFilePath('daemon.js');
+        if (startupArgs.length == 0)
+            startupArgs = ['--reserved-ram', `${ns.getServerMaxRam('home')}`];
+    }
     if (startupScript) {
         // If so configured, launch the start-up script to run alongside stanek and let it consume the RAM it needs before initiating stanek loops.
         if (ns.run(startupScript, 1, ...startupArgs)) {
@@ -117,6 +122,8 @@ export async function main(ns) {
 
     // Run the completion script before shutting down
     let completionScript = options['on-completion-script'];
+    if (!completionScript && !options['no-completion-script'])
+        completionScript = getFilePath('daemon.js');
     let completionArgs = unEscapeArrayArgs(options['on-completion-script-args']);
     if (completionScript) {
         if (ns.run(completionScript, 1, ...completionArgs)) {

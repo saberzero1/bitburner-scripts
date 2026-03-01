@@ -269,9 +269,26 @@ async function mainLoop(ns) {
         let populationUncertain = candidateActions.some(a => maxChance(a) > options['success-threshold'] && minChance(a) < options['success-threshold']);
         // If current population uncertainty is such that some actions have a maxChance of ~100%, but not a minChance of ~100%,
         //   focus on actions that improve the population estimate, otherwise, reserve these actions for later
-        // TODO: "Field Analysis" is the only population action that scales with player stats, so we should calculate and sort by
-        //       "effectiveness per second" of each and see which is the most worthwhile way of improving the population estimate.
-        candidateActions = populationUncertain ? populationActions : unreservedActions;
+        let populationActionsByEffectiveness = populationActions;
+        if (populationUncertain) {
+            const operationPopulationActions = populationActions.filter(actionName => operationNames.includes(actionName));
+            const contractPopulationActions = populationActions.filter(actionName => contractNames.includes(actionName));
+            const generalPopulationActions = populationActions.filter(actionName => generalActionNames.includes(actionName));
+            const populationActionTimes = {
+                ...(operationPopulationActions.length > 0
+                    ? await getBBDictByActionType(ns, 'getActionTime', "Operations", operationPopulationActions)
+                    : {}),
+                ...(contractPopulationActions.length > 0
+                    ? await getBBDictByActionType(ns, 'getActionTime', "Contracts", contractPopulationActions)
+                    : {}),
+                ...(generalPopulationActions.length > 0
+                    ? await getBBDictByActionType(ns, 'getActionTime', "General", generalPopulationActions)
+                    : {}),
+            };
+            const getEffectiveness = actionName => ((minChance(actionName) + maxChance(actionName)) / 2) / (populationActionTimes[actionName] || 1);
+            populationActionsByEffectiveness = populationActions.slice().sort((a, b) => getEffectiveness(b) - getEffectiveness(a));
+        }
+        candidateActions = populationUncertain ? populationActionsByEffectiveness : unreservedActions;
         // Filter out candidates with no contract counts remaining
         candidateActions = candidateActions.filter(a => getCount(a) > 0);
         //log(ns, `The following actions are available: ${candidateActions}`); // Debug log to see what candidate actions are

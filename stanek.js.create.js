@@ -163,7 +163,6 @@ const layouts = [ // NOTE: Width appears to be always the same as, or one more t
             { "id": 105, "x": 1, "y": 2, "rotation": 0 }, // Booster
         ]
     }, { // Adds Charisma, which even a small boost makes a huge difference (hours) in grinding company rep
-        // TODO: Consider adding charisma boosts a little earlier on in the prior 2 layouts.
         "height": 8, "width": 8, "fragments": [ // ~BN 12.50
             { "id": 0, "x": 3, "y": 0, "rotation": 0 }, // Hacking Mult
             { "id": 1, "x": 2, "y": 2, "rotation": 1 }, // Hacking Mult

@@ -77,7 +77,7 @@ const statPlayer = ["hacking", "strength", "defense", "dexterity", "agility", "c
 const allFactions = ["Illuminati", "Daedalus", "The Covenant", "ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", "NWO", "Clarke Incorporated", "OmniTek Incorporated",
     "Four Sigma", "KuaiGong International", "Fulcrum Secret Technologies", "BitRunners", "The Black Hand", "NiteSec", "Aevum", "Chongqing", "Ishima", "New Tokyo", "Sector-12",
     "Volhaven", "Speakers for the Dead", "The Dark Army", "The Syndicate", "Silhouette", "Tetrads", "Slum Snakes", "Netburners", "Tian Di Hui", "CyberSec", "Bladeburners", "Church of the Machine God", "Shadows of Anarchy"];
-// TODO: This list is missing augmentations. Regenerate.
+// Note: This augmentation list is used for autocomplete only. Actual aug data comes from ns.singularity.getAugmentationStats()
 const augmentations = ["ADR-V1 Pheromone Gene", "ADR-V2 Pheromone Gene", "Artificial Bio-neural Network Implant", "Artificial Synaptic Potentiation", "Augmented Targeting I", "Augmented Targeting II", "Augmented Targeting III", "BLADE-51b Tesla Armor", "BLADE-51b Tesla Armor: Energy Shielding Upgrade", "BLADE-51b Tesla Armor: IPU Upgrade", "BLADE-51b Tesla Armor: Omnibeam Upgrade", "BLADE-51b Tesla Armor: Power Cells Upgrade", "BLADE-51b Tesla Armor: Unibeam Upgrade", "Bionic Arms", "Bionic Legs", "Bionic Spine", "BitRunners Neurolink", "BitWire", "Blade's Runners", "BrachiBlades", "CRTX42-AA Gene Modification", "CashRoot Starter Kit", "Combat Rib I", "Combat Rib II", "Combat Rib III", "CordiARC Fusion Reactor", "Cranial Signal Processors - Gen I", "Cranial Signal Processors - Gen II", "Cranial Signal Processors - Gen III", "Cranial Signal Processors - Gen IV", "Cranial Signal Processors - Gen V", "DataJack", "DermaForce Particle Barrier", "ECorp HVMind Implant", "EMS-4 Recombination", "Embedded Netburner Module", "Embedded Netburner Module Analyze Engine", "Embedded Netburner Module Core Implant", "Embedded Netburner Module Core V2 Upgrade", "Embedded Netburner Module Core V3 Upgrade", "Embedded Netburner Module Direct Memory Access Upgrade", "Enhanced Myelin Sheathing", "Enhanced Social Interaction Implant", "EsperTech Bladeburner Eyewear", "FocusWire", "GOLEM Serum", "Graphene Bionic Arms Upgrade", "Graphene Bionic Legs Upgrade", "Graphene Bionic Spine Upgrade", "Graphene Bone Lacings", "Graphene BrachiBlades Upgrade", "Hacknet Node CPU Architecture Neural-Upload", "Hacknet Node Cache Architecture Neural-Upload", "Hacknet Node Core Direct-Neural Interface", "Hacknet Node Kernel Direct-Neural Interface", "Hacknet Node NIC Architecture Neural-Upload", "HemoRecirculator", "Hydroflame Left Arm", "HyperSight Corneal Implant", "Hyperion Plasma Cannon V1", "Hyperion Plasma Cannon V2", "I.N.T.E.R.L.I.N.K.E.D", "INFRARET Enhancement", "LuminCloaking-V1 Skin Implant", "LuminCloaking-V2 Skin Implant", "NEMEAN Subdermal Weave", "Nanofiber Weave", "Neotra", "Neural Accelerator", "Neural-Retention Enhancement", "Neuralstimulator", "Neuregen Gene Modification", "NeuroFlux Governor", "Neuronal Densification", "Neuroreceptor Management Implant", "Neurotrainer I", "Neurotrainer II", "Neurotrainer III", "Nuoptimal Nootropic Injector Implant", "NutriGen Implant", "ORION-MKIV Shoulder", "OmniTek InfoLoad", "PC Direct-Neural Interface", "PC Direct-Neural Interface NeuroNet Injector", "PC Direct-Neural Interface Optimization Submodule", "PCMatrix", "Photosynthetic Cells", "Power Recirculation Core", "SPTN-97 Gene Modification", "SmartJaw", "SmartSonar Implant", "Social Negotiation Assistant (S.N.A)", "Speech Enhancement", "Speech Processor Implant", "Synaptic Enhancement Implant", "Synfibril Muscle", "Synthetic Heart", "TITN-41 Gene-Modification Injection", "The Black Hand", "The Blade's Simulacrum", "The Red Pill", "The Shadow's Simulacrum", "Unstable Circadian Modulator", "Vangelis Virus", "Vangelis Virus 3.0", "Wired Reflexes", "Xanipher", "nextSENS Gene Modification"]
 const strNF = "NeuroFlux Governor"
 
@@ -468,13 +468,12 @@ class AugmentationData {
                 augFactions[0])?.name; // First faction in our faction list order (which should be ordered by priority)
 
         // The "Neuroflux" augmentation uses a different approach.
-        // Prefer to purchase NF first from whatever joined factions have donations unlocked (allow us to continuously donate for more), next by faction with the most current reputation.
-        return augFactions.sort((a, b) => // This sort order prefers factions that support donations over ones that already have sufficient rep for one or more NF levels.
-            ((b.donationsUnlocked ? 1 : 0) - (a.donationsUnlocked ? 1 : 0)) || (b.reputation - a.reputation))[0]?.name;
-        // This (disabled) sort order prefers factions that already have enough reputation to buy at least one level of NF (whether they support donations or not)
-        // augFactions.sort((a, b) => ((b.reputation >= this.reputation ? 1 : 0) - (a.reputation >= this.reputation ? 1 : 0)) ||
-        //    ((b.donationsUnlocked ? 1 : 0) - (a.donationsUnlocked ? 1 : 0)) || (b.reputation - a.reputation))[0]?.name;
-        // TODO: #145 Is there a way to first buy NF from factions that already have enough rep, before switching to a different faction that supports donations?
+        const repReady = augFactions.filter(f => f.reputation >= this.reputation);
+        if (repReady.length > 0)
+            return repReady.sort((a, b) => b.reputation - a.reputation)[0]?.name;
+        const donationReady = augFactions.filter(f => f.donationsUnlocked);
+        return (donationReady.length > 0 ? donationReady : augFactions)
+            .sort((a, b) => b.reputation - a.reputation)[0]?.name;
     }
     /** @returns {string} A formatted row of information for this augmentation */
     toString() {
@@ -558,6 +557,21 @@ let augSortOrder = (a, b) =>
     (b.price - a.price) || (b.reputation - a.reputation) ||
     (b.desired != a.desired ? (a.desired ? -1 : 1) : a.name.localeCompare(b.name));
 
+const prereqCache = new Map();
+function getPrereqSet(augName) {
+    if (prereqCache.has(augName)) return prereqCache.get(augName);
+    const aug = augmentationData[augName];
+    const prereqs = new Set();
+    if (aug?.prereqs?.length) {
+        for (const prereq of aug.prereqs) {
+            prereqs.add(prereq);
+            for (const nested of getPrereqSet(prereq)) prereqs.add(nested);
+        }
+    }
+    prereqCache.set(augName, prereqs);
+    return prereqs;
+}
+
 /** Sort augmentations such that they are in order of price, except when there are prerequisites to worry about
  * @param {NS} ns
  * @param {AugmentationData[]} augs augmentations to sort
@@ -574,21 +588,32 @@ function sortAugs(ns, augs = []) {
             break;
         }
     }
-    // TODO: Logic below is **almost** working, except that the "batch detection" is flawed - it does not detect when multiple separate
-    //       "trees" of dependencies with a common root are side-by-side (e.g. "Embedded Netburner Module" tree). Until fixed, we cannot bubble.
-    return augs;
     // Since we are no longer most-expensive to least-expensive, the "ideal purchase order" is more complicated.
     // So now see if moving each chunk of prereqs down a slot reduces the overall price.
     let initialCost = getTotalCost(augs);
     let totalMoves = 0;
+    const isRelated = (a, b) => {
+        const aSet = getPrereqSet(a.name);
+        const bSet = getPrereqSet(b.name);
+        return aSet.has(b.name) || bSet.has(a.name);
+    };
+    const canMoveAbovePrereqs = (aug, insertionIndex, order) => {
+        const prereqs = getPrereqSet(aug.name);
+        for (const prereq of prereqs) {
+            const index = order.findIndex(a => a.name === prereq);
+            if (index !== -1 && index >= insertionIndex) return false;
+        }
+        return true;
+    };
     for (let i = augs.length - 1; i > 0; i--) {
         let batchLengh = 1; // Look for a "batch" of prerequisites, evidenced by augs above this one being cheaper instead of more expensive
-        while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price) batchLengh++;
+        while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price && isRelated(augs[i], augs[i - batchLengh])) batchLengh++;
         if (batchLengh == 1) continue; // Not the start of a batch of prerequisites
         //log(ns, `Detected a batch of length ${batchLengh} from ${augs[i - batchLengh + 1].name} to ${augs[i].name}`);
         let moved = 0, bestCost = initialCost;
         while (i + moved + 1 < augs.length) { // See if promoting augs from below the batch to above the batch reduces the overall cost
             let testOrder = augs.slice(), moveIndex = i + moved + 1, insertionIndex = i - batchLengh + 1 + moved;
+            if (!canMoveAbovePrereqs(testOrder[moveIndex], insertionIndex, testOrder)) break;
             testOrder.splice(insertionIndex, 0, testOrder.splice(moveIndex, 1)[0]); // Try moving it above the batch
             let newCost = getTotalCost(testOrder);
             //log(ns, `Cost would change by ${((newCost - bestCost) / bestCost * 100).toPrecision(2)}% from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
@@ -656,6 +681,45 @@ function computeCosts(sortedAugs) {
     const totalRepCost = Object.values(repCostByFaction).reduce((t, r) => t + r, 0);
     const totalAugCost = getTotalCost(sortedAugs);
     return [repCostByFaction, totalRepCost, totalAugCost];
+}
+
+function estimateAffordableNfLevels(augNf, factionName, budget, totalAugCost, totalRepCost, purchaseFactionDonations, nfPurchased, baseAugCount) {
+    const faction = factionData[factionName];
+    if (!faction) return 0;
+    let levels = 0;
+    let localAugCost = totalAugCost;
+    let localRepCost = totalRepCost;
+    let currentDonation = purchaseFactionDonations[factionName] || 0;
+    while (levels < 200) {
+        const nfIndex = nfPurchased + levels;
+        const nextNfCost = augNf.price * (nfCountMult ** nfIndex) * (augCountMult ** (baseAugCount + levels));
+        const nextNfRep = augNf.reputation * (nfCountMult ** nfIndex);
+        const totalDonation = nextNfRep <= faction.reputation ? 0 : getReqDonationForRep(nextNfRep, faction);
+        const nextRepCost = Math.max(0, totalDonation - currentDonation);
+        const totalCost = localAugCost + localRepCost + nextNfCost + nextRepCost;
+        if (totalCost > budget) break;
+        if (nextNfRep > faction.reputation && !faction.donationsUnlocked) break;
+        levels += 1;
+        localAugCost += nextNfCost;
+        currentDonation = Math.max(currentDonation, totalDonation);
+        localRepCost += nextRepCost;
+    }
+    return levels;
+}
+
+function selectBestNfFaction(augNf, budget, totalAugCost, totalRepCost, purchaseFactionDonations, nfPurchased, baseAugCount) {
+    const candidates = Object.values(factionData).filter(f => f.joined && f.augmentations.includes(augNf.name));
+    let best = null;
+    let bestLevels = -1;
+    for (const faction of candidates) {
+        const levels = estimateAffordableNfLevels(augNf, faction.name, budget, totalAugCost, totalRepCost,
+            purchaseFactionDonations, nfPurchased, baseAugCount);
+        if (levels > bestLevels || (levels === bestLevels && best && faction.reputation > best.reputation)) {
+            best = faction;
+            bestLevels = levels;
+        }
+    }
+    return best?.name ?? null;
 }
 
 /** Helper to produce a summary of the cost of augs with reputation. */
@@ -769,7 +833,11 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     // We can reverse-engineer our current NeuroFlux level by looking at its current price, and knowing its cost scales at x1.14 per level.
     nfLevelPurchased = Math.round(Math.log(augNf.price / (augCountMult ** numAugsAwaitingInstall * 750000 * bitNodeMults.AugmentationMoneyCost)) / Math.log(1.14));
     let nextNfLevel = nfLevelPurchased + 1;
+    const baseAugCount = purchaseableAugs.length;
+    let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length;
     let getFrom = augNf.getFromJoined();
+    const bestNfFaction = selectBestNfFaction(augNf, budget, totalAugCost, totalRepCost, purchaseFactionDonations, nfPurchased, baseAugCount);
+    if (bestNfFaction) getFrom = bestNfFaction;
     // If No currently joined factions can provide us with the next level of Neuroflux, look for the best joined **or unjoined** faction to get NF from.
     if (!augNf.canAfford() && !augNf.canAffordWithDonation()) {
         outputRows.push(`Cannot purchase any ${strNF}. The next level (${nextNfLevel}) requires ${formatNumberShort(augNf.reputation)} reputation, but ` +
@@ -804,28 +872,26 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
         else if (joined)
             outputRows.push(`SUCCESS: Joined ${joined} factions just to gain access to additional NeuroFlux levels.`);
     }
-    if (getFrom && !factionData[getFrom].donationsUnlocked) {
-        // TODO: If the faction with the most reputation does not suport dontating for additional rep, and another faction with less rep does,
-        //       we should be able to test both and see which one would let us buy the most additional levels of NF given our current money.
-        if (factionData[getFrom].favor >= favorToDonate)
-            outputRows.push(`WARNING: The current faction (${getFrom}) with the most rep for buying NeuroFlux levels does not support donating for reputation. ` +
-                `Until logic is built to handle this, consider joining one or more factions that support donating for reputation.`);
-    }
+    if (getFrom && !factionData[getFrom].donationsUnlocked && factionData[getFrom].favor >= favorToDonate)
+        outputRows.push(`WARNING: The current faction (${getFrom}) with the most rep for buying NeuroFlux levels does not support donating for reputation.`);
     // Make note of any augmentations at the end of the purchase order list that are cheaper than NF. We will insert NF above them.
     // Note, we cannot simply count all augmentations cheaper than NF, as some may be prerequisites higher up the list.
     let nfAppendPosition = 0;
     for (let i = purchaseableAugs.length - 1; i >= 0 && purchaseableAugs[i].price < augNf.price; i--)
         nfAppendPosition--;
     // Start adding as many NeuroFlux levels as we can afford
-    let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length;
-    const augNfFaction = factionData[augNf.getFromJoined()];
+    let augNfFaction = factionData[getFrom ?? augNf.getFromJoined()];
     if (augNfFaction && (augNf.canAfford() || augNf.canAffordWithDonation()))
         log(ns, `Getting NF from faction ${augNfFaction.name} (rep: ${formatNumberShort(augNfFaction.reputation)}). Price of next NF (Level ${nextNfLevel}) is ` +
             `${formatMoney(augNf.price)}, requires reputation: ${formatNumberShort(augNf.reputation)} ` +
             `(have ${formatNumberShort(augNfFaction.reputation)}, donate ${formatNumberShort(getReqDonationForRep(augNf.reputation, augNfFaction))})`);
     let nextUpNf; // Will tell the user when they will unlock the next NF level
     while (augNfFaction && nfPurchased < 200) { // Limit to 200 to avoid breaking the game if near infinite money.
-        const nextNfCost = augNf.price * (nfCountMult ** nfPurchased) * (augCountMult ** purchaseableAugs.length);
+        const currentAugCount = purchaseableAugs.length;
+        const candidateFaction = selectBestNfFaction(augNf, budget, totalAugCost, totalRepCost, purchaseFactionDonations, nfPurchased, currentAugCount);
+        if (candidateFaction && (!augNfFaction || candidateFaction !== augNfFaction.name))
+            augNfFaction = factionData[candidateFaction];
+        const nextNfCost = augNf.price * (nfCountMult ** nfPurchased) * (augCountMult ** currentAugCount);
         const nextNfRep = augNf.reputation * (nfCountMult ** nfPurchased);
         const currentNfFactionDonation = purchaseFactionDonations[augNfFaction.name] || 0;
         const nextNfTotalRepDonation = (nextNfRep <= augNfFaction.reputation) ? 0 : getReqDonationForRep(nextNfRep, augNfFaction);
@@ -844,7 +910,6 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
             break; // If we cannot afford the next NF, break
         }
         // Otherwise, add the next NF to our purchase order, and see if we can afford any more.
-        // TODO: #145 Buy NF from different factions as we move from ones with enough rep to ones that support donation
         const nextNfPrice = augNf.price * (nfCountMult ** nfPurchased); // Note this should be the base price, before scaling for number of augs purchased
         const nfClone = new AugmentationData(augNf.name, nextNfRep, nextNfPrice, augNf.stats, augNf.prereqs); // { ...augNf };
         nfClone.displayName += ` Level ${nextNfLevel}`
