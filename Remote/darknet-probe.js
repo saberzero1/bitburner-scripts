@@ -183,7 +183,11 @@ function getSolver(modelId) {
             const data = details.passwordHint || '';
             const digits = data.match(/\d/g);
             if (!digits) return null;
-            return digits.join('');
+            let candidate = digits.join('');
+            const expectedLength = Number.isFinite(details.passwordLength) ? details.passwordLength : null;
+            if (expectedLength && candidate.length > expectedLength)
+                candidate = candidate.slice(candidate.length - expectedLength);
+            return candidate;
         },
         
         'Caesar': async (ns, hostname, details) => {
