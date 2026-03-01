@@ -582,65 +582,55 @@ export async function main(ns) {
         let daemonArgs = []; // The args we currently want deamon to have
         let daemonRelaunchMessage; // Will hold any special messages we want to show the user if relaunching daemon.
 
-        // If daemon.js is already running in --looping-mode, we should not restart it, because
-        // TODO: currently daemon.js has no ability to kill it's loops on shutdown (so the next instance will be stuck with no RAM available)
-        if (existingDaemon?.args.includes("--looping-mode"))
-            daemonArgs = existingDaemon.args;
-        else {
-            // Determine the arguments we want to run daemon.js with. We will either pass these directly, or through stanek.js if we're running it first.
-            const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, tweak daemon to increase income rates
-            // When our hack level gets sufficiently high, hack/grow/weaken go so fast that spawning new scripts for each cycle becomes very
-            // expensive / laggy. To help with this, daemon.js supports "looping mode", to just spawn one long-lived script that does H/G/W in a loop.
-            if (false /* TODO: LOOPING MODE DISABLED UNTIL WORKING BETTER */ && player.skills.hacking >= hackThreshold) {
-                daemonArgs = ["--looping-mode", "--cycle-timing-delay", 40, "--queue-delay", 2000, "--initial-max-targets", 61, "--silent-misfires", "--no-share",
-                    "--recovery-thread-padding", Math.min(5.0, player.skills.hacking / hackThreshold)]; // Use more recovery thread padding as our hack level increases
-                // Log a special notice if we're going to be relaunching daemon.js for this reason
-                if (!existingDaemon || !(existingDaemon.args.includes("--looping-mode")))
-                    daemonRelaunchMessage = `Hack level (${player.skills.hacking}) is >= ${hackThreshold} (--high-hack-threshold): Starting daemon.js in high-performance hacking mode.`;
-            } else if (player.skills.hacking >= hackThreshold) { // "tight" mode. Tighter batches to increase income rate, at the cost of more frequent misfires
-                daemonArgs = ["--cycle-timing-delay", 40, "--queue-delay", 50, "--silent-misfires",
-                    "--recovery-thread-padding", Math.min(5.0, player.skills.hacking / hackThreshold)]; // Use more recovery thread padding as our hack level increases
-            }
-            else if (homeRam < 32) { // If we're in early BN 1.1 (i.e. with < 32GB home RAM), avoid squandering RAM
-                daemonArgs.push("--no-share", "--initial-max-targets", 1);
-            } else { // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
-                // Only do this if we aren't in --looping mode because TODO: currently it does not kill it's loops on shutdown, so they'd be stuck in hack exp mode
-                let useXpOnlyMode = prioritizeHackForDaedalus || prioritizeHackForWd ||
-                    // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8, because TODO: --xp-only doesn't handle stock manipulation)
-                    (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0 && resetInfo.currentNode != 8);
-                if (!useXpOnlyMode) { // Otherwise, respect the configured interval / duration
-                    const xpInterval = Number(options['xp-mode-interval-minutes']);
-                    const xpDuration = Number(options['xp-mode-duration-minutes']);
-                    const minutesInAug = getTimeInAug() / 60.0 / 1000.0;
-                    if (xpInterval > 0 && xpDuration > 0 && (minutesInAug % (xpInterval + xpDuration)) <= xpDuration)
-                        useXpOnlyMode = true; // We're in the time window where we should focus hack exp
-                    // If daemon.js was previously running in hack exp mode, prepare a message indicating that we 're switching back
-                    else if (existingDaemon?.args.includes("--xp-only"))
-                        daemonRelaunchMessage = `Time is up for "xp-mode", Relaunching daemon.js normally to focus on earning money for ${xpInterval} minutes (--xp-mode-interval-minutes)`;
-                }
-                if (useXpOnlyMode) {
-                    daemonArgs.push("--xp-only", "--silent-misfires", "--no-share");
-                    // If daemon.js isn't already running in hack exp mode, prepare a message to communicate the change
-                    if (!existingDaemon?.args.includes("--xp-only"))
-                        daemonRelaunchMessage = prioritizeHackForWd ? `We're close to the required hack level destroy the BN.` :
-                            prioritizeHackForDaedalus ? `Hack Level is the only missing requirement for Daedalus, so we will run daemon.js in --xp-only mode to try and speed along the invite.` :
-                                (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0) ?
-                                    `The current BitNode does not give any money from hacking, so we will run daemon.js in --xp-only mode.` :
-                                    `Relaunching daemon.js to focus on earning Hack Experience for ${options['xp-mode-duration-minutes']} minutes (--xp-mode-duration-minutes)`;
-                }
-            }
-            // Prevent daemon from starting "work-for-faction.js" since we now manage that script
-            daemonArgs.push('--disable-script', getFilePath('work-for-factions.js'));
-            // In BN8, always run in a mode that prioritizes stock market manipulation
-            if (resetInfo.currentNode == 8) daemonArgs.push("--stock-manipulation-focus");
-            // Don't run the script to join and manage bladeburner if it is explicitly disabled
-            if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
-            // Relay the option to suppress tail windows
-            if (options['no-tail-windows']) daemonArgs.push('--no-tail-windows');
-            // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
-            if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
-                daemonArgs.push('--reserved-ram', 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16));
+        // Determine the arguments we want to run daemon.js with. We will either pass these directly, or through stanek.js if we're running it first.
+        const hackThreshold = options['high-hack-threshold']; // If player.skills.hacking level is about 8000, tweak daemon to increase income rates
+        // When our hack level gets sufficiently high, hack/grow/weaken go so fast that spawning new scripts for each cycle becomes very
+        // expensive / laggy. To help with this, daemon.js supports "looping mode", to just spawn one long-lived script that does H/G/W in a loop.
+        if (player.skills.hacking >= hackThreshold) {
+            daemonArgs = ["--looping-mode", "--cycle-timing-delay", 40, "--queue-delay", 2000, "--initial-max-targets", 61, "--silent-misfires", "--no-share",
+                "--recovery-thread-padding", Math.min(5.0, player.skills.hacking / hackThreshold)]; // Use more recovery thread padding as our hack level increases
+            // Log a special notice if we're going to be relaunching daemon.js for this reason
+            if (!existingDaemon || !(existingDaemon.args.includes("--looping-mode")))
+                daemonRelaunchMessage = `Hack level (${player.skills.hacking}) is >= ${hackThreshold} (--high-hack-threshold): Starting daemon.js in high-performance hacking mode.`;
         }
+        else if (homeRam < 32) { // If we're in early BN 1.1 (i.e. with < 32GB home RAM), avoid squandering RAM
+            daemonArgs.push("--no-share", "--initial-max-targets", 1);
+        } else { // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
+            let useXpOnlyMode = prioritizeHackForDaedalus || prioritizeHackForWd ||
+                // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8, because TODO: --xp-only doesn't handle stock manipulation)
+                (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0 && resetInfo.currentNode != 8);
+            if (!useXpOnlyMode) { // Otherwise, respect the configured interval / duration
+                const xpInterval = Number(options['xp-mode-interval-minutes']);
+                const xpDuration = Number(options['xp-mode-duration-minutes']);
+                const minutesInAug = getTimeInAug() / 60.0 / 1000.0;
+                if (xpInterval > 0 && xpDuration > 0 && (minutesInAug % (xpInterval + xpDuration)) <= xpDuration)
+                    useXpOnlyMode = true; // We're in the time window where we should focus hack exp
+                // If daemon.js was previously running in hack exp mode, prepare a message indicating that we 're switching back
+                else if (existingDaemon?.args.includes("--xp-only"))
+                    daemonRelaunchMessage = `Time is up for "xp-mode", Relaunching daemon.js normally to focus on earning money for ${xpInterval} minutes (--xp-mode-interval-minutes)`;
+            }
+            if (useXpOnlyMode) {
+                daemonArgs.push("--xp-only", "--silent-misfires", "--no-share");
+                // If daemon.js isn't already running in hack exp mode, prepare a message to communicate the change
+                if (!existingDaemon?.args.includes("--xp-only"))
+                    daemonRelaunchMessage = prioritizeHackForWd ? `We're close to the required hack level destroy the BN.` :
+                        prioritizeHackForDaedalus ? `Hack Level is the only missing requirement for Daedalus, so we will run daemon.js in --xp-only mode to try and speed along the invite.` :
+                            (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0) ?
+                                `The current BitNode does not give any money from hacking, so we will run daemon.js in --xp-only mode.` :
+                                `Relaunching daemon.js to focus on earning Hack Experience for ${options['xp-mode-duration-minutes']} minutes (--xp-mode-duration-minutes)`;
+            }
+        }
+        // Prevent daemon from starting "work-for-faction.js" since we now manage that script
+        daemonArgs.push('--disable-script', getFilePath('work-for-factions.js'));
+        // In BN8, always run in a mode that prioritizes stock market manipulation
+        if (resetInfo.currentNode == 8) daemonArgs.push("--stock-manipulation-focus");
+        // Don't run the script to join and manage bladeburner if it is explicitly disabled
+        if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
+        // Relay the option to suppress tail windows
+        if (options['no-tail-windows']) daemonArgs.push('--no-tail-windows');
+        // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
+        if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
+            daemonArgs.push('--reserved-ram', 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16));
 
         // Once stanek's gift is accepted, launch it once per reset before we launch daemon (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
         let stanekRunning = (13 in unlockedSFs) && findScript('stanek.js') !== undefined;
