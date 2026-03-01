@@ -1912,8 +1912,9 @@ export async function main(ns) {
             }
 
             let growThreadsNeeded, weakenThreadsNeeded; // Used in advanced mode
+            let effectiveHackThreads = 0;
             if (advancedMode) { // Need to keep server money above zero, and security at minimum to farm xp from hack();
-                const effectiveHackThreads = Math.ceil(1 / server.percentageStolenPerHackThread()); // Only this many hack threads "count" for stealing/hardening. The rest get a 'free ride'
+                effectiveHackThreads = Math.ceil(1 / server.percentageStolenPerHackThread()); // Only this many hack threads "count" for stealing/hardening. The rest get a 'free ride'
                 if (!loopRunning && threads <= effectiveHackThreads) {
                     // We don't have enough ram for advanced XP grind (no hack threads would get a 'free ride'). Revert to simple weak/grow farming mode.
                     farmXpReentryLock[server.name] = false;
