@@ -72,6 +72,8 @@ class DarknetState {
         this.activeProbes = new Set(); // Set of hostnames with active probe scripts
         this.stasisServers = new Set(); // Set of hostnames with stasis links
         this.lastRefresh = 0;
+        this.lastStatusLog = 0;
+        this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
 
         // Load persisted passwords from file
         this.loadPasswords(ns);
@@ -161,15 +163,29 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 4: Clean up orphaned probes (servers that went offline)
     await cleanupOrphanedProbes(ns, state);
 
-    // Log status
+    const adminCount = Array.from(state.discoveredServers.values()).filter(s => s.hasAdmin).length;
+    const stats = {
+        discovered: state.discoveredServers.size,
+        passwords: state.knownPasswords.size,
+        probes: state.activeProbes.size,
+        stasis: state.stasisServers.size,
+        admin: adminCount
+    };
     if (verbose) {
-        const stats = {
-            discovered: state.discoveredServers.size,
-            passwords: state.knownPasswords.size,
-            probes: state.activeProbes.size,
-            stasis: state.stasisServers.size
-        };
         log(ns, `Darknet Status: ${JSON.stringify(stats)}`);
+    } else {
+        const now = Date.now();
+        const changed = Object.keys(stats).some(k => stats[k] !== state.lastStats[k]);
+        if (changed || (now - state.lastStatusLog) > 60000) {
+            const delta = Object.fromEntries(Object.keys(stats).map(k => [k, stats[k] - state.lastStats[k]]));
+            log(ns, `Darknet Progress: discovered ${stats.discovered} (${delta.discovered >= 0 ? '+' : ''}${delta.discovered}), ` +
+                `admin ${stats.admin} (${delta.admin >= 0 ? '+' : ''}${delta.admin}), ` +
+                `passwords ${stats.passwords} (${delta.passwords >= 0 ? '+' : ''}${delta.passwords}), ` +
+                `probes ${stats.probes} (${delta.probes >= 0 ? '+' : ''}${delta.probes}), ` +
+                `stasis ${stats.stasis} (${delta.stasis >= 0 ? '+' : ''}${delta.stasis})`);
+            state.lastStats = stats;
+            state.lastStatusLog = now;
+        }
     }
 }
 
