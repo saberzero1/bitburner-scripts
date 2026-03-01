@@ -263,7 +263,7 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
 
     // Create a file that will store the results of whatever command is executed.
     fName = fName || getDefaultCommandFileName(command);
-    const fNameCommand = fName + '.js'
+    const fNameCommand = `${fName}.${completionPort}.js`
     // Pre-write contents to the file that will allow us to detect if our temp script never got run
     const initialContents = "<Insufficient RAM>";
     ns.write(fName, initialContents, 'w');
@@ -491,9 +491,12 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
             break; // Script is done running
         }
         if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
-        if (completionPort)
-            await Promise.race([ns.nextPortWrite(completionPort), ns.sleep(sleepMs)]);
-        else
+        if (completionPort) {
+            if (ns.peek(completionPort) !== "NULL PORT DATA")
+                ns.readPort(completionPort);
+            else
+                await ns.sleep(sleepMs);
+        } else
             await ns.sleep(sleepMs);
         sleepMs = Math.min(sleepMs * 2, 200);
     }
