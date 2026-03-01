@@ -263,13 +263,13 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
 
     // Create a file that will store the results of whatever command is executed.
     fName = fName || getDefaultCommandFileName(command);
-    const fNameCommand = `${fName}.${completionPort}.js`
     // Pre-write contents to the file that will allow us to detect if our temp script never got run
     const initialContents = "<Insufficient RAM>";
     ns.write(fName, initialContents, 'w');
 
     const completionPort = nextCompletionPort = (nextCompletionPort % 20) + 1;
     ns.clearPort(completionPort);
+    const fNameCommand = `${fName}.${completionPort}.js`
     const commandToFile = `let r;try{const v=(${command});` +
         `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
         `r=JSON.stringify({ $type:'result', $value:w }, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}` +
