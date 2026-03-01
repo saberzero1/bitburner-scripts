@@ -53,7 +53,7 @@ export async function main(ns) {
         2.1,  // Easy.   Unlocks gangs, which reduces the need to grind faction and company rep for getting access to most augmentations, speeding up all BNs
 
         // 2nd Priority: More new features, from Harder BNs. Things will slow down for a while, but the new features should pay in dividends for all future BNs
-        10.1, // Hard.   Unlock Sleeves (which tremendously speed along gangs outside of BN2) and grafting (can speed up slow rep-gain BNs). // TODO: Buying / upgrading sleeve mem has no API, requires manual interaction. Can we automate this with UI clicking like casino.js?
+    10.1, // Hard.   Unlock Sleeves (which tremendously speed along gangs outside of BN2) and grafting (can speed up slow rep-gain BNs).
         8.2,  // Hard.   8.1 immediately unlocks stocks, 8.2 doubles stock earning rate with shorts. Stocks are never nerfed in any BN (4S can be made too pricey though), and we have a good pre-4S stock script.
         13.1, // Hard.   Unlock Stanek's Gift. We've put a lot of effort into min/maxing the Tetris, so we should try to get it early, even though it's a hard BN. I might change my mind and push this down if it proves too slow.
         7.1,  // Hard.   Unlocks the bladeburner API (and bladeburner outside of BN 6/7). Many recommend it before BN9 since it ends up being a faster win condition in some of the tougher bitnodes ahead.
@@ -247,6 +247,7 @@ export async function main(ns) {
         await checkOnDaedalusStatus(ns, player, stocksValue);
         await checkIfBnIsComplete(ns, player);
         await maybeAcceptStaneksGift(ns, player);
+        await maybeUpgradeSleeveMemory(ns, player);
         await checkOnRunningScripts(ns, player);
         await maybeDoCasino(ns, player);
         await maybeInstallAugmentations(ns, player);
@@ -597,7 +598,7 @@ export async function main(ns) {
             daemonArgs.push("--no-share", "--initial-max-targets", 1);
         } else { // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
             let useXpOnlyMode = prioritizeHackForDaedalus || prioritizeHackForWd ||
-                // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8, because TODO: --xp-only doesn't handle stock manipulation)
+                // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8)
                 (bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain == 0 && resetInfo.currentNode != 8);
             if (!useXpOnlyMode) { // Otherwise, respect the configured interval / duration
                 const xpInterval = Number(options['xp-mode-interval-minutes']);
@@ -608,6 +609,9 @@ export async function main(ns) {
                 // If daemon.js was previously running in hack exp mode, prepare a message indicating that we 're switching back
                 else if (existingDaemon?.args.includes("--xp-only"))
                     daemonRelaunchMessage = `Time is up for "xp-mode", Relaunching daemon.js normally to focus on earning money for ${xpInterval} minutes (--xp-mode-interval-minutes)`;
+            }
+            if (resetInfo.currentNode == 8 && useXpOnlyMode) {
+                useXpOnlyMode = false;
             }
             if (useXpOnlyMode) {
                 daemonArgs.push("--xp-only", "--silent-misfires", "--no-share");
@@ -688,10 +692,19 @@ export async function main(ns) {
             // If running with the wrong args, kill it so we can start it with the desired args
             if (wrongWork) await killScript(ns, 'work-for-factions.js', null, wrongWork);
 
-            // Start gangs immediately (even though daemon would eventually start it) since we want any income they provide right away after an ascend
-            // TODO: Consider monitoring gangs territory progress and increasing their budget / decreasing their reserve to help kick-start them
-            if (playerInGang && !findScript('gangs.js'))
-                launchScriptHelper(ns, 'gangs.js');
+            if (playerInGang) {
+                const gangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
+                const gangArgs = [];
+                if (gangInfo.territory < 0.2)
+                    gangArgs.push('--augmentations-budget', 0.4, '--equipment-budget', 0.02);
+                else if (gangInfo.territory < 0.5)
+                    gangArgs.push('--augmentations-budget', 0.25, '--equipment-budget', 0.01);
+                const existingGang = findScript('gangs.js');
+                if (existingGang && gangArgs.length > 0 && !gangArgs.every(a => existingGang.args.includes(a)))
+                    await killScript(ns, 'gangs.js', null, existingGang);
+                if (!findScript('gangs.js'))
+                    launchScriptHelper(ns, 'gangs.js', gangArgs);
+            }
         }
 
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
@@ -737,6 +750,28 @@ export async function main(ns) {
             log(ns, `WARNING: autopilot.js tried to accepted Stanek's Gift, but was denied.`, true, 'warning');
         // Whether we succeded or failed, don't try again - if we're denied entry (due to having an augmentation) we will never be allowed in
         acceptedStanek = true;
+    }
+
+    async function maybeUpgradeSleeveMemory(ns, player) {
+        if (resetInfo.currentNode != 10 || sleevesMaxedOut) return;
+        if (!(10 in unlockedSFs)) return;
+        try {
+            const doc = eval("document");
+            if (!doc) return;
+            const buttons = [...doc.querySelectorAll('button')]
+                .filter(b => /memory/i.test(b.innerText) && /upgrade|purchase|buy/i.test(b.innerText));
+            let clicked = false;
+            for (const button of buttons) {
+                if (button.disabled) continue;
+                button.click();
+                clicked = true;
+                await ns.sleep(50);
+            }
+            if (clicked)
+                log(ns, 'INFO: Attempted to purchase sleeve memory via UI.', false, 'info');
+        } catch (err) {
+            log(ns, `WARNING: Unable to automate sleeve memory upgrades: ${getErrorInfo(err)}`, false, 'warning');
+        }
     }
 
     /** Logic to steal 10b from the casino
@@ -978,9 +1013,12 @@ export async function main(ns) {
             const totalCost = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost +
                 (have4SData ? 0 : 1E9 * bitNodeMults.FourSigmaMarketDataCost);
             const ratio = totalWorth / totalCost;
-            // If we're e.g. 50% of the way there, hold off, regardless of the '--wait-for-4s' setting
-            // TODO: If ratio is > 1, we can afford it - but stockmaster won't buy until it has e.g. 20% more than the cost
-            //       (so it still has money to invest). It doesn't know we want to restart ASAP. Perhaps we should purchase ourselves?
+            if (ratio >= 1) {
+                await getNsDataThroughFile(ns, 'ns.stock.purchaseWseAccount()');
+                await getNsDataThroughFile(ns, 'ns.stock.purchaseTixApi()');
+                if (!have4SData) have4SData = await getNsDataThroughFile(ns, 'ns.stock.purchase4SMarketData()');
+                if (!have4STixApi) have4STixApi = await getNsDataThroughFile(ns, 'ns.stock.purchase4SMarketDataTixApi()');
+            }
             if (ratio >= options['wait-for-4s-threshold']) {
                 setStatus(ns, `Not installing until scripts purchase the 4SDataTixApi because we have ` +
                     `${(100 * totalWorth / totalCost).toFixed(0)}% of the cost (controlled by --wait-for-4s-threshold)`);
@@ -1023,8 +1061,30 @@ export async function main(ns) {
             return true;
         }
 
-        // TODO: Bladeburner black-op in progress
-        // TODO: Close to the rep needed for unlocking donations with a new faction?
+        if (7 in unlockedSFs && !options['disable-bladeburner']) {
+            const currentAction = await getNsDataThroughFile(ns, 'ns.bladeburner.getCurrentAction()');
+            if (currentAction?.type == 'BlackOp') {
+                setStatus(ns, `Not installing because a Bladeburner BlackOp is in progress (${currentAction.name}).`);
+                return true;
+            }
+        }
+        const favorToDonate = await getNsDataThroughFile(ns, 'ns.getFavorToDonate()');
+        const factions = player.factions;
+        if (factions.length > 0) {
+            const dictFavors = await getNsDataThroughFile(ns, 'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionFavor(f)]))',
+                '/Temp/faction-favor.txt', factions);
+            const dictReps = await getNsDataThroughFile(ns, 'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionRep(f)]))',
+                '/Temp/faction-rep.txt', factions);
+            const repToFavour = (rep) => Math.ceil(25500 * 1.02 ** (rep - 1) - 25000);
+            for (const fac of factions) {
+                const currentFavor = dictFavors[fac] ?? 0;
+                const repRequired = Math.max(0, repToFavour(favorToDonate) - repToFavour(currentFavor));
+                if (repRequired > 0 && repRequired <= 200000 && (dictReps[fac] ?? 0) >= repRequired * 0.5) {
+                    setStatus(ns, `Not installing because we are close to unlocking donations with ${fac}.`);
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
