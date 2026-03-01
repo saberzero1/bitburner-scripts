@@ -179,6 +179,12 @@ function getSolver(modelId) {
             }
             return null;
         },
+        'Captcha': async (ns, hostname, details) => {
+            const data = details.passwordHint || '';
+            const digits = data.match(/\d/g);
+            if (!digits) return null;
+            return digits.join('');
+        },
         
         'Caesar': async (ns, hostname, details) => {
             const hint = details.passwordHint || '';
@@ -244,6 +250,24 @@ function getSolver(modelId) {
         },
     };
     
+    if (!modelId) return null;
+    const normalized = modelId.toLowerCase();
+    if (normalized.includes('zerologon') || normalized.includes('nopassword')) return solvers['ZeroLogon'];
+    if (normalized.includes('captcha') || normalized.includes('cloudblare')) return solvers['Captcha'];
+    if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return solvers['SimplePin'];
+    if (normalized.includes('caesar')) return solvers['Caesar'];
+    if (normalized.includes('vigenere')) return solvers['Vigenere'];
+    if (normalized.includes('base64')) return solvers['Base64'];
+    if (normalized.includes('hex')) return solvers['Hexadecimal'];
+    if (normalized.includes('binary')) return solvers['Binary'];
+    if (normalized.includes('rot13')) return solvers['ROT13'];
+    if (normalized.includes('reverse')) return solvers['Reverse'];
+    if (normalized.includes('atbash')) return solvers['Atbash'];
+    if (normalized.includes('morse')) return solvers['MorseCode'];
+    if (normalized.includes('date')) return solvers['DateFormat'];
+    if (normalized.includes('phone')) return solvers['PhoneWords'];
+    if (normalized.includes('leet')) return solvers['LeetSpeak'];
+    if (normalized.includes('word')) return solvers['WordList'];
     return solvers[modelId] || null;
 }
 

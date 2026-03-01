@@ -6,6 +6,7 @@
 const PASSWORD_SOLVERS = {
     'ZeroLogon': solveZeroLogon,
     'SimplePin': solveSimplePin,
+    'Captcha': solveCaptcha,
     'WordList': solveWordList,
     'Caesar': solveCaesar,
     'Vigenere': solveVigenere,
@@ -25,6 +26,7 @@ export function getDarknetPasswordSolver(modelId) {
     if (!modelId) return null;
     const normalized = modelId.toLowerCase();
     if (normalized.includes('zerologon') || normalized.includes('nopassword')) return PASSWORD_SOLVERS['ZeroLogon'];
+    if (normalized.includes('captcha') || normalized.includes('cloudblare')) return PASSWORD_SOLVERS['Captcha'];
     if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return PASSWORD_SOLVERS['SimplePin'];
     if (normalized.includes('caesar')) return PASSWORD_SOLVERS['Caesar'];
     if (normalized.includes('vigenere')) return PASSWORD_SOLVERS['Vigenere'];
@@ -143,6 +145,16 @@ async function solveSimplePin(ns, hostname, serverInfo) {
         const result = await ns.dnet.authenticate(hostname, pin);
         if (result.success) return pin;
     }
+    return null;
+}
+
+async function solveCaptcha(ns, hostname, serverInfo) {
+    const data = serverInfo.passwordHint || '';
+    const digits = data.match(/\d/g);
+    if (!digits) return null;
+    const candidate = digits.join('');
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    if (result.success) return candidate;
     return null;
 }
 
