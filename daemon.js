@@ -20,7 +20,7 @@ let options;
 const argsSchema = [
     // Behaviour-changing flags
     ['disable-stock-manipulation', false], // You must now opt *out* of stock-manipulation mode by enabling this flag.
-    ['stock-manipulation-focus', false], // Stocks are main source of income - kill any scripts that would do them harm (TODO: Enable automatically in BN8)
+    ['stock-manipulation-focus', false], // Stocks are main source of income - kill any scripts that would do them harm
     ['s', true], // (obsolete) Enable Stock Manipulation. This is now true for default, but left as a valid argument for backwards-compatibility.
     ['stock-manipulation', true], // (obsolete) Same as above
 
@@ -117,7 +117,7 @@ export async function main(ns) {
     // For timing reasons the delay between each step should be *close* 1/4th of this number, but there is some imprecision
     let cycleTimingDelay = 0; // (Set in command line args)
     let queueDelay = 0; // (Set in command line args) The delay that it can take for a script to start, used to pessimistically schedule things in advance
-    let maxBatches = 0; // (Set in command line args) The max number of batches this daemon will spool up to avoid running out of IRL ram (TODO: Stop wasting RAM by scheduling batches so far in advance. e.g. Grind XP while waiting for cycle start!)
+    let maxBatches = 0; // (Set in command line args) The max number of batches this daemon will spool up to avoid running out of IRL ram
     let maxTargets = 0; // (Set in command line args) Initial value, will grow if there is an abundance of RAM
     let maxPreppingAtMaxTargets = 3; // The max servers we can prep when we're at our current max targets and have spare RAM
     // Allows some home ram to be reserved for ad-hoc terminal script running and when home is explicitly set as the "preferred server" for starting a helper
@@ -304,6 +304,11 @@ export async function main(ns) {
         xpOnly = options.x || options['xp-only'];
         stockMode = (options.s || options['stock-manipulation'] || options['stock-manipulation-focus']) && !options['disable-stock-manipulation'];
         stockFocus = options['stock-manipulation-focus'] && !options['disable-stock-manipulation'];
+        if (bitNodeN == 8 && !options['disable-stock-manipulation']) {
+            if (!stockFocus) log(ns, `INFO: In BN8, enabling --stock-manipulation-focus by default.`);
+            stockFocus = true;
+            stockMode = true;
+        }
         useHacknetNodes = options.n || options['use-hacknet-nodes'] || options['use-hacknet-servers'];
         verbose = options.v || options['verbose'];
         runOnce = options.o || options['run-once'];
@@ -438,6 +443,7 @@ export async function main(ns) {
 
         await buildToolkit(ns, [...asynchronousHelpers, ...periodicScripts, ...hackTools]); // build toolkit
         await buildServerList(ns, false); // create the exhaustive server list
+        await terminateLoopingScripts(ns);
 
         // If we ascended less than 10 minutes ago, start with some study and/or XP cycles to quickly restore hack XP
         const timeSinceLastAug = Date.now() - resetInfo.lastAugReset;
@@ -471,18 +477,23 @@ export async function main(ns) {
     function shouldImproveHacking() {
         return 0 != (bitNodeMults.ScriptHackMoneyGain * bitNodeMults.ScriptHackMoney) || // Check for disabled hack-income
             getPlayerMoney(ns) > 1e12 || // If we have sufficient money, we may consider improving hack infrastructure (to earn hack exp more quickly)
-            bitNodeN === 8 // The exception is in BN8, we still want lots of hacking to take place to manipulate stocks, which requires this infrastructure (TODO: Strike a balance between spending on this stuff and leaving money for stockmaster.js)
+            bitNodeN === 8 // The exception is in BN8, we still want lots of hacking to take place to manipulate stocks, which requires this infrastructure
     }
 
     /** Periodic scripts helper function: Get how much we're willing to spend on new servers (host-manager.js budget) */
     function getHostManagerBudget() {
         const serverSpend = -(moneySources?.sinceInstall?.servers ?? 0); // This is given as a negative number (profit), we invert it to get it as a positive expense amount
-        const budget = Math.max(0,
+        let budget = Math.max(0,
             // Ensure the total amount of money spent on new servers is less than the configured max spend amount
             options['max-purchased-server-spend'] * (moneySources?.sinceInstall?.hacking ?? 0) - serverSpend,
             // Special-case support: In some BNs hack income is severely penalized (or zero) but earning hack exp is still useful.
             // To support these, always allow a small percentage (0.1%) of our total earnings (including other income sources) to be spent on servers
             (moneySources?.sinceInstall?.total ?? 0) * 0.001 - serverSpend);
+        if (bitNodeN == 8) {
+            const liquid = Math.max(0, getPlayerMoney(ns) - reservedMoney(ns));
+            const reserveForStocks = liquid * 0.5;
+            budget = Math.min(budget, Math.max(0, liquid - reserveForStocks));
+        }
         //log(ns, `Math.max(0, ${options['max-purchased-server-spend']} * (${formatMoney(moneySources?.sinceInstall?.hacking)} ?? 0) - ${formatMoney(serverSpend)}, ` +
         //    `(${formatMoney(moneySources?.sinceInstall?.total)} ?? 0) * 0.001 - ${formatMoney(serverSpend)}) = ${formatMoney(budget)}`);
         return budget;
@@ -810,7 +821,7 @@ export async function main(ns) {
                         else if (await server.isPrepping())
                             cantHackButPrepping.push(server);
                     } else if (await server.isTargeting()) { // Note servers already being targeted from a prior loop
-                        targeting.push(server); // TODO: Switch to continuously queing batches in the seconds leading up instead of far in advance with large delays
+                        targeting.push(server);
                     } else if (await server.isPrepping()) { // Note servers already being prepped from a prior loop
                         prepping.push(server);
                     } else if (isWorkCapped() || xpOnly) { // Various conditions for which we'll postpone any additional work on servers
@@ -862,8 +873,8 @@ export async function main(ns) {
                         return diff != 0.0 ? diff : b.getMoneyPerRamSecond() - a.getMoneyPerRamSecond(); // Break ties by sorting by max-money
                     });
                     // Try to prep them all unless one of our capping rules are hit
-                    // TODO: Something was not working right here (might be working now that prep code is fixed) so we can probably start prepping more than 1 server again.
-                    for (let j = 0; j < 1 /*cantHack.length*/; j++) {
+                    const maxCantHackPrep = Math.min(cantHack.length, maxPreppingAtMaxTargets);
+                    for (let j = 0; j < maxCantHackPrep; j++) {
                         const server = cantHack[j];
                         if (isWorkCapped()) break;
                         if (cantHackButPrepped.includes(server) || cantHackButPrepping.includes(server))
@@ -888,11 +899,6 @@ export async function main(ns) {
                 lowUtilizationIterations = utilizationPercent <= lowUtilizationThreshold ? lowUtilizationIterations + 1 : 0;
 
                 // If we've been at low utilization for longer than the max hack cycle out of all our targets, we can add a target.
-                // 
-                // TODO: Make better use of RAM by prepping more targets. Try not scheduling batches way in advance with a sleep, but instead
-                //       witholding batches until they're closer to when they need to be kicked off.
-                //       We can add logic to kill lower priority tasks using RAM (such as share, and scripts targetting low priority targets)
-                //       if necessary to free up ram for new high-priority target batches.
                 let intervalsPerTargetCycle = targeting.length == 0 ? 120 :
                     Math.ceil((targeting.reduce((max, t) => Math.max(max, t.timeToWeaken()), 0) + cycleTimingDelay) / loopInterval);
                 //log(ns, `intervalsPerTargetCycle: ${intervalsPerTargetCycle} lowUtilizationIterations: ${lowUtilizationIterations} loopInterval: ${loopInterval}`);
@@ -1134,7 +1140,8 @@ export async function main(ns) {
         // Function to tell if the sever is running any tools, with optional filtering criteria on the tool being run
         async isSubjectOfRunningScript(filter, useCache = true, count = false) {
             let total = 0;
-            for (const hostname of allHostNames) // For each server that could be running scripts (TODO: Maintain a smaller list of only servers with more than 1.6GB RAM)
+            const hostNames = dictServerMaxRam ? allHostNames.filter(host => (dictServerMaxRam[host] ?? 0) > 1.6) : allHostNames;
+            for (const hostname of hostNames)
                 for (const process of processList(this.ns, hostname, useCache)) // For all scripts on the server
                     // Does the script's arguments suggest it is targetting this server and matches the filter criteria?
                     if (process.args.length > 0 && process.args[0] == this.name && (!filter || filter(process))) {
@@ -1173,7 +1180,9 @@ export async function main(ns) {
         }
         // this is the target growth coefficient per cycle, based on theft
         targetGrowthCoefficientAfterTheft() {
-            return 1 / (1 - (this.getHackThreadsNeeded() * this.percentageStolenPerHackThread()));
+            const percentStolen = this.getHackThreadsNeeded() * this.percentageStolenPerHackThread();
+            const moneyAfterHack = Math.max(1, this.getMaxMoney() * (1 - percentStolen));
+            return this.getMaxMoney() / moneyAfterHack;
         }
         cyclesNeededForGrowthCoefficient() {
             return Math.log(this.targetGrowthCoefficient()) / Math.log(this.adjustedGrowthRate());
@@ -1275,18 +1284,32 @@ export async function main(ns) {
         return utilizationStats.totalUsedRam / utilizationStats.totalMaxRam;
     }
 
+    function getOptimalPacedCycles(currentTarget) {
+        return Math.min(maxBatches, Math.max(1, Math.floor(((currentTarget.timeToWeaken()) / cycleTimingDelay).toPrecision(14)) - 1));
+    }
+
+    function getScheduleLookaheadMs(currentTarget) {
+        const minLookahead = Math.max(2000, cycleTimingDelay * 2);
+        const targetWindow = Math.min(currentTarget.timeToWeaken(), cycleTimingDelay * maxBatches);
+        return Math.max(minLookahead, targetWindow);
+    }
+
     /** return a "performance snapshot" (Ram required for the cycle) to compare against optimal, or another snapshot
-     * TODO: Better gauge of performance might be money stolen per (RAM * time) cost
      * @param {} currentTarget
-     * @param {{ listOfServersFreeRam: number[]; totalMaxRam: number; totalFreeRam: number; totalUsedRam: number; }} networkStats */
-    function getPerformanceSnapshot(currentTarget, networkStats) {
+     * @param {{ listOfServersFreeRam: number[]; totalMaxRam: number; totalFreeRam: number; totalUsedRam: number; }} networkStats
+     * @param {number} optimalPacedCycles */
+    function getPerformanceSnapshot(currentTarget, networkStats, optimalPacedCycles) {
         // The total RAM cost of running one weaken/hack/grow cycle to steal `currentTarget.percentageToSteal` of `currentTarget.money`
         const weaken1Cost = currentTarget.getWeakenThreadsNeededAfterTheft() * getTool("weak").cost;
         const weaken2Cost = currentTarget.getWeakenThreadsNeededAfterGrowth() * getTool("weak").cost;
         const growCost = currentTarget.getGrowThreadsNeededAfterTheft() * getTool("grow").cost;
         const hackCost = currentTarget.getHackThreadsNeeded() * getTool("hack").cost;
+        const ramCost = weaken1Cost + weaken2Cost + growCost + hackCost;
+        const moneyPerCycle = currentTarget.actualPercentageToSteal() * currentTarget.getMaxMoney();
+        const cycleSeconds = Math.max(1, currentTarget.timeToWeaken()) / 1000;
+        const moneyPerRamSecond = ramCost > 0 ? (moneyPerCycle / ramCost) / cycleSeconds : 0;
         // Simulate how many times we could schedule this batch given current server ram availability
-        // (and hope that whatever executes the tasks in this batch is clever enough to slot them in as such (TODO: simulate using our actual executor logic?)
+        // (and hope that whatever executes the tasks in this batch is clever enough to slot them in as such)
         const jobs = [weaken1Cost, weaken2Cost, growCost, hackCost].sort((a, b) => b - a); // Sort jobs largest to smallest
         const simulatedRemainingRam = networkStats.listOfServersFreeRam.slice()
             // Scheduler would sort servers by largest to smallest before slotting jobs
@@ -1302,17 +1325,16 @@ export async function main(ns) {
                     canScheduleAnother = false;
                 else
                     simulatedRemainingRam[freeSlot] -= job;
+                simulatedRemainingRam.sort((a, b) => b - a);
             }
         }
         return {
             percentageToSteal: currentTarget.actualPercentageToSteal(),
             canBeScheduled: maxScheduled > 0,
-            // Given our timing delay, **approximately** how many cycles can we initiate before the first batch's first task fires?
-            // TODO: Do a better job of calculating this *outside* of the performance snapshot, and only calculate it once.
-            optimalPacedCycles: Math.min(maxBatches, Math.max(1, Math.floor(((currentTarget.timeToWeaken()) / cycleTimingDelay).toPrecision(14))
-                - 1)), // Fudge factor, this isnt an exact science
+            optimalPacedCycles: optimalPacedCycles,
             // Given RAM availability, how many cycles could we schedule across all hosts?
-            maxCompleteCycles: Math.max(maxScheduled - 1, 1) // Fudge factor. The executor isn't perfect
+            maxCompleteCycles: Math.max(maxScheduled - 1, 1), // Fudge factor. The executor isn't perfect
+            moneyPerRamSecond: moneyPerRamSecond
         };
     }
 
@@ -1347,9 +1369,10 @@ export async function main(ns) {
         let performanceSnapshot = null;
         currentTarget.percentageToSteal = Math.max(currentTarget.percentageToSteal, percentPerHackThread); // If the initial % to steal is below the minimum, raise it
         // Make adjustments to the number of hack threads until we zero in on the best amount
+        const optimalPacedCycles = getOptimalPacedCycles(currentTarget);
         while (++attempts < maxAdjustments) {
-            performanceSnapshot = getPerformanceSnapshot(currentTarget, networkStats);
-            const adjustment = analyzeSnapshot(ns, performanceSnapshot, currentTarget, networkStats, increment);
+            performanceSnapshot = getPerformanceSnapshot(currentTarget, networkStats, optimalPacedCycles);
+            const adjustment = analyzeSnapshot(ns, performanceSnapshot, currentTarget, networkStats, increment, optimalPacedCycles);
             if (runOnce && verbose)
                 log(ns, `Adjustment ${attempts} (increment ${increment}): ${adjustment} to ${newHackThreads} hack threads ` +
                     `(from ${formatNumber(currentTarget.actualPercentageToSteal() * 100)}% or ${currentTarget.getHackThreadsNeeded()} hack threads)`);
@@ -1380,7 +1403,7 @@ export async function main(ns) {
     }
 
     // Suggests an adjustment to the percentage to steal based on how much ram would be consumed if attempting the current percentage.
-    function analyzeSnapshot(ns, snapshot, currentTarget, networkStats, incrementalHackThreads) {
+    function analyzeSnapshot(ns, snapshot, currentTarget, networkStats, incrementalHackThreads, optimalPacedCycles) {
         const maxPercentageToSteal = options['max-steal-percentage'];
         const lastP2steal = currentTarget.percentageToSteal;
         // Priority is to use as close to the target ram as possible overshooting.
@@ -1392,9 +1415,10 @@ export async function main(ns) {
         } else if (snapshot.maxCompleteCycles > snapshot.optimalPacedCycles && lastP2steal < maxPercentageToSteal) {
             // Test increasing by the increment, but if it causes us to go over maximum desired utilization, do not suggest it
             currentTarget.percentageToSteal = (currentTarget.getHackThreadsNeeded() + incrementalHackThreads) * currentTarget.percentageStolenPerHackThread();
-            const comparisonSnapshot = getPerformanceSnapshot(currentTarget, networkStats);
+            const comparisonSnapshot = getPerformanceSnapshot(currentTarget, networkStats, optimalPacedCycles);
             currentTarget.percentageToSteal = lastP2steal;
-            return isOvershot(comparisonSnapshot) ? 0.00 : incrementalHackThreads;
+            if (isOvershot(comparisonSnapshot)) return 0.00;
+            return comparisonSnapshot.moneyPerRamSecond >= snapshot.moneyPerRamSecond * 0.98 ? incrementalHackThreads : 0.00;
         }
         return 0.00;
     }
@@ -1410,8 +1434,10 @@ export async function main(ns) {
         if (currentTarget.getHackThreadsNeeded() === 0)
             return log(ns, `WARNING: Attempted to schedule empty cycle ${maxCycles} x ${getTargetSummary(currentTarget)}? ${JSON.stringify(snapshot)}`, false, 'warning');
         let firstEnding = null, lastStart = null, lastBatch = 0, cyclesScheduled = 0;
+        const scheduleCutoff = Date.now() + getScheduleLookaheadMs(currentTarget);
         while (cyclesScheduled < maxCycles) {
             const newBatchStart = new Date((cyclesScheduled === 0) ? Date.now() + queueDelay : lastBatch.getTime() + cycleTimingDelay);
+            if (newBatchStart.getTime() > scheduleCutoff) break;
             lastBatch = new Date(newBatchStart.getTime());
             const batchTiming = getScheduleTiming(newBatchStart, currentTarget);
             if (verbose && runOnce) logSchedule(ns, batchTiming, currentTarget); // Special log for troubleshooting batches
@@ -1433,7 +1459,6 @@ export async function main(ns) {
         for (const schedObj of scheduledTasks) {
             for (const schedItem of schedObj.scheduleItems) {
                 const discriminationArg = `Batch ${schedObj.batchNumber}-${schedItem.description}`;
-                // Args spec: [0: Target, 1: DesiredStartTime (used to delay tool start), 2: ExpectedEndTime (informational), 3: Duration (informational), 4: DoStockManipulation, 5: DisableWarnings]
                 const args = [currentTarget.name, schedItem.start.getTime(), schedItem.end - schedItem.start, discriminationArg];
                 args.push(...getFlagsArgs(schedItem.toolShortName, currentTarget.name));
                 if (options.i && currentTerminalServer?.name == currentTarget.name && schedItem.toolShortName == "hack")
@@ -1466,8 +1491,12 @@ export async function main(ns) {
         const silentMisfires = options['silent-misfires'] ||
             // Must disable misfire alerts in BNs where hack income is disabled because the money gained will always return 0
             (toolName == "hack" && (bitNodeMults.ScriptHackMoneyGain * bitNodeMults.ScriptHackMoney == 0));
-        if (["hack", "grow"].includes(toolName)) // Push an arg used by remote hack/grow tools to determine whether it should manipulate the stock market
-            args.push(stockMode && (toolName == "hack" && shouldManipulateHack[target] || toolName == "grow" && shouldManipulateGrow[target]) ? 1 : 0);
+        if (["hack", "grow", "weak"].includes(toolName)) {
+            if (["hack", "grow"].includes(toolName))
+                args.push(stockMode && (toolName == "hack" && shouldManipulateHack[target] || toolName == "grow" && shouldManipulateGrow[target]) ? 1 : 0);
+            else
+                args.push(0);
+        }
         args.push(overrideSilentMisfires ?? (silentMisfires ? 1 : 0)); // Optional arg to disable toast warnings about e.g. a failed hack or early grow/weaken
         args.push(allowLooping && loopingMode ? 1 : 0); // Argument to indicate whether the cycle should loop perpetually
         return args;
@@ -1511,33 +1540,8 @@ export async function main(ns) {
 
         const schedHack = getScheduleItem("hack", "hack", batchTiming.hackStart, batchTiming.hackEnd, currentTarget.getHackThreadsNeeded());
         const schedWeak1 = getScheduleItem("weak1", "weak", batchTiming.firstWeakenStart, batchTiming.firstWeakenEnd, currentTarget.getWeakenThreadsNeededAfterTheft());
-        // Special end-game case, if we have no choice but to hack a server to zero money, schedule back-to-back grows to restore money
-        // TODO: This approach isn't necessary if we simply include the `growThreadsNeeded` logic to take into account the +1$ added before grow.
-        let schedGrow, schedWeak2;
-        if (currentTarget.percentageStolenPerHackThread() >= 1) {
-            // Use math and science to minimize total threads required to inject 1 dollar per threads, then grow that to max.
-            let calcThreadsForGrow = money => Math.ceil(((Math.log(1 / (money / currentTarget.getMaxMoney())) / Math.log(currentTarget.adjustedGrowthRate()))
-                / currentTarget.serverGrowthPercentage()).toPrecision(14));
-            let stepSize = Math.floor(currentTarget.getMaxMoney() / 4), injectThreads = stepSize, schedGrowThreads = calcThreadsForGrow(injectThreads);
-            for (let i = 0; i < 100 && stepSize > 0; i++) {
-                if (injectThreads + schedGrowThreads > (injectThreads + stepSize) + calcThreadsForGrow(injectThreads + stepSize))
-                    injectThreads += stepSize;
-                else if (injectThreads + schedGrowThreads > (injectThreads - stepSize) + calcThreadsForGrow(injectThreads - stepSize))
-                    injectThreads -= stepSize;
-                schedGrowThreads = calcThreadsForGrow(injectThreads);
-                stepSize = Math.floor(stepSize / 2);
-            }
-            schedItems.push(getScheduleItem("grow-from-zero", "grow", new Date(batchTiming.growStart.getTime() - (cycleTimingDelay / 8)),
-                new Date(batchTiming.growEnd.getTime() - (cycleTimingDelay / 8)), injectThreads)); // Will put $injectThreads on the server
-            // This will then grow from whatever % $injectThreads is back to 100%
-            schedGrow = getScheduleItem("grow", "grow", batchTiming.growStart, batchTiming.growEnd, schedGrowThreads);
-            schedWeak2 = getScheduleItem("weak2", "weak", batchTiming.secondWeakenStart, batchTiming.secondWeakenEnd,
-                Math.ceil(((injectThreads + schedGrowThreads) * growthThreadHardening / actualWeakenPotency()).toPrecision(14)));
-            if (verbose) log(ns, `INFO: Special grow strategy since percentage stolen per hack thread is 100%: G1: ${injectThreads}, G1: ${schedGrowThreads}, W2: ${schedWeak2.threadsNeeded} (${currentTarget.name})`);
-        } else {
-            schedGrow = getScheduleItem("grow", "grow", batchTiming.growStart, batchTiming.growEnd, currentTarget.getGrowThreadsNeededAfterTheft());
-            schedWeak2 = getScheduleItem("weak2", "weak", batchTiming.secondWeakenStart, batchTiming.secondWeakenEnd, currentTarget.getWeakenThreadsNeededAfterGrowth());
-        }
+        const schedGrow = getScheduleItem("grow", "grow", batchTiming.growStart, batchTiming.growEnd, currentTarget.getGrowThreadsNeededAfterTheft());
+        const schedWeak2 = getScheduleItem("weak2", "weak", batchTiming.secondWeakenStart, batchTiming.secondWeakenEnd, currentTarget.getWeakenThreadsNeededAfterGrowth());
 
         if (hackOnly) {
             schedItems.push(schedHack);
@@ -1584,9 +1588,10 @@ export async function main(ns) {
         if (useSmallestServerPossible) // If so-configured, fill up small servers before utilizing larger ones (can be laggy)
             preferredServerOrder.reverse();
 
-        // IDEA: "home" is more effective at grow() and weaken() than other nodes (has multiple cores) (TODO: By how much?)
-        //       so if this is one of those tools, put it at the front of the list of preferred candidates, otherwise keep home ram free if possible
-        //       TODO: This effort is wasted unless we also scale down the number of threads "needed" when running on home. We will overshoot grow/weaken
+        const homeCoreBonus = homeServer?.server?.cpuCores ? (1 + (homeServer.server.cpuCores - 1) / 16) : 1;
+        if ((tool.shortName == "grow" || tool.shortName == "weak") && preferredServerName == "home" && homeCoreBonus > 1)
+            threads = Math.ceil(threads / homeCoreBonus);
+
         const homeIndex = preferredServerOrder.findIndex(i => i.name == "home");
         if (homeIndex > -1) { // Home server might not be in the server list at all if it has insufficient RAM
             const home = preferredServerOrder.splice(homeIndex, 1)[0];
@@ -2052,10 +2057,28 @@ export async function main(ns) {
         serversWithOwnedStock = newServersWithOwnedStock;
     }
 
+    async function terminateLoopingScripts(ns) {
+        const loopTools = [getTool("hack").name, getTool("grow").name, getTool("weak").name, getTool("manualhack").name];
+        const loopPids = [];
+        for (const host of allHostNames) {
+            for (const process of processList(ns, host, false)) {
+                if (!loopTools.includes(process.filename)) continue;
+                if (process.args.length > 0 && process.args[process.args.length - 1])
+                    loopPids.push(process.pid);
+            }
+        }
+        if (loopPids.length > 0) {
+            await killProcessIds(ns, loopPids);
+            loopsByServer_Grow = {}, loopsByServer_Weaken = {}, loopsHackThreadsByServer = {};
+            nextXpCycleEnd = [];
+        }
+    }
+
     // Kills all scripts running the specified tool and targeting one of the specified servers if stock market manipulation is enabled
     async function terminateScriptsManipulatingStock(ns, servers, toolName) {
-        const processes = await Promise.all(allHostNames.flatMap(hostname => processList(ns, hostname, false)));
-        const stockManipArgIdx = 4; // TODO: This is unmaintanable AF
+        const processes = allHostNames.flatMap(hostname => processList(ns, hostname, false));
+        const stockManipArgIdx = 4;
+        const loopArgIdx = 6;
         const problematicProcesses = processes.filter(process => servers.includes(process.args[0]) &&
             (loopingMode || toolName == process.filename && process.args.length > stockManipArgIdx && process.args[stockManipArgIdx]));
         const problematicProcessesIds = problematicProcesses.map(process => process.pid);
@@ -2067,13 +2090,11 @@ export async function main(ns) {
         if (!loopingMode) return;
         const strGrow = getTool("grow").name, strWeak = getTool("weak").name, strHack = getTool("hack").name;
         problematicProcesses.forEach(process => {
-            // The "loop mode" flag is at index [6] hack and grow scripts
-            if (toolName == strGrow && 1 == (process.args.length > 6 ? process.args[6] : 0))
+            if (toolName == strGrow && 1 == (process.args.length > loopArgIdx ? process.args[loopArgIdx] : 0))
                 loopsByServer_Grow[process.args[0]] -= 1;
-            else if (toolName == strWeak && 1 == (process.args.length > 6 ? process.args[6] : 0))
+            else if (toolName == strWeak && 1 == (process.args.length > loopArgIdx ? process.args[loopArgIdx] : 0))
                 loopsByServer_Weaken[process.args[0]] -= 1;
-            // Weaken's "loop mode" arg is at index [5] TODO: This is annoying. Make args consistent
-            else if (toolName == strHack && 1 == (process.args.length > 5 ? process.args[5] : 0))
+            else if (toolName == strHack && 1 == (process.args.length > loopArgIdx ? process.args[loopArgIdx] : 0))
                 loopsHackThreadsByServer[process.args[0]] -= process.threads;
         });
         loopsByServer_Grow

@@ -7,9 +7,9 @@ export async function main(ns) {
         /*args[1]*/ start_time = 0,
         /*args[2]*/ duration = 0,
         /*args[3]*/ description = "",
-        // Note, unlike Grow / Hack, no stock manipulation arg here.
-        /*args[4]*/ silentMisfires = false,
-        /*args[5]*/ loopingMode = false
+        /*args[4]*/ _stockManipulation = 0,
+        /*args[5]*/ silentMisfires = false,
+        /*args[6]*/ loopingMode = false
     ] = ns.args;
 
     // We may need to sleep before we start the operation to align ourselves properly with other batch cycle (HGW) operations
