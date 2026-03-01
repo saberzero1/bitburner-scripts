@@ -240,6 +240,10 @@ async function mainLoop(ns) {
             followPlayerSleeve ??= i; // Skips assignment if previously assigned
     followPlayerSleeve ??= 0; // If all have shock, use the first sleeve
 
+    const assignedFactions = new Set(task
+        .filter(t => typeof t === 'string' && t.startsWith("work for faction '"))
+        .map(t => t.match(/work for faction '([^']+)'/)?.[1])
+        .filter(Boolean));
     for (let i = 0; i < numSleeves; i++) {
         let sleeve = sleeveInfo[i]; // For convenience, merge all sleeve stats/info into one object
         // Manage sleeve augmentations (if available)
@@ -248,7 +252,11 @@ async function mainLoop(ns) {
 
         // Decide what we think the sleeve should be doing for the next little while
         let [designatedTask, command, args, statusUpdate] =
-            await pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain);
+            await pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain, assignedFactions);
+        if (typeof designatedTask === 'string' && designatedTask.startsWith("work for faction '")) {
+            const factionMatch = designatedTask.match(/work for faction '([^']+)'/);
+            if (factionMatch) assignedFactions.add(factionMatch[1]);
+        }
 
         // After picking sleeve tasks, take a note of the sleeve's health at the end of the prior loop so we can detect failures
         [lastSleeveHp[i], lastSleeveShock[i]] = [sleeve.hp.current, sleeve.shock];
@@ -267,13 +275,7 @@ async function mainLoop(ns) {
     }
 }
 
-/** Picks the best task for a sleeve, and returns the information to assign and give status updates for that task.
- * @param {NS} ns
- * @param {Player} playerInfo
- * @param {{ type: "COMPANY"|"FACTION"|"CLASS"|"CRIME", cyclesWorked: number, crimeType: string, classType: string, location: string, companyName: string, factionName: string, factionWorkType: string }} playerWorkInfo
- * @param {SleevePerson} sleeve
- * @returns {Promise<[string, string, any[], string]>} a 4-tuple of task name, command, args, and status message */
-async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain) {
+async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain, assignedFactions) {
     // Initialize sleeve dicts on first loop
     if (lastSleeveHp[i] === undefined) lastSleeveHp[i] = sleeve.hp.current;
     if (lastSleeveShock[i] === undefined) lastSleeveShock[i] = sleeve.shock;
@@ -337,10 +339,6 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             ];
         }
     }
-    const assignedFactions = new Set(task
-        .filter(t => typeof t === 'string' && t.startsWith("work for faction '"))
-        .map(t => t.match(/work for faction '([^']+)'/)?.[1])
-        .filter(Boolean));
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
         const faction = playerWorkInfo.factionName;
