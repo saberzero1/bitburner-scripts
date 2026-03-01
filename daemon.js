@@ -379,6 +379,11 @@ export async function main(ns) {
                 shouldRun: () => reqRam(64) && ns.fileExists('DarkscapeNavigator.exe', 'home'),
                 shouldTail: false
             },
+            {
+                name: "corporation.js",
+                shouldRun: () => reqRam(64) && (3 in dictSourceFiles || bitNodeN === 3),
+                minRamReq: 25
+            },
         ];
         // Add any additional scripts to be run provided by --run-script arguments
         options['run-script'].forEach(s => asynchronousHelpers.push({ name: s }));
