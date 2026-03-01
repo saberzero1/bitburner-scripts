@@ -770,7 +770,7 @@ async function runRound1(ns, state) {
                 }
                 // Quality-focused distribution (65% Engineers)
                 await assignEmployeesToProduction(ns, 'Agriculture', city, false, 'quality');
-                log(ns, `Round 1: Hired employees in ${city} (${office.numEmployees}→${Math.min(targetEmployees, office.size)})`);
+                log(ns, `Round 1: Hired employees in ${city} (${office.numEmployees} -> ${Math.min(targetEmployees, office.size)})`);
             }
             allCitiesReady = false;
             continue;
@@ -783,6 +783,7 @@ async function runRound1(ns, state) {
             await assignEmployeesToProduction(ns, 'Agriculture', city, false, 'quality');
             log(ns, `Round 1: Reassigned ${city} employees to quality focus`);
             allCitiesReady = false;
+        }
     }
 
     if (!allCitiesReady) {
@@ -959,6 +960,7 @@ async function runRound2(ns, state) {
                 await assignEmployeesToProduction(ns, 'Chemical', city, false, 'quality');
                 log(ns, `Round 2: Hired employees for Chemical in ${city}`);
             }
+        }
     }
 
     // Set up export routes: Agriculture -> Chemical (Plants)
