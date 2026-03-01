@@ -107,20 +107,33 @@ export async function main(ns) {
                 // Make purchases in a loop until we hit our purchase-per-loop limit, or we've spent enough to avoid hashes being wasted next tick
                 while (lastPurchaseSucceeded && purchasesThisLoop < maxPurchasesPerLoop && getMinCost(purchases) <= maxHashSpend()) {
                     lastPurchaseSucceeded = false; // Safety mechanism to avoid looping if we don't enter the for-loop below for some reason
-                    // Loop over all requested purchases and try to buy each one once (TODO: Figure out in advance how many we can buy of each and buy in bulk)
                     for (const spendAction of purchases) {
                         const cost = ns.hacknet.hashCost(spendAction); // What's the cost of making this purchase
                         const budget = maxHashSpend();
                         if (cost > budget) continue; // Skip this purchase if if costs more than we have left
-                        const quantity = spendAction == sellForMoney ? Math.floor(budget / cost) : 1; // We can easily buy money in bulk, because the cost doesn't scale.
+                        let quantity = Math.max(1, Math.floor(budget / cost));
+                        const serverTarget = parameterizedSpendOptions.includes(spendAction) ? spendOnServer : undefined;
+                        let purchaseSucceeded = false;
+                        if (quantity > 1 && spendAction != sellForMoney) {
+                            let attempt = quantity;
+                            while (attempt > 1 && !purchaseSucceeded) {
+                                purchaseSucceeded = ns.hacknet.spendHashes(spendAction, serverTarget, attempt);
+                                if (!purchaseSucceeded) attempt = Math.floor(attempt / 2);
+                                else quantity = attempt;
+                            }
+                        }
+                        if (!purchaseSucceeded) {
+                            quantity = Math.max(1, Math.floor(budget / cost));
+                            purchaseSucceeded = ns.hacknet.spendHashes(spendAction, serverTarget, quantity);
+                        }
                         const totalCost = cost * quantity;
-                        lastPurchaseSucceeded = ns.hacknet.spendHashes(spendAction, parameterizedSpendOptions.includes(spendAction) ? spendOnServer : undefined, quantity);
+                        lastPurchaseSucceeded = purchaseSucceeded;
                         if (!lastPurchaseSucceeded) { // Note: Even if we had enough hashes, we may fail if another script spends them first
                             log(ns, `WARN: Failed to spend hashes on ${quantity}x '${spendAction}'. Cost was: ${formatHashes(totalCost)} of ${formatHashes(budget)} ` +
                                 `budgeted hashes. Have: ${formatHashes(ns.hacknet.numHashes())} of ${formatHashes(capacity)} (capacity) hashes.`);
                             break; // Break out of for-loop (should also break out of the while since lastPurchaseSucceeded == false)
                         }
-                        purchasesThisLoop++;
+                        purchasesThisLoop += quantity;
                         if (purchasesThisLoop < 10) { // If we purchase more than 10 things, don't even bother logging each one, it'll slow us down
                             log(ns, `SUCCESS: ${purchasesThisLoop == 1 ? '' : `(${purchasesThisLoop}) `}Spent ${formatHashes(totalCost)} hashes on ` +
                                 `${quantity}x '${spendAction}'. Next upgrade will cost ${formatHashes(ns.hacknet.hashCost(spendAction))}.`, false, 'success');
