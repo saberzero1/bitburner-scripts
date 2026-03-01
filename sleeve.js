@@ -343,27 +343,26 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
         const faction = playerWorkInfo.factionName;
-        if (assignedFactions.has(faction)) return;
-        if (gangFactionName && faction === gangFactionName) {
-            unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
-            return;
-        }
-        if (!(unsupportedFactionWork[faction] > Date.now())) {
-            const supportedWorks = (factionWorkTypesCache[faction] ?? works).map(w => w.toLowerCase());
-            const allowedWorks = supportedWorks.filter(w => works.includes(w));
-            if (allowedWorks.length == 0) {
+        if (!assignedFactions.has(faction)) {
+            if (gangFactionName && faction === gangFactionName)
                 unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
-            } else {
-                const preferredIndex = getPreferredFactionWorkIndex(sleeve);
-                workByFaction[faction] ??= preferredIndex;
-                let work = works[workByFaction[faction] || 0];
-                if (!allowedWorks.includes(work)) work = allowedWorks[0];
-                return [
-                    `work for faction '${faction}' (${work})`,
-                    `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-                    [i, faction, work],
-                    `helping earn rep with faction ${faction} by doing ${work} work.`
-                ];
+            else if (!(unsupportedFactionWork[faction] > Date.now())) {
+                const supportedWorks = (factionWorkTypesCache[faction] ?? works).map(w => w.toLowerCase());
+                const allowedWorks = supportedWorks.filter(w => works.includes(w));
+                if (allowedWorks.length == 0) {
+                    unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+                } else {
+                    const preferredIndex = getPreferredFactionWorkIndex(sleeve);
+                    workByFaction[faction] ??= preferredIndex;
+                    let work = works[workByFaction[faction] || 0];
+                    if (!allowedWorks.includes(work)) work = allowedWorks[0];
+                    return [
+                        `work for faction '${faction}' (${work})`,
+                        `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                        [i, faction, work],
+                        `helping earn rep with faction ${faction} by doing ${work} work.`
+                    ];
+                }
             }
         }
     }
@@ -372,25 +371,25 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         const nextFaction = factionTargets.find(f => !assignedFactions.has(f.name));
         if (nextFaction) {
             const faction = nextFaction.name;
-            if (gangFactionName && faction === gangFactionName) {
+            if (gangFactionName && faction === gangFactionName)
                 unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
-                return;
+            else {
+                const allowedWorks = (nextFaction.supportedWorks ?? works).filter(w => works.includes(w));
+                if (allowedWorks.length == 0)
+                    unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
+                else {
+                    const preferredIndex = getPreferredFactionWorkIndex(sleeve);
+                    workByFaction[faction] ??= preferredIndex;
+                    let work = works[workByFaction[faction] || 0];
+                    if (!allowedWorks.includes(work)) work = allowedWorks[0];
+                    return [
+                        `work for faction '${faction}' (${work})`,
+                        `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                        [i, faction, work],
+                        `earning rep with faction ${faction} by doing ${work} work.`
+                    ];
+                }
             }
-            const allowedWorks = (nextFaction.supportedWorks ?? works).filter(w => works.includes(w));
-            if (allowedWorks.length == 0) {
-                unsupportedFactionWork[faction] = Date.now() + unsupportedFactionWorkCooldown;
-                return;
-            }
-            const preferredIndex = getPreferredFactionWorkIndex(sleeve);
-            workByFaction[faction] ??= preferredIndex;
-            let work = works[workByFaction[faction] || 0];
-            if (!allowedWorks.includes(work)) work = allowedWorks[0];
-            return [
-                `work for faction '${faction}' (${work})`,
-                `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-                [i, faction, work],
-                `earning rep with faction ${faction} by doing ${work} work.`
-            ];
         }
     }
     // Same as above if player is currently working for a megacorp
