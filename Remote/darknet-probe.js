@@ -48,11 +48,17 @@ function savePasswords(ns, filePath, passwords) {
 async function processServer(ns, hostname, passwords, passwordFile, scriptName) {
     const details = ns.dnet.getServerAuthDetails(hostname);
     
-    if (!details.isOnline || !details.isConnectedToCurrentServer) {
+    if (!details.isOnline) {
         return false;
     }
-    
-    if (details.hasSession) {
+    const knownPassword = passwords.get(hostname);
+    if (knownPassword && !details.hasSession) {
+        try {
+            ns.dnet.connectToSession(hostname, knownPassword);
+        } catch { }
+    }
+    const refreshedDetails = ns.dnet.getServerAuthDetails(hostname);
+    if (refreshedDetails.hasSession) {
         return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
     }
     
