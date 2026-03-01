@@ -79,8 +79,22 @@ export async function main(ns) {
                 const minHackGain = 1e-10;
                 if (hackGain <= minHackGain)
                     ns.print(`WARN: hackGain is ${hackGain.toPrecision(3)}. Coercing it to the minimum value ${minHackGain} (${server.hostname})`);
-                server.estHackPercent = Math.max(minHackGain, Math.min(0.98,
-                    Math.min(ram_total * hackGain / hackCost, 1 - 1 / Math.exp(ram_total * growGain / growCost)))); // TODO: I think these might be off by a factor of 2x
+                const effectiveHackGain = Math.max(minHackGain, hackGain);
+                const maxHackPercent = (() => {
+                    if (ram_total <= 0 || growGain <= 0) return effectiveHackGain;
+                    let low = 0;
+                    let high = 0.98;
+                    for (let i = 0; i < 30; i++) {
+                        const mid = (low + high) / 2;
+                        const hackThreads = mid / effectiveHackGain;
+                        const growThreads = -Math.log(1 - mid) / growGain;
+                        const ramCost = hackThreads * hackCost + growThreads * growCost;
+                        if (ramCost <= ram_total) low = mid;
+                        else high = mid;
+                    }
+                    return low;
+                })();
+                server.estHackPercent = Math.max(minHackGain, Math.min(0.98, maxHackPercent));
                 if (use_est_hack_percent) hack_percent = server.estHackPercent;
                 const grows_per_cycle = -Math.log(1 - hack_percent) / growGain;
                 const hacks_per_cycle = hack_percent / hackGain;
