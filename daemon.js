@@ -184,17 +184,23 @@ export async function main(ns) {
      * A helper is used so that we have the option of exploring alternative implementations that cost less/no RAM.
      * @param {NS} ns
      * @returns {Promise<boolean>} */
+    let useRamDodgingFileExists = true;
     async function doesFileExist(ns, fileName, hostname = undefined) {
         // Fast (and free) - for local files, try to read the file and ensure it's not empty
         hostname ??= daemonHost;
         if (hostname === daemonHost && !fileName.endsWith('.exe'))
             return ns.read(fileName) != '';
         // return ns.fileExists(fileName, hostname);
-        // TODO: If the approach below causes too much latency, we may wish to cease ram dodging and revert to the simple method above.
+        if (!useRamDodgingFileExists)
+            return ns.fileExists(fileName, hostname);
         const targetServer = getServerByName(hostname); // Each server object should have a cache of files on that server.
         if (!targetServer) // If the servers are not yet set up, use the fallback approach (filesExist)
             return await filesExist(ns, [fileName], hostname);
-        return await targetServer.hasFile(fileName);
+        const start = Date.now();
+        const result = await targetServer.hasFile(fileName);
+        if (Date.now() - start > 50)
+            useRamDodgingFileExists = false;
+        return result;
     }
 
     /** Helper to check which of a set of files exist on a remote server in a single batch ram-dodging request
@@ -337,7 +343,8 @@ export async function main(ns) {
             log(ns, '--looping-mode - scheduled remote tasks will loop themselves');
             // cycleTimingDelay = 0;
             // queueDelay = 0;
-            if (recoveryThreadPadding == 1) recoveryThreadPadding = 10; // Default if not specified (TODO: Improve timings so we don't need so much padding)
+    if (recoveryThreadPadding == 1)
+        recoveryThreadPadding = Math.max(2, Math.min(10, Math.ceil(200 / Math.max(10, cycleTimingDelay))));
             if (stockMode) stockFocus = true; // Need to actively kill scripts that go against stock because they will live forever
         }
         if (xpOnly && !options['no-share']) {
@@ -1079,10 +1086,7 @@ export async function main(ns) {
     }
 
     class Server {
-        /** @param {NS} ns
-         * @param {string} node - a.k.a host / server **/
-        constructor(ns, node) {
-            this.ns = ns; // TODO: This might get us in trouble
+        constructor(node) {
             this.name = node;
             this.server = dictInitialServerInfos[node];
             this.requiredHackLevel = dictServerRequiredHackinglevels[node];
@@ -1111,8 +1115,8 @@ export async function main(ns) {
         getMaxMoney() { return dictServerMaxMoney[this.name] ?? 0; }
         getMoneyPerRamSecond() { return dictServerProfitInfo ? dictServerProfitInfo[this.name]?.gainRate ?? 0 : (dictServerMaxMoney[this.name] ?? 0); }
         getExpPerSecond() { return dictServerProfitInfo ? dictServerProfitInfo[this.name]?.expRate ?? 0 : (1 / dictServerMinSecurityLevels[this.name] ?? 0); }
-        getMoney() { return this.ns.getServerMoneyAvailable(this.name); }
-        getSecurity() { return this.ns.getServerSecurityLevel(this.name); }
+        getMoney() { return ns.getServerMoneyAvailable(this.name); }
+        getSecurity() { return ns.getServerSecurityLevel(this.name); }
         canCrack() { return ownedCracks.length >= this.portsRequired; }
         canHack() { return this.requiredHackLevel <= playerHackSkill(); }
         shouldHack() {
@@ -1142,7 +1146,7 @@ export async function main(ns) {
             let total = 0;
             const hostNames = dictServerMaxRam ? allHostNames.filter(host => (dictServerMaxRam[host] ?? 0) > 1.6) : allHostNames;
             for (const hostname of hostNames)
-                for (const process of processList(this.ns, hostname, useCache)) // For all scripts on the server
+                for (const process of processList(ns, hostname, useCache)) // For all scripts on the server
                     // Does the script's arguments suggest it is targetting this server and matches the filter criteria?
                     if (process.args.length > 0 && process.args[0] == this.name && (!filter || filter(process))) {
                         if (count)
@@ -1203,7 +1207,7 @@ export async function main(ns) {
                     this.server.hackDifficulty = hackDifficulty;
                     this.server.requiredHackingSkill = this.requiredHackLevel;
                     return this._percentStolenPerHackThread =
-                        this.ns.formulas.hacking.hackPercent(this.server, _cachedPlayerInfo);
+                        ns.formulas.hacking.hackPercent(this.server, _cachedPlayerInfo);
                 } catch {
                     hasFormulas = false;
                 }
@@ -1223,9 +1227,9 @@ export async function main(ns) {
             return Math.floor((this.percentageToSteal / this.percentageStolenPerHackThread()).toPrecision(14));
         }
         getGrowThreadsNeeded() {
-            return Math.max(0, Math.ceil(Math.min(this.getMaxMoney(),
-                // TODO: Not true! Worst case is 1$ per thread and *then* it multiplies. We can return a much lower number here.
-                this.cyclesNeededForGrowthCoefficient() / this.serverGrowthPercentage()).toPrecision(14)));
+            const targetGrowthCoefficient = this.targetGrowthCoefficient();
+            if (targetGrowthCoefficient <= 1) return 0;
+            return Math.max(0, Math.ceil(ns.growthAnalyze(this.name, targetGrowthCoefficient)));
         }
         getWeakenThreadsNeeded() {
             return Math.max(0, Math.ceil(((this.getSecurity() - this.getMinSecurity()) / actualWeakenPotency()).toPrecision(14)));
@@ -1243,7 +1247,7 @@ export async function main(ns) {
             // Note: If recovery thread padding > 1.0, require a minimum of 2 recovery threads, no matter how scaled stats are
             return Math.max(recoveryThreadPadding > 1 ? 2 : 1, Math.ceil((this.getGrowThreadsNeededAfterTheft() * growthThreadHardening / actualWeakenPotency() * recoveryThreadPadding).toPrecision(14)));
         }
-        hasRoot() { return this._hasRootCached ??= this.ns.hasRootAccess(this.name); }
+        hasRoot() { return this._hasRootCached ??= ns.hasRootAccess(this.name); }
         isHost() { return this.name == daemonHost; }
         totalRam(ignoreReservedRam = false) {
             let maxRam = dictServerMaxRam[this.name]; // Use a cached max ram amount to save time.
@@ -1254,13 +1258,13 @@ export async function main(ns) {
                 maxRam = Math.max(0, maxRam - homeReservedRam);
             return maxRam;
         }
-        usedRam() { return this.ns.getServerUsedRam(this.name); }
+        usedRam() { return ns.getServerUsedRam(this.name); }
         ramAvailable(ignoreReservedRam = false) { return this.totalRam(ignoreReservedRam) - this.usedRam(); }
         growDelay() { return this.timeToWeaken() - this.timeToGrow() + cycleTimingDelay; }
         hackDelay() { return this.timeToWeaken() - this.timeToHack(); }
-        timeToWeaken() { return this.ns.getWeakenTime(this.name); }
-        timeToGrow() { return this.ns.getGrowTime(this.name); }
-        timeToHack() { return this.ns.getHackTime(this.name); }
+        timeToWeaken() { return ns.getWeakenTime(this.name); }
+        timeToGrow() { return ns.getGrowTime(this.name); }
+        timeToHack() { return ns.getHackTime(this.name); }
     }
 
     // Helpers to get slices of info / cumulative stats across all rooted servers
@@ -1686,7 +1690,6 @@ export async function main(ns) {
             log(ns, `${keepItQuiet ? 'WARN' : 'ERROR'}: Ran out of RAM to run ${tool.name} on ${splitThreads ? 'all servers (split)' : `${targetServer?.name} `}- ` +
                 `${threads - remainingThreads} of ${threads} threads were spawned.`, false, keepItQuiet ? undefined : 'error');
         }
-        // if (splitThreads && !tool.isThreadSpreadingAllowed) return false; // TODO: Don't think this is needed anymore. We allow overriding with "allowThreadSplitting" in some cases, doesn't mean this is an error
         return remainingThreads == 0;
     }
 
@@ -1772,6 +1775,8 @@ export async function main(ns) {
     let singleServerLimit = 0; // If prior cycles failed to be scheduled, force one additional server into single-server mode until we aqcuire more RAM
     let lastCycleTotalRam = 0; // Cache of total ram on the server to check whether we should attempt to lift the above restriction.
     let targetsByExp = (/**@returns{Server[]}*/() => [])(); // Cached list of targets in order of best exp earning. We don't keep updating this, because we don't want the allocated host to change
+    let lastTargetsByExpRefresh = 0;
+    const xpTargetCacheMs = 30 * 60 * 1000;
     let jobHostMappings = {};
 
     /** @param {NS} ns
@@ -1789,10 +1794,15 @@ export async function main(ns) {
         let homeRam = homeServer.totalRam(); // If total home ram is large enough, the XP contributed by additional targets is insignificant compared to the risk of increased lag/latency.
         // Determine which servers to target for XP
         numTargets = Math.min(maxTargets, Math.floor(jobHosts.filter(s => s.totalRam() > 0.01 * homeRam).length)); // Limit targets (too many creates lag which worsens performance, and need a dedicated server for each)
-        const newTargets = getXPFarmTargetsByExp();
-        if (!loopingMode)
-            targetsByExp = newTargets; // Normally, we just take the latests Xp targetting order (TODO: Perhaps cache this for a limited time (30 mins?) to keep the targetting order stable)
-        else if (loopingMode && targetsByExp.length < numTargets) { // In looping mode, we must keep the target-host mapping stable, we only revisit if we have capacity for new targets
+        const now = Date.now();
+        const shouldRefreshTargets = !loopingMode && (targetsByExp.length == 0 || (now - lastTargetsByExpRefresh) > xpTargetCacheMs);
+        const newTargets = (loopingMode || shouldRefreshTargets) ? getXPFarmTargetsByExp() : targetsByExp;
+        if (!loopingMode) {
+            if (shouldRefreshTargets) {
+                targetsByExp = newTargets;
+                lastTargetsByExpRefresh = now;
+            }
+        } else if (loopingMode && targetsByExp.length < numTargets) { // In looping mode, we must keep the target-host mapping stable, we only revisit if we have capacity for new targets
             targetsByExp = targetsByExp.concat(...(newTargets
                 .filter(t => !targetsByExp.includes(t)) // Only take targets not already in the target list
                 .slice(0, numTargets - targetsByExp.length)));// Only take as many as we have are willing to target right now, allowing for the future target priority order to change
@@ -1954,7 +1964,10 @@ export async function main(ns) {
                 const weakDesiredFireTime = (scheduleTime + expTime * 2 / 3); //  Time this to resolve at 2/3 * time-to-hack after each hack fires
                 let scheduleWeak = weakDesiredFireTime - server.timeToWeaken();
                 const growDesiredFireTime = (scheduleTime + expTime * 1 / 3); // Time this to resolve at 1/3 * time-to-hack after each hack fires
-                let scheduleGrow = growDesiredFireTime - server.timeToGrow(); // TODO: This first grow will run at increased security, so it will take longer to fire. How much longer?
+                const securityAtStart = Math.max(1, server.getSecurity(), server.getMinSecurity());
+                const securityAfterHack = securityAtStart + (effectiveHackThreads * hackThreadHardening);
+                const growTimeAtHackSecurity = server.timeToGrow() * (securityAfterHack / securityAtStart);
+                let scheduleGrow = growDesiredFireTime - growTimeAtHackSecurity;
                 // Scheduled times might be negative, because "grow" / "weaken" take longer to run than "hack"
                 // This is fine, it just means we'll have one hack misfire before recovery threads "catch up" to the loop
                 while (scheduleWeak < queueDelay) scheduleWeak += expTime;
@@ -1995,9 +2008,11 @@ export async function main(ns) {
                 //    `${server.getSecurity().toPrecision(3)} of ${server.getMinSecurity().toPrecision(3)}`);
                 //log(ns, `Planned start: Hack: ${Math.round(scheduleTime - now)} Grow: ${Math.round(scheduleGrow - now)} ` +
                 //    `Weak: ${Math.round(scheduleWeak - now)} Tick: ${Math.round(msToCycleEnd)} Cycle: ${threads} / ${growThreadsNeeded} / ${weakenThreadsNeeded}`);
+                const nextGrowFireMs = ((scheduleGrow - now + server.timeToGrow()) % msToCycleEnd + msToCycleEnd) % msToCycleEnd;
+                const nextWeakenFireMs = ((scheduleWeak - now + server.timeToWeaken()) % msToCycleEnd + msToCycleEnd) % msToCycleEnd;
                 if (verbose) log(ns, `Exp Cycle: ${threads} x Hack in ${Math.round(scheduleTime - now + expTime)}ms, ` +
-                    `${growThreadsNeeded} x Grow in ${Math.round((scheduleGrow - now + server.timeToGrow()) % msToCycleEnd)}ms, ` + // TODO: This "in ...ms" time seems messed up. Need a comment at least
-                    `${weakenThreadsNeeded} x Weak in ${Math.round((scheduleWeak - now + server.timeToWeaken()) % msToCycleEnd)}ms, ` +
+                    `${growThreadsNeeded} x Grow in ${Math.round(nextGrowFireMs)}ms, ` +
+                    `${weakenThreadsNeeded} x Weak in ${Math.round(nextWeakenFireMs)}ms, ` +
                     `Tick: ${Math.round(msToCycleEnd)}ms on ${allocatedServer?.name ?? '(any server)'} targeting "${server.name}"`);
             } else if (verbose)
                 log(ns, `In ${formatDuration(msToCycleEnd)}, ${threads} ${expTool.shortName} threads will fire against ${server.name} on ${allocatedServer?.name ?? '(any server)'} (for Hack Exp)`);
@@ -2008,7 +2023,8 @@ export async function main(ns) {
                     singleServerLimit++;
             }
             // Note: Plan to wake up soon after our planned exp cycle has fired 
-            return success ? msToCycleEnd + 10 : false; // TODO: In advance mode, we can probably return a longer delay, since there's no need to wake up often in looping mode
+            const recheckDelay = (loopingMode && advancedMode) ? (msToCycleEnd * 2) : (msToCycleEnd + 10);
+            return success ? recheckDelay : false;
         } finally {
             farmXpReentryLock[server.name] = false;
         }
@@ -2153,7 +2169,7 @@ export async function main(ns) {
         await getStaticServerData(ns);
         // Construct server objects for each new server added
         for (const hostName of newServers)
-            addServer(ns, new Server(ns, hostName, verbose));
+        addServer(ns, new Server(hostName, verbose));
     }
 
     /** @returns {Server[]} A list of all server objects */
@@ -2311,22 +2327,21 @@ export async function main(ns) {
                 allowSplitting = this.isThreadSpreadingAllowed;
             // analyzes the servers array and figures about how many threads can be spooled up across all of them.
             let maxThreads = 0;
-            for (const server of getAllServersByFreeRam().filter(s => s.hasRoot())) {
+            let maxThreadsOnSingleServer = 0;
+            for (const server of getAllServers().filter(s => s.hasRoot())) {
                 // Note: To be conservative, we allow double imprecision to cause this floor() to return one less than should be possible,
                 //       because the game likely doesn't account for this imprecision (e.g. let 1.9999999999999998 return 1 rather than 2)
                 let serverRamAvailable = server.ramAvailable(this.ignoreReservedRam);
-                // HACK: Temp script firing before the script gets scheduled can cause further available home ram reduction, don't promise as much from home
-                // TODO: Revise this hack, it is technically messing further with the "servers by free ram" sort order. Perhaps an alternative to this approach
-                //       is that the scheduler should not be so strict about home reserved ram enforcement if we use thread spreading and save scheduling on home for last?
                 if (server.name == "home" && !this.ignoreReservedRam)
                     serverRamAvailable -= homeReservedRam; // Note: Effectively doubles home reserved RAM in cases where we plan to consume all available RAM            
                 const threadsHere = Math.max(0, Math.floor(serverRamAvailable / this.cost));
                 //log(server.ns, `INFO: Can fit ${threadsHere} threads of ${this.shortName} on ${server.name} (ignoreReserve: ${this.ignoreReservedRam})`)
-                if (!allowSplitting)
-                    return threadsHere;
-                maxThreads += threadsHere;
+                if (allowSplitting)
+                    maxThreads += threadsHere;
+                else
+                    maxThreadsOnSingleServer = Math.max(maxThreadsOnSingleServer, threadsHere);
             }
-            return maxThreads;
+            return allowSplitting ? maxThreads : maxThreadsOnSingleServer;
         }
     }
 
