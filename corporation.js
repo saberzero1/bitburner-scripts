@@ -643,10 +643,10 @@ async function updatePricing(ns) {
 
                 const office = await execCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', divName, city);
 
-                // Price output materials using our Market-TA.II implementation
+                // Price output materials
+                // For materials, just use 'MP' (market price) - it guarantees sales = production
+                // Complex pricing only matters for products where you want to maximize profit
                 for (const material of industry.outputMaterials || []) {
-                    const mat = await execCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', divName, city, material);
-                    
                     // Check if division has Market-TA.II research
                     let hasMarketTA2 = false;
                     try {
@@ -654,12 +654,11 @@ async function updatePricing(ns) {
                     } catch (e) { }
                     
                     if (hasMarketTA2) {
-                        // Use built-in Market-TA.II auto-pricing
+                        // Use built-in Market-TA.II auto-pricing (best option)
                         await execCorpFunc(ns, 'setMaterialMarketTA2(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', divName, city, material, true);
                     } else {
-                        // Use our own Market-TA.II formula implementation
-                        const price = calculateOptimalPrice(mat, divData, office, false, mat.productionAmount);
-                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, material, 'MAX', price.toString());
+                        // Use simple 'MP' (market price) - reliable, guarantees sales
+                        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', divName, city, material, 'MAX', 'MP');
                     }
                 }
 
