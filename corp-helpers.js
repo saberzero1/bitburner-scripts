@@ -42,6 +42,17 @@ export const INDUSTRIES = {
         boostFactors: { realEstate: 0.15, hardware: 0.15, robots: 0.25, aiCores: 0.15 },
         scienceFactor: 0.75,
         advertisingFactor: 0.2
+    },
+    // Water Utilities - CRITICAL for breaking the quality ceiling
+    // Without this, Agriculture is capped at ~4.7 quality because purchased Water has Q=1
+    Water: {
+        name: 'Water Utilities',
+        makesProducts: false,
+        inputMaterials: { Hardware: 0.1 },
+        outputMaterials: ['Water'],
+        boostFactors: { realEstate: 0.5, hardware: 0.4, robots: 0.4, aiCores: 0.4 },
+        scienceFactor: 0.5,
+        advertisingFactor: 0.08
     }
 };
 

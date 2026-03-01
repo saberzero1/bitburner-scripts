@@ -804,6 +804,51 @@ async function runRound1(ns, state) {
 }
 
 // ============================================================================
+// WATER UTILITIES SETUP - Breaks the quality ceiling
+// ============================================================================
+
+async function setupWaterDivision(ns, corpData) {
+    if (!corpData.divisions.includes('Water')) return;
+    
+    const waterDiv = await readCorpFunc(ns, 'getDivision(ns.args[0])', 'Water');
+    
+    // Only need Water in Sector-12 (single quality hub strategy)
+    const city = 'Sector-12';
+    
+    // Check if we have a warehouse
+    const hasWarehouse = await readCorpFunc(ns, 'hasWarehouse(ns.args[0], ns.args[1])', 'Water', city);
+    if (!hasWarehouse) {
+        if (corpData.funds > 5e9) {
+            log(ns, `Water: Purchasing warehouse in ${city}`);
+            await execCorpFunc(ns, 'purchaseWarehouse(ns.args[0], ns.args[1])', 'Water', city);
+        }
+        return;
+    }
+    
+    // Hire employees with quality focus (65% Engineers)
+    const office = await readCorpFunc(ns, 'getOffice(ns.args[0], ns.args[1])', 'Water', city);
+    if (office.numEmployees < 9) {
+        // Expand office if needed
+        if (office.size < 9 && corpData.funds > 1e9) {
+            await execCorpFunc(ns, 'upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', 'Water', city, 9 - office.size);
+        }
+        // Hire employees
+        for (let i = office.numEmployees; i < Math.min(9, office.size); i++) {
+            await execCorpFunc(ns, 'hireEmployee(ns.args[0], ns.args[1])', 'Water', city);
+        }
+        // Quality-focused distribution (65% Engineers)
+        await assignEmployeesToProduction(ns, 'Water', city, false, 'quality');
+        log(ns, `Water: Set up ${city} with quality-focused employees`);
+    }
+    
+    // Set up selling for Water (we export most, sell remainder)
+    const waterMat = await readCorpFunc(ns, 'getMaterial(ns.args[0], ns.args[1], ns.args[2])', 'Water', city, 'Water');
+    if (!waterMat.desiredSellPrice || waterMat.desiredSellPrice === '0') {
+        await execCorpFunc(ns, 'sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 'Water', city, 'Water', 'MAX', 'MP');
+    }
+}
+
+// ============================================================================
 // ROUND 2: CHEMICAL DIVISION
 // ============================================================================
 
@@ -832,6 +877,27 @@ async function runRound2(ns, state) {
             log(ns, 'Round 2: Purchased Export unlock');
         }
         return;
+    }
+
+    // ========================================================================
+    // WATER UTILITIES - Critical for breaking quality ceiling
+    // Without this, Agriculture is capped at ~4.7 quality (purchased Water has Q=1)
+    // ========================================================================
+    
+    // Create Water Utilities division BEFORE Chemical (it's cheaper and essential)
+    if (!corpData.divisions.includes('Water')) {
+        if (corpData.funds > 150e9) {
+            log(ns, 'Round 2: Creating Water Utilities division (breaks quality ceiling!)');
+            await execCorpFunc(ns, 'expandIndustry(ns.args[0], ns.args[1])', 'Water Utilities', 'Water');
+            await ns.sleep(500);
+            return;
+        }
+        // If we can't afford Water yet, continue with Chemical setup
+    }
+    
+    // Set up Water Utilities if it exists
+    if (corpData.divisions.includes('Water')) {
+        await setupWaterDivision(ns, corpData);
     }
 
     // Create Chemical division
@@ -886,6 +952,12 @@ async function runRound2(ns, state) {
     
     // Set up export routes: Chemical -> Agriculture (Chemicals)
     await setupExportRoutes(ns, 'Chemical', 'Agriculture', 'Chemicals');
+    
+    // Set up export routes: Water -> Agriculture (high-quality Water breaks the Q=1 ceiling)
+    if (corpData.divisions.includes('Water')) {
+        await setupExportRoutes(ns, 'Water', 'Agriculture', 'Water');
+        await setupExportRoutes(ns, 'Water', 'Chemical', 'Water');
+    }
 
     // Upgrades
     const smartStorageLevel = await execCorpFunc(ns, 'getUpgradeLevel(ns.args[0])', 'Smart Storage');
