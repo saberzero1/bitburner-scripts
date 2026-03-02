@@ -76,6 +76,10 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
 }
 
 async function authenticateServer(ns, hostname, details, passwords) {
+    if ((details.modelId || '').toLowerCase().includes('labyrinth')) {
+        const solved = await solveLabyrinth(ns, hostname);
+        if (solved) return '';
+    }
     const knownPassword = passwords.get(hostname);
     if (knownPassword) {
         const result = await ns.dnet.authenticate(hostname, knownPassword);
@@ -121,6 +125,79 @@ async function authenticateServer(ns, hostname, details, passwords) {
     } catch { }
     
     return null;
+}
+
+async function solveLabyrinth(ns, hostname) {
+    const initial = await ns.dnet.authenticate(hostname, 'look');
+    const maze = typeof initial?.data === 'string' ? initial.data : '';
+    if (!maze || !maze.includes('@')) return false;
+    const path = solveMazePath(maze);
+    if (!path) return false;
+    for (const dir of path) {
+        const result = await ns.dnet.authenticate(hostname, `go ${dir}`);
+        if (result?.success || result?.code === 200) return true;
+    }
+    return false;
+}
+
+function solveMazePath(maze) {
+    const rows = maze.split('\n').filter(line => line.trim().length > 0);
+    if (rows.length === 0) return null;
+    const minIndent = Math.min(...rows.map(r => r.match(/^\s*/)[0].length));
+    const grid = rows.map(r => r.slice(minIndent).split(''));
+    let start = null;
+    const height = grid.length;
+    const width = Math.max(...grid.map(r => r.length));
+    const isWall = ch => ch && ch !== ' ' && ch !== '.' && ch !== '@';
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < grid[y].length; x++) {
+            if (grid[y][x] === '@') start = [x, y];
+        }
+    }
+    if (!start) return null;
+    const isExit = (x, y) => {
+        const ch = grid[y]?.[x] ?? ' ';
+        if (isWall(ch)) return false;
+        if (x === 0 || y === 0 || y === height - 1 || x === width - 1) return ch !== '@';
+        return false;
+    };
+    const queue = [start];
+    const visited = new Set([start.join(',')]);
+    const prev = new Map();
+    const dirs = [
+        [0, -1, 'north'],
+        [0, 1, 'south'],
+        [-1, 0, 'west'],
+        [1, 0, 'east'],
+    ];
+    while (queue.length > 0) {
+        const [x, y] = queue.shift();
+        if (isExit(x, y)) return reconstructPath(prev, [x, y]);
+        for (const [dx, dy, dir] of dirs) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (ny < 0 || ny >= height || nx < 0 || nx >= width) continue;
+            const ch = grid[ny]?.[nx] ?? ' ';
+            if (isWall(ch)) continue;
+            const key = `${nx},${ny}`;
+            if (visited.has(key)) continue;
+            visited.add(key);
+            prev.set(key, { from: `${x},${y}`, dir });
+            queue.push([nx, ny]);
+        }
+    }
+    return null;
+}
+
+function reconstructPath(prev, end) {
+    const path = [];
+    let key = end.join(',');
+    while (prev.has(key)) {
+        const entry = prev.get(key);
+        path.push(entry.dir);
+        key = entry.from;
+    }
+    return path.reverse();
 }
 
 async function deployProbe(ns, hostname, password, scriptName) {

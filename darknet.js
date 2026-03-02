@@ -2,7 +2,7 @@ import {
     log, getFilePath, getConfiguration, disableLogs, formatMoney, formatRam, formatDuration,
     getNsDataThroughFile, getActiveSourceFiles, getErrorInfo
 } from './helpers.js'
-import { getDarknetPasswordSolver, tryFormatBruteforce, tryHintBasedAuth } from './darknet-helpers.js'
+import { getDarknetPasswordSolver, tryFormatBruteforce, tryHintBasedAuth, solveLabyrinth } from './darknet-helpers.js'
 
 /**
  * Darknet Orchestrator for BitNode 15
@@ -246,6 +246,14 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     }
 
     // Try to solve based on model
+    if ((serverInfo.modelId || '').toLowerCase().includes('labyrinth')) {
+        const solved = await solveLabyrinth(ns, hostname);
+        if (solved) {
+            log(ns, `SUCCESS: Solved labyrinth on ${hostname}`);
+            return true;
+        }
+    }
+
     const hintCandidate = await tryHintBasedAuth(ns, hostname, serverInfo);
     if (hintCandidate !== null) {
         log(ns, `SUCCESS: Cracked ${hostname} using hint/logs`);
