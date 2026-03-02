@@ -1,8 +1,8 @@
 import {
-    log, getFilePath, getConfiguration, disableLogs, formatMoney, formatRam, formatDuration,
-    getNsDataThroughFile, getActiveSourceFiles, getErrorInfo
+    log, getFilePath, getConfiguration, disableLogs, formatRam,
+    getErrorInfo
 } from './helpers.js'
-import { getDarknetPasswordSolver, tryFormatBruteforce, tryHintBasedAuth, solveLabyrinth } from './darknet-helpers.js'
+import { getDarknetPasswordSolver, tryFormatBruteforce, solveLabyrinth } from './darknet-helpers.js'
 
 /**
  * Darknet Orchestrator for BitNode 15
@@ -75,6 +75,7 @@ class DarknetState {
         this.lastStatusLog = 0;
         this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
         this.probeVersion = 2;
+        this.heavyWorkerVersion = 1;
         this.lastAuthLog = new Map();
 
         // Load persisted passwords from file
@@ -258,13 +259,6 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
         }
     }
 
-    const hintCandidate = await tryHintBasedAuth(ns, hostname, serverInfo);
-    if (hintCandidate !== null) {
-        log(ns, `SUCCESS: Cracked ${hostname} using hint/logs`);
-        state.addPassword(ns, hostname, hintCandidate);
-        return true;
-    }
-
     const solver = getDarknetPasswordSolver(serverInfo.modelId);
     if (!solver) {
         if (verbose) log(ns, `No solver for model ${serverInfo.modelId} on ${hostname} (hint: ${serverInfo.passwordHint ?? ''})`);
@@ -292,22 +286,6 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
         }
     }
 
-    // Try packet capture as fallback for difficult servers
-    if (verbose) log(ns, `Attempting packet capture on ${hostname}...`);
-    try {
-        const captured = await ns.dnet.packetCapture(hostname);
-        if (captured.password) {
-            const result = await ns.dnet.authenticate(hostname, captured.password);
-            if (result.success) {
-                log(ns, `SUCCESS: Captured password for ${hostname} via packet sniffing`);
-                state.addPassword(ns, hostname, captured.password);
-                return true;
-            }
-        }
-    } catch {
-        // Packet capture failed
-    }
-
     logAuthFailure(ns, state, hostname, serverInfo);
     return false;
 }
@@ -326,62 +304,13 @@ function logAuthFailure(ns, state, hostname, serverInfo) {
  */
 async function exploitServer(ns, state, hostname, options) {
     const currentHost = ns.getHostname();
-    const verbose = options.verbose;
-
     // Can only exploit servers we're directly connected to OR have stasis/backdoor on
     const details = ns.dnet.getServerAuthDetails(hostname);
     if (!details.isConnectedToCurrentServer && !state.stasisServers.has(hostname)) {
         return;
     }
 
-    // Free up blocked RAM
-    try {
-        const memResult = ns.dnet.influence.memoryReallocation();
-        if (memResult && memResult.freedRam > 0) {
-            log(ns, `Freed ${formatRam(memResult.freedRam)} RAM on ${hostname}`);
-        }
-    } catch {
-        // memoryReallocation not available or failed
-    }
-
-    // Open any cache files
-    try {
-        const cacheFiles = ns.ls(hostname, '.cache');
-        for (const cache of cacheFiles) {
-            try {
-                const result = ns.dnet.openCache(cache);
-                if (result) {
-                    log(ns, `Opened cache ${cache} on ${hostname}: ${JSON.stringify(result)}`, false, 'success');
-                }
-            } catch {
-                // Cache already opened or error
-            }
-        }
-    } catch {
-        // ls or openCache failed
-    }
-
-    // Run phishing attacks if enabled
-    if (options['enable-phishing'] && currentHost === hostname) {
-        try {
-            const phishResult = await ns.dnet.phishingAttack();
-            if (phishResult && (phishResult.money > 0 || phishResult.cache)) {
-                const gained = phishResult.money > 0 ? formatMoney(phishResult.money) : phishResult.cache;
-                if (verbose) log(ns, `Phishing on ${hostname}: ${gained}`);
-            }
-        } catch {
-            // Phishing failed or on cooldown
-        }
-    }
-
-    // Stock manipulation if enabled
-    if (options['enable-stock-manipulation'] && options['target-stock']) {
-        try {
-            ns.dnet.promoteStock(options['target-stock']);
-        } catch {
-            // Stock promotion failed
-        }
-    }
+    await scheduleHeavyWorker(ns, state, hostname, options);
 }
 
 /**
@@ -403,6 +332,16 @@ async function deployProbe(ns, state, hostname, options) {
         const password = state.getPassword(hostname);
         if (password !== undefined) {
             ns.dnet.connectToSession(hostname, password);
+        }
+
+        const maxRam = ns.getServerMaxRam(hostname);
+        const usedRam = ns.getServerUsedRam(hostname);
+        const fullRam = ns.getScriptRam(probeScript, 'home');
+        const freeRam = Math.max(0, maxRam - usedRam);
+        if (fullRam > freeRam) {
+            log(ns, `WARN: ${hostname} lacks RAM for probe (needs ${formatRam(fullRam)}, has ${formatRam(freeRam)} free).`,
+                false, 'warning');
+            return false;
         }
 
         // Copy probe script
@@ -430,8 +369,6 @@ async function deployProbe(ns, state, hostname, options) {
             const details = ns.dnet.getServerAuthDetails(hostname);
             const ramInfo = (() => {
                 try {
-                    const maxRam = ns.getServerMaxRam(hostname);
-                    const usedRam = ns.getServerUsedRam(hostname);
                     return `${formatRam(usedRam)}/${formatRam(maxRam)}`;
                 } catch { return 'unknown'; }
             })();
@@ -541,4 +478,33 @@ async function cleanupOrphanedProbes(ns, state) {
     for (const hostname of toRemove) {
         state.activeProbes.delete(hostname);
     }
+}
+
+async function scheduleHeavyWorker(ns, state, hostname, options) {
+    const heavyWorker = getFilePath('/Remote/darknet-heavy-worker.js');
+    if (!ns.fileExists(heavyWorker, 'home')) return;
+    const maxRam = ns.getServerMaxRam(hostname);
+    const usedRam = ns.getServerUsedRam(hostname);
+    const scriptRam = ns.getScriptRam(heavyWorker, 'home');
+    const freeRam = Math.max(0, maxRam - usedRam);
+    if (scriptRam > freeRam) return;
+    const procs = ns.ps(hostname).filter(p => p.filename === heavyWorker);
+    const hasMatching = procs.some(p => Number(p.args?.[0]) === state.heavyWorkerVersion);
+    for (const proc of procs) {
+        if (Number(proc.args?.[0]) !== state.heavyWorkerVersion) {
+            try { ns.kill(proc.pid); } catch { }
+        }
+    }
+    if (hasMatching) return;
+    ns.scp(heavyWorker, hostname, 'home');
+    if (!ns.fileExists(heavyWorker, hostname)) return;
+    ns.exec(
+        heavyWorker,
+        hostname,
+        1,
+        state.heavyWorkerVersion,
+        String(Boolean(options['enable-phishing'])),
+        String(Boolean(options['enable-stock-manipulation'])),
+        options['target-stock'] ?? ''
+    );
 }

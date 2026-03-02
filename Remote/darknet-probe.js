@@ -1,3 +1,5 @@
+import { getFnRunViaNsExec, getNsDataThroughFile_Custom } from '../helpers.js'
+
 /** @param {NS} ns 
  * Self-replicating darknet probe that explores and authenticates nearby servers.
  * Designed to be deployed to darknet servers and spread autonomously.
@@ -12,19 +14,20 @@ export async function main(ns) {
     const PASSWORD_FILE = '/data/darknet-passwords.txt';
     
     const passwords = loadPasswords(ns, PASSWORD_FILE);
+    const fnRun = getFnRunViaNsExec(ns, HOST);
     
     while (true) {
         const nearbyServers = ns.dnet.probe();
         
         for (const hostname of nearbyServers) {
-            const success = await processServer(ns, hostname, passwords, PASSWORD_FILE, SCRIPT_NAME);
+            const success = await processServer(ns, hostname, passwords, PASSWORD_FILE, SCRIPT_NAME, fnRun);
             if (success) {
                 await ns.sleep(100);
             }
         }
         
-        await freeBlockedRam(ns);
-        await openCacheFiles(ns, HOST);
+        await freeBlockedRam(ns, fnRun);
+        await openCacheFiles(ns, HOST, fnRun);
         await ns.sleep(LOOP_INTERVAL);
     }
 }
@@ -48,7 +51,7 @@ function savePasswords(ns, filePath, passwords) {
     ns.write(filePath, data, 'w');
 }
 
-async function processServer(ns, hostname, passwords, passwordFile, scriptName) {
+async function processServer(ns, hostname, passwords, passwordFile, scriptName, fnRun) {
     const details = ns.dnet.getServerAuthDetails(hostname);
     
     if (!details.isOnline) {
@@ -66,7 +69,7 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
         return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
     }
     
-    const password = await authenticateServer(ns, hostname, details, passwords);
+    const password = await authenticateServer(ns, hostname, details, passwords, fnRun);
     if (password !== null) {
         passwords.set(hostname, password ?? '');
         savePasswords(ns, passwordFile, passwords);
@@ -76,7 +79,7 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
     return false;
 }
 
-async function authenticateServer(ns, hostname, details, passwords) {
+async function authenticateServer(ns, hostname, details, passwords, fnRun) {
     if ((details.modelId || '').toLowerCase().includes('labyrinth')) {
         const solved = await solveLabyrinth(ns, hostname);
         if (solved) return '';
@@ -88,7 +91,7 @@ async function authenticateServer(ns, hostname, details, passwords) {
         if (result.success) return knownPassword;
     }
     
-    const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
+    const hintCandidate = await tryHintBasedAuth(ns, hostname, details, fnRun);
     if (hintCandidate !== null) {
         ns.toast(`Cracked ${hostname}`, 'success');
         return hintCandidate;
@@ -116,7 +119,7 @@ async function authenticateServer(ns, hostname, details, passwords) {
     }
     
     try {
-        const captured = await ns.dnet.packetCapture(hostname);
+        const captured = await runDnetCommand(ns, fnRun, 'ns.dnet.packetCapture(ns.args[0])', [hostname]);
         if (captured.password) {
             const result = await ns.dnet.authenticate(hostname, captured.password);
             if (result.success) {
@@ -224,21 +227,21 @@ async function deployProbe(ns, hostname, password, scriptName) {
     return false;
 }
 
-async function freeBlockedRam(ns) {
+async function freeBlockedRam(ns, fnRun) {
     try {
-        const result = ns.dnet.influence.memoryReallocation();
+        const result = await runDnetCommand(ns, fnRun, 'ns.dnet.influence.memoryReallocation()');
         if (result && result.freedRam > 0) {
             ns.print(`Freed ${result.freedRam}GB RAM`);
         }
     } catch { }
 }
 
-async function openCacheFiles(ns, hostname) {
+async function openCacheFiles(ns, hostname, fnRun) {
     try {
         const caches = ns.ls(hostname, '.cache');
         for (const cache of caches) {
             try {
-                const result = ns.dnet.openCache(cache);
+                const result = await runDnetCommand(ns, fnRun, 'ns.dnet.openCache(ns.args[0])', [cache]);
                 if (result) ns.print(`Opened ${cache}`);
             } catch { }
         }
@@ -480,7 +483,7 @@ function buildCandidate(index, charset, length) {
     return output;
 }
 
-async function tryHintBasedAuth(ns, hostname, details) {
+async function tryHintBasedAuth(ns, hostname, details, fnRun) {
     const hint = (details.passwordHint || '').trim();
     const candidates = new Set();
     const maxLen = Number.isFinite(details.passwordLength) && details.passwordLength > 0
@@ -506,7 +509,7 @@ async function tryHintBasedAuth(ns, hostname, details) {
         }
     }
     try {
-        const logs = await ns.dnet.heartbleed(hostname, { peek: true });
+        const logs = await runDnetCommand(ns, fnRun, 'ns.dnet.heartbleed(ns.args[0], { peek: true })', [hostname]);
         if (logs?.logs) {
             const parsed = parseDarknetLogs(logs.logs);
             for (const p of parsed.passwords) candidates.add(p);
@@ -539,6 +542,10 @@ function parseDarknetLogs(logs) {
         if (hintMatch) hints.push(hintMatch[1].trim());
     }
     return { passwords, hints };
+}
+
+async function runDnetCommand(ns, fnRun, command, args = []) {
+    return await getNsDataThroughFile_Custom(ns, fnRun, command, null, args, false, 1, 0, true);
 }
 
 export function autocomplete(data) {
