@@ -1,29 +1,46 @@
+const PROBE_VERSION = 8;
+
 export async function main(ns) {
-    const PROBE_VERSION = 6;
     const SCRIPT_NAME = ns.getScriptName();
     const targetVersion = Number(ns.args?.[0] ?? PROBE_VERSION);
     if (targetVersion !== PROBE_VERSION) return;
+
     const HOST = ns.getHostname();
     const LOOP_INTERVAL = 5000;
     const PASSWORD_FILE = '/data/darknet-passwords.txt';
-    const PROBE_OPTIONS_FILE = '/data/darknet-probe-options.txt';
-    
+    const OPTIONS_FILE = '/data/darknet-options.txt';
+
     const passwords = loadPasswords(ns, PASSWORD_FILE);
+
     while (true) {
-        const nearbyServers = (await runProbe(ns)) || [];
-        
-        for (const hostname of nearbyServers) {
-            const success = await processServer(ns, hostname, passwords, PASSWORD_FILE, SCRIPT_NAME);
-            if (success) {
-                await ns.sleep(100);
+        try {
+            const nearbyServers = (await runScan(ns)) || [];
+            for (const hostname of nearbyServers) {
+                let success = false;
+                try {
+                    success = await processServer(ns, hostname, passwords, PASSWORD_FILE, SCRIPT_NAME);
+                } catch (err) {
+                    logError(ns, `Probe error processing ${hostname}`, err);
+                }
+                if (success) {
+                    await ns.sleep(100);
+                }
             }
+
+            await freeBlockedRam(ns);
+            await handleCacheFiles(ns, HOST);
+            await runOptionalActions(ns, OPTIONS_FILE, HOST);
+        } catch (err) {
+            logError(ns, 'Probe loop error', err);
         }
-        
-        await freeBlockedRam(ns);
-        await handleCacheFiles(ns, HOST);
-        await runOptionalActions(ns, PROBE_OPTIONS_FILE, HOST);
+
         await ns.sleep(LOOP_INTERVAL);
     }
+}
+
+export function autocomplete(data) {
+    void data;
+    return ['--tail'];
 }
 
 function loadPasswords(ns, filePath) {
@@ -47,29 +64,41 @@ function savePasswords(ns, filePath, passwords) {
 
 async function processServer(ns, hostname, passwords, passwordFile, scriptName) {
     const details = await getAuthDetails(ns, hostname);
-    
     if (!details || !details.isOnline) {
         return false;
     }
-    const hasKnownPassword = passwords.has(hostname);
-    const knownPassword = hasKnownPassword ? passwords.get(hostname) : undefined;
-    if (hasKnownPassword && !details.hasSession) {
-        try {
-            await runSessionConnect(ns, hostname, knownPassword ?? '');
-        } catch { }
-    }
-    const refreshedDetails = await getAuthDetails(ns, hostname);
-    if (refreshedDetails && refreshedDetails.hasSession) {
+
+    if (details.hasAdminRights) {
+        if (details.depth === undefined || details.depth === null) {
+            try {
+                await runDepth(ns, hostname);
+            } catch { }
+        }
+        await scanClueFiles(ns, hostname, passwords, passwordFile);
         return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
     }
-    
+
+    if (passwords.has(hostname) && !details.hasSession) {
+        const knownPassword = passwords.get(hostname);
+        try {
+            await runSessionLink(ns, hostname, knownPassword ?? '');
+        } catch { }
+    }
+
+    const refreshedDetails = await getAuthDetails(ns, hostname);
+    if (refreshedDetails?.hasSession || refreshedDetails?.hasAdminRights) {
+        await scanClueFiles(ns, hostname, passwords, passwordFile);
+        return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
+    }
+
     const password = await tryAccessServer(ns, hostname, details, passwords);
     if (password !== null) {
         passwords.set(hostname, password ?? '');
         savePasswords(ns, passwordFile, passwords);
+        await scanClueFiles(ns, hostname, passwords, passwordFile);
         return await deployProbe(ns, hostname, password, scriptName);
     }
-    
+
     return false;
 }
 
@@ -78,13 +107,13 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         const solved = await solveLabyrinth(ns, hostname);
         if (solved) return '';
     }
-    const hasKnownPassword = passwords.has(hostname);
-    const knownPassword = hasKnownPassword ? passwords.get(hostname) : undefined;
-    if (hasKnownPassword) {
+
+    if (passwords.has(hostname)) {
+        const knownPassword = passwords.get(hostname);
         const result = await runAuth(ns, hostname, knownPassword ?? '');
-        if (result.success) return knownPassword;
+        if (result.success) return knownPassword ?? '';
     }
-    
+
     const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
     if (hintCandidate !== null) {
         ns.toast(`Cracked ${hostname}`, 'success');
@@ -95,26 +124,20 @@ async function tryAccessServer(ns, hostname, details, passwords) {
     if (solver) {
         const password = await solver(ns, hostname, details);
         if (password !== null) {
-            const result = await runAuth(ns, hostname, password);
-            if (result.success) {
-                ns.toast(`Cracked ${hostname}`, 'success');
-                return password;
-            }
+            ns.toast(`Cracked ${hostname}`, 'success');
+            return password;
         }
     } else {
         const fallback = await tryFormatBruteforce(ns, hostname, details);
         if (fallback !== null) {
-            const result = await runAuth(ns, hostname, fallback);
-            if (result.success) {
-                ns.toast(`Cracked ${hostname}`, 'success');
-                return fallback;
-            }
+            ns.toast(`Cracked ${hostname}`, 'success');
+            return fallback;
         }
     }
-    
+
     try {
-    const captured = await runDnetCommand(ns, buildDnetCommand(commandNames.capture, commandArgs.singleArg));
-        if (captured.password) {
+        const captured = await runCapture(ns, hostname);
+        if (captured?.password) {
             const result = await runAuth(ns, hostname, captured.password);
             if (result.success) {
                 ns.toast(`Captured password for ${hostname}`, 'success');
@@ -122,99 +145,83 @@ async function tryAccessServer(ns, hostname, details, passwords) {
             }
         }
     } catch { }
-    
+
     return null;
 }
 
 async function solveLabyrinth(ns, hostname) {
-    const initial = await runAuth(ns, hostname, 'look');
-    const maze = typeof initial?.data === 'string' ? initial.data : '';
-    if (!maze || !maze.includes('@')) return false;
-    const path = solveMazePath(maze);
-    if (!path) return false;
-    for (const dir of path) {
-        const result = await runAuth(ns, hostname, `go ${dir}`);
-        if (result?.success || result?.code === 200) return true;
+    const visited = new Set();
+    const stack = [];
+    let position = { x: 0, y: 0 };
+    let lastView = null;
+
+    const initial = await runAuth(ns, hostname, 'go north');
+    if (initial?.success) return true;
+    lastView = parseLabyrinthView(initial?.data);
+    if (!lastView) return false;
+
+    while (true) {
+        const key = `${position.x},${position.y}`;
+        if (!visited.has(key)) visited.add(key);
+
+        const openDirs = getOpenDirections(lastView);
+        const nextDir = openDirs.find(dir => !visited.has(nextPositionKey(position, dir)));
+        if (nextDir) {
+            stack.push({ position: { ...position }, dir: nextDir });
+            const moved = await moveLabyrinth(ns, hostname, position, nextDir);
+            if (moved.success) return true;
+            if (moved.moved) {
+                position = moved.position;
+            }
+            lastView = moved.view;
+            if (!lastView) return false;
+            continue;
+        }
+
+        if (stack.length === 0) return false;
+        const back = stack.pop();
+        const reverseDir = reverseDirection(back.dir);
+        const movedBack = await moveLabyrinth(ns, hostname, position, reverseDir);
+        if (movedBack.success) return true;
+        if (!movedBack.moved) return false;
+        position = movedBack.position;
+        lastView = movedBack.view;
+        if (!lastView) return false;
     }
-    return false;
 }
 
-function solveMazePath(maze) {
-    const rows = maze.split('\n').filter(line => line.trim().length > 0);
-    if (rows.length === 0) return null;
-    const minIndent = Math.min(...rows.map(r => r.match(/^\s*/)[0].length));
-    const grid = rows.map(r => r.slice(minIndent).split(''));
-    let start = null;
-    const height = grid.length;
-    const width = Math.max(...grid.map(r => r.length));
-    const isWall = ch => ch && ch !== ' ' && ch !== '.' && ch !== '@';
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < grid[y].length; x++) {
-            if (grid[y][x] === '@') start = [x, y];
-        }
+async function moveLabyrinth(ns, hostname, position, dir) {
+    const resp = await runAuth(ns, hostname, `go ${dir}`);
+    if (resp.success) return { success: true };
+    const view = parseLabyrinthView(resp.data);
+    const moved = resp?.code !== 401;
+    if (moved) {
+        const delta = directionDelta(dir);
+        return { success: false, moved: true, position: { x: position.x + delta.dx, y: position.y + delta.dy }, view };
     }
-    if (!start) return null;
-    const isExit = (x, y) => {
-        const ch = grid[y]?.[x] ?? ' ';
-        if (isWall(ch)) return false;
-        if (x === 0 || y === 0 || y === height - 1 || x === width - 1) return ch !== '@';
-        return false;
-    };
-    const queue = [start];
-    const visited = new Set([start.join(',')]);
-    const prev = new Map();
-    const dirs = [
-        [0, -1, 'north'],
-        [0, 1, 'south'],
-        [-1, 0, 'west'],
-        [1, 0, 'east'],
-    ];
-    while (queue.length > 0) {
-        const [x, y] = queue.shift();
-        if (isExit(x, y)) return reconstructPath(prev, [x, y]);
-        for (const [dx, dy, dir] of dirs) {
-            const nx = x + dx;
-            const ny = y + dy;
-            if (ny < 0 || ny >= height || nx < 0 || nx >= width) continue;
-            const ch = grid[ny]?.[nx] ?? ' ';
-            if (isWall(ch)) continue;
-            const key = `${nx},${ny}`;
-            if (visited.has(key)) continue;
-            visited.add(key);
-            prev.set(key, { from: `${x},${y}`, dir });
-            queue.push([nx, ny]);
-        }
-    }
-    return null;
-}
-
-function reconstructPath(prev, end) {
-    const path = [];
-    let key = end.join(',');
-    while (prev.has(key)) {
-        const entry = prev.get(key);
-        path.push(entry.dir);
-        key = entry.from;
-    }
-    return path.reverse();
+    return { success: false, moved: false, position, view };
 }
 
 async function deployProbe(ns, hostname, password, scriptName) {
     try {
         if (password !== undefined) {
-            await runSessionConnect(ns, hostname, password ?? '');
+            await runSessionLink(ns, hostname, password ?? '');
         }
-        
-        const procs = ns.ps(hostname);
-        if (procs.some(p => p.filename === scriptName)) {
-            return true;
+
+        const procs = ns.ps(hostname).filter(proc => proc.filename === scriptName);
+        const current = procs.find(proc => Number(proc.args?.[0]) === PROBE_VERSION);
+        const old = procs.filter(proc => Number(proc.args?.[0]) !== PROBE_VERSION);
+        for (const proc of old) {
+            try { ns.kill(proc.pid); } catch { }
         }
-        
+        if (current) return true;
+
         ns.scp(scriptName, hostname);
         if (!ns.fileExists(scriptName, hostname)) return false;
-        const pid = ns.exec(scriptName, hostname, 1);
+
+        const pid = ns.exec(scriptName, hostname, 1, PROBE_VERSION);
         if (pid > 0) {
-            ns.print(`Deployed probe to ${hostname}`);
+            ns.print(`Deployed agent to ${hostname}`);
             return true;
         }
     } catch { }
@@ -235,7 +242,7 @@ async function handleCacheFiles(ns, hostname) {
         const caches = ns.ls(hostname, '.cache');
         for (const cache of caches) {
             try {
-                const result = await runDnetCommand(ns, buildDnetCommand(commandNames.open, commandArgs.singleArg), [cache]);
+                const result = await runOpenCache(ns, cache);
                 if (result) ns.print(`Opened ${cache}`);
             } catch { }
         }
@@ -280,424 +287,93 @@ async function runPhishing(ns, hostname) {
 
 async function runStockBoost(ns, targetStock) {
     try {
-        await runDnetCommand(ns, buildDnetCommand(commandNames.promote, commandArgs.singleArg), [targetStock]);
+        await runPromoteStock(ns, targetStock);
     } catch { }
 }
 
-function getSolver(modelId) {
-    const solvers = {
-        'ZeroLogon': async () => '',
-        
-        'SimplePin': async (ns, hostname, details) => {
-            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-                ? details.passwordLength
-                : (details.passwordHint && /^\d+$/.test(details.passwordHint) ? details.passwordHint.length : 4);
-            if (length > 4) return null;
-            if (details.passwordHint && /^\d+$/.test(details.passwordHint)) {
-                const result = await runAuth(ns, hostname, details.passwordHint);
-                if (result.success) return details.passwordHint;
-            }
-            const total = Math.pow(10, length);
-            if (total <= 2000) {
-                for (let i = 0; i < total; i++) {
-                    const pin = i.toString();
-                    const result = await runAuth(ns, hostname, pin);
-                    if (result.success) return pin;
-                }
-                return null;
-            }
-            for (let i = 0; i < 200; i++) {
-                const pin = Math.floor(Math.random() * total).toString();
-                const result = await runAuth(ns, hostname, pin);
-                if (result.success) return pin;
-            }
-            return null;
-        },
-        'Captcha': async (ns, hostname, details) => {
-            const data = details.passwordHintData || details.passwordHint || '';
-            const digits = data.match(/\d/g);
-            if (!digits) return null;
-            let candidate = digits.join('');
-            const expectedLength = Number.isFinite(details.passwordLength) ? details.passwordLength : null;
-            if (expectedLength && candidate.length > expectedLength)
-                candidate = candidate.slice(candidate.length - expectedLength);
-            return candidate;
-        },
-        'EchoVuln': async (ns, hostname, details) => {
-            const hint = details.passwordHint || details.passwordHintData || '';
-            const candidate = extractTrailingToken(hint);
-            return candidate || null;
-        },
-        'SortedEchoVuln': async (ns, hostname, details) => {
-            const sorted = (details.passwordHintData || details.passwordHint || '').replace(/\s+/g, '');
-            if (!sorted) return null;
-            if (!/^\d+$/.test(sorted)) return null;
-            if (sorted.length > 7) return null;
-            const attempts = { count: 0, limit: 3000 };
-            let result = null;
-            await permuteDigits(sorted.split(''), async (candidate) => {
-                if (attempts.count >= attempts.limit) return false;
-                attempts.count++;
-                const auth = await runAuth(ns, hostname, candidate);
-                if (auth.success) {
-                    result = candidate;
-                    return true;
-                }
-                return false;
-            });
-            return result;
-        },
-        'BufferOverflow': async (ns, hostname, details) => {
-            const hint = details.passwordHint || '';
-            const match = hint.match(/(\d+)/);
-            if (!match) return null;
-            const length = Number(match[1]);
-            if (!Number.isFinite(length) || length <= 0) return null;
-            return 'A'.repeat(length * 2);
-        },
-        'MastermindHint': async (ns, hostname, details) => {
-            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-                ? details.passwordLength
-                : 4;
-            if (length > 6) return null;
-            const charset = getCharsetForFormat(details.passwordFormat) || '0123456789';
-            if (charset.length > 12) return null;
-            let best = null;
-            const base = charset[0];
-            const guess = base.repeat(length);
-            const response = await runAuth(ns, hostname, guess);
-            if (response.success) return guess;
-            const counts = new Map();
-            const resultData = parseMastermindData(response);
-            if (resultData) counts.set(base, resultData.exact + resultData.misplaced);
-            for (let i = 1; i < charset.length; i++) {
-                const ch = charset[i];
-                const resp = await runAuth(ns, hostname, ch.repeat(length));
-                if (resp.success) return ch.repeat(length);
-                const data = parseMastermindData(resp);
-                if (data) counts.set(ch, data.exact + data.misplaced);
-            }
-            const digits = [];
-            for (const [ch, count] of counts) {
-                for (let i = 0; i < count; i++) digits.push(ch);
-            }
-            if (digits.length !== length) return null;
-            if (digits.length > 7) return null;
-            const attemptsRef = { count: 0, limit: 3000 };
-            await permuteDigits(digits, async (candidate) => {
-                if (attemptsRef.count >= attemptsRef.limit) return false;
-                attemptsRef.count++;
-                const auth = await runAuth(ns, hostname, candidate);
-                if (auth.success) {
-                    best = candidate;
-                    return true;
-                }
-                return false;
-            });
-            return best;
-        },
-        'TimingAttack': async (ns, hostname, details) => {
-            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-                ? details.passwordLength
-                : 4;
-            if (length > 12) return null;
-            const charset = getCharsetForFormat(details.passwordFormat) || '0123456789';
-            let prefix = '';
-            for (let i = 0; i < length; i++) {
-                let found = false;
-                for (const ch of charset) {
-                    const attempt = (prefix + ch).padEnd(length, charset[0]);
-                    const resp = await runAuth(ns, hostname, attempt);
-                    if (resp.success) return attempt;
-                    const idx = parseMismatchIndex(resp);
-                    if (Number.isFinite(idx) && idx > i) {
-                        prefix += ch;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) return null;
-            }
-            return prefix;
-        },
-        'LargestPrimeFactor': async (ns, hostname, details) => {
-            const target = extractNumber(details.passwordHintData || details.passwordHint || '');
-            if (!Number.isFinite(target)) return null;
-            return String(largestPrimeFactor(target));
-        },
-        'RomanNumeral': async (ns, hostname, details) => {
-            const hintData = details.passwordHintData || '';
-            if (hintData.includes(',')) {
-                const [minRaw, maxRaw] = hintData.split(',');
-                const min = romanToNumber(minRaw.trim());
-                const max = romanToNumber(maxRaw.trim());
-                if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-                let low = Math.min(min, max);
-                let high = Math.max(min, max);
-                while (low <= high) {
-                    const mid = Math.floor((low + high) / 2);
-                    const resp = await runAuth(ns, hostname, String(mid));
-                    if (resp.success) return String(mid);
-                    const msg = (resp.data || resp.message || '').toString().toUpperCase();
-                    if (msg.includes('ALTUS')) {
-                        high = mid - 1;
-                    } else if (msg.includes('PARUM')) {
-                        low = mid + 1;
-                    } else {
-                        break;
-                    }
-                }
-                return null;
-            }
-            const encoded = extractRoman(details.passwordHintData || details.passwordHint || '');
-            if (!encoded) return null;
-            return String(romanToNumber(encoded));
-        },
-        'DogNames': async (ns, hostname, details) => {
-            return await tryDictionary(ns, hostname, dogNameDictionary);
-        },
-        'CommonPasswordDictionary': async (ns, hostname, details) => {
-            return await tryDictionary(ns, hostname, commonPasswordDictionary);
-        },
-        'EUCountryDictionary': async (ns, hostname, details) => {
-            return await tryDictionary(ns, hostname, euCountries);
-        },
-        'Yesn_t': async (ns, hostname, details) => {
-            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-                ? details.passwordLength
-                : 4;
-            const charset = getCharsetForFormat(details.passwordFormat) || '0123456789';
-            let current = charset[0].repeat(length);
-            for (let i = 0; i < length; i++) {
-                let found = false;
-                for (const ch of charset) {
-                    const attempt = current.substring(0, i) + ch + current.substring(i + 1);
-                    const resp = await runAuth(ns, hostname, attempt);
-                    if (resp.success) return attempt;
-                    const flags = parseYesnt(resp);
-                    if (flags && flags[i]) {
-                        current = attempt;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) return null;
-            }
-            return current;
-        },
-        'BinaryEncodedFeedback': async (ns, hostname, details) => {
-            const raw = details.passwordHintData || details.passwordHint || '';
-            const bytes = raw.match(/[01]{8}/g);
-            if (!bytes) return null;
-            return bytes.map(b => String.fromCharCode(parseInt(b, 2))).join('');
-        },
-        'SpiceLevel': async (ns, hostname, details) => {
-            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-                ? details.passwordLength
-                : 4;
-            if (length > 4) return null;
-            const max = Math.pow(10, length);
-            for (let i = 0; i < max; i++) {
-                const candidate = i.toString().padStart(length, '0');
-                const result = await runAuth(ns, hostname, candidate);
-                if (result.success) return candidate;
-            }
-            return null;
-        },
-        'ConvertToBase10': async (ns, hostname, details) => {
-            const hintData = details.passwordHintData || '';
-            const parts = hintData.split(',');
-            if (parts.length < 2) return null;
-            const base = Number(parts[0]);
-            const encoded = parts.slice(1).join(',').trim();
-            if (!Number.isFinite(base) || !encoded) return null;
-            const value = parseBaseN(encoded, base);
-            if (!Number.isFinite(value)) return null;
-            return String(Math.round(value));
-        },
-        'parsedExpression': async (ns, hostname, details) => {
-            const expr = details.passwordHintData || '';
-            const cleaned = cleanExpression(expr);
-            if (!cleaned) return null;
-            const result = evaluateExpression(cleaned);
-            if (!Number.isFinite(result)) return null;
-            return String(result);
-        },
-        'encryptedPassword': async (ns, hostname, details) => {
-            const hintData = details.passwordHintData || '';
-            const [encrypted, masks] = hintData.split(';');
-            if (!encrypted || !masks) return null;
-            const maskBits = masks.trim().split(/\s+/).map(b => parseInt(b, 2));
-            if (maskBits.some(n => !Number.isFinite(n))) return null;
-            let output = '';
-            for (let i = 0; i < encrypted.length; i++) {
-                const code = encrypted.charCodeAt(i);
-                const mask = maskBits[i] ?? 0;
-                output += String.fromCharCode(code ^ mask);
-            }
-            return output;
-        },
-        
-        'Caesar': async (ns, hostname, details) => {
-            const hint = details.passwordHint || '';
-            for (let shift = 0; shift < 26; shift++) {
-                const decoded = hint.replace(/[a-zA-Z]/g, c => {
-                    const base = c <= 'Z' ? 65 : 97;
-                    return String.fromCharCode((c.charCodeAt(0) - base - shift + 26) % 26 + base);
-                });
-                const result = await runAuth(ns, hostname, decoded);
-                if (result.success) return decoded;
-            }
-            return null;
-        },
-        
-        'ROT13': async (ns, hostname, details) => {
-            const hint = details.passwordHint || '';
-            const decoded = hint.replace(/[a-zA-Z]/g, c => {
-                const base = c <= 'Z' ? 65 : 97;
-                return String.fromCharCode((c.charCodeAt(0) - base + 13) % 26 + base);
-            });
-            return decoded;
-        },
-        
-        'Reverse': async (ns, hostname, details) => {
-            return (details.passwordHint || '').split('').reverse().join('');
-        },
-        
-        'Base64': async (ns, hostname, details) => {
+async function scanClueFiles(ns, hostname, passwords, passwordFile) {
+    try {
+        const dataFiles = ns.ls(hostname, '.data.txt');
+        if (!dataFiles.length) return;
+
+        for (const file of dataFiles) {
             try {
-                return atob(details.passwordHint || '');
-            } catch {
-                return null;
-            }
-        },
-        
-        'Hexadecimal': async (ns, hostname, details) => {
-            const hex = (details.passwordHint || '').match(/[0-9a-fA-F]+/);
-            if (hex) {
-                try {
-                    return hex[0].match(/.{2}/g).map(b => String.fromCharCode(parseInt(b, 16))).join('');
-                } catch { }
-            }
-            return null;
-        },
-        
-        'Binary': async (ns, hostname, details) => {
-            const binary = (details.passwordHint || '').match(/[01]+/);
-            if (binary) {
-                try {
-                    const bytes = binary[0].match(/.{8}/g);
-                    if (bytes) return bytes.map(b => String.fromCharCode(parseInt(b, 2))).join('');
-                } catch { }
-            }
-            return null;
-        },
-        
-        'Atbash': async (ns, hostname, details) => {
-            const hint = details.passwordHint || '';
-            return hint.replace(/[a-zA-Z]/g, c => {
-                const base = c <= 'Z' ? 65 : 97;
-                return String.fromCharCode(base + (25 - (c.charCodeAt(0) - base)));
-            });
-        },
-        'DefaultPassword': async (ns, hostname, details) => {
-            const hint = (details.passwordHint || '').toLowerCase();
-            const defaults = [...defaultSettingsDictionary, 'root', 'guest', 'user', 'default', 'changeme', 'letmein',
-                'passw0rd', 'welcome', 'administrator', 'qwerty'];
-            if (hint) {
-                for (const word of defaults) {
-                    if (hint.includes(word)) return word;
-                }
-            }
-            return defaults[0];
-        },
-        'GuessNumber': async (ns, hostname, details) => {
-            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-                ? details.passwordLength
-                : 4;
-            const maxValue = Math.pow(10, length) - 1;
-            const hintDigits = (details.passwordHint || '').match(/\d+/g) || [];
-            for (const digits of hintDigits) {
-                const candidate = digits.slice(-length);
-                const result = await runAuth(ns, hostname, candidate);
-                if (result.success) return candidate;
-            }
-            let low = 0;
-            let high = maxValue;
-            for (let attempt = 0; attempt < 20 && low <= high; attempt++) {
-                const guess = Math.floor((low + high) / 2);
-                const result = await runAuth(ns, hostname, guess.toString());
-                if (result.success) return guess.toString();
-                const message = (result.message || '').toLowerCase();
-                if (message.includes('too low') || message.includes('higher')) {
-                    low = guess + 1;
-                    continue;
-                }
-                if (message.includes('too high') || message.includes('lower')) {
-                    high = guess - 1;
-                    continue;
-                }
-                const peakMatch = message.match(/highest peak:\s*([\d,.]+)/i);
-                if (peakMatch && typeof result.data === 'number') {
-                    const peak = Number(String(peakMatch[1]).replace(/,/g, ''));
-                    if (Number.isFinite(peak)) {
-                        if (result.data < peak) {
-                            low = guess + 1;
-                            continue;
-                        }
-                        if (result.data > peak) {
-                            high = guess - 1;
-                            continue;
-                        }
+                const content = ns.read(file);
+                if (!content) continue;
+                const parsed = parseDarknetLogs(content);
+                const lines = String(content).split(/\r?\n/);
+                for (const line of lines) {
+                    const fullMatch = line.match(/host(?:name)?[:\s]+([^\s,]+)[,\s]+password[:\s]+['\"]?([^'"}\s,]+)/i);
+                    if (fullMatch) {
+                        passwords.set(fullMatch[1], fullMatch[2]);
                     }
                 }
-                break;
+                for (const pwd of parsed.passwords) {
+                    if (!pwd) continue;
+                    if (!passwords.has(hostname)) passwords.set(hostname, pwd);
+                }
+                savePasswords(ns, passwordFile, passwords);
+            } catch { }
+        }
+    } catch { }
+}
+
+async function tryHintBasedAuth(ns, hostname, details) {
+    const hint = (details.passwordHint || '').trim();
+    const candidates = new Set();
+    const maxLen = Number.isFinite(details.passwordLength) && details.passwordLength > 0
+        ? details.passwordLength
+        : 32;
+
+    if (hint) {
+        if (!/(prove you are human|captcha|type the numbers)/i.test(hint)) {
+            candidates.add(hint);
+            candidates.add(hint.replace(/\s+/g, ''));
+            candidates.add(hint.toLowerCase());
+            candidates.add(hint.toUpperCase());
+        }
+        if (/^\d+$/.test(hint)) candidates.add(Number(hint).toString());
+        const hintDigits = hint.match(/\d/g);
+        if (hintDigits) {
+            const joined = hintDigits.join('');
+            candidates.add(joined);
+            const length = Number.isFinite(details.passwordLength) ? details.passwordLength : null;
+            if (length && joined.length >= length) {
+                for (let i = 0; i <= joined.length - length; i++) {
+                    candidates.add(joined.slice(i, i + length));
+                }
             }
-            return null;
-        },
-    };
-    
+        }
+    }
+
+    try {
+        const logs = await runHeartbleed(ns, hostname);
+        if (logs?.logs) {
+            const parsed = parseDarknetLogs(logs.logs);
+            for (const p of parsed.passwords) candidates.add(p);
+            for (const h of parsed.hints) {
+                candidates.add(h);
+                candidates.add(h.replace(/\s+/g, ''));
+            }
+        }
+    } catch { }
+
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        if (candidate.length > maxLen) continue;
+        try {
+            const result = await runAuth(ns, hostname, candidate);
+            if (result.success) return candidate;
+        } catch { }
+    }
+
+    return null;
+}
+
+function getSolver(modelId) {
     if (!modelId) return null;
-    const normalized = modelId.toLowerCase();
-    if (normalized.includes('zerologon') || normalized.includes('nopassword')) return solvers['ZeroLogon'];
-    if (normalized.includes('captcha') || normalized.includes('cloudblare')) return solvers['Captcha'];
-    if (normalized.includes('simplepin') || normalized.includes('pin')) return solvers['SimplePin'];
-    if (normalized.includes('freshinstall') || normalized.includes('defaultpassword')) return solvers['DefaultPassword'];
-    if (normalized.includes('deskmemo') || normalized.includes('echovuln')) return solvers['EchoVuln'];
-    if (normalized.includes('php 5.4') || normalized.includes('sortedecho')) return solvers['SortedEchoVuln'];
-    if (normalized.includes('pr0ver') || normalized.includes('bufferoverflow')) return solvers['BufferOverflow'];
-    if (normalized.includes('deepgreen') || normalized.includes('mastermind')) return solvers['MastermindHint'];
-    if (normalized.includes('2g_cellular') || normalized.includes('timing')) return solvers['TimingAttack'];
-    if (normalized.includes('primetime')) return solvers['LargestPrimeFactor'];
-    if (normalized.includes('bellacuore') || normalized.includes('roman')) return solvers['RomanNumeral'];
-    if (normalized.includes('laika') || normalized.includes('dog')) return solvers['DogNames'];
-    if (normalized.includes('accountsmanager') || normalized.includes('guessnumber')) return solvers['GuessNumber'];
-    if (normalized.includes('toppass') || normalized.includes('commonpassword')) return solvers['CommonPasswordDictionary'];
-    if (normalized.includes('eurozone') || normalized.includes('eucountry')) return solvers['EUCountryDictionary'];
-    if (normalized.includes('yesn') || normalized.includes('nil')) return solvers['Yesn_t'];
-    if (normalized.includes('110100100') || normalized.includes('binaryencoded')) return solvers['BinaryEncodedFeedback'];
-    if (normalized.includes('ratemypix') || normalized.includes('spice')) return solvers['SpiceLevel'];
-    if (normalized.includes('octantvoxel') || normalized.includes('base10')) return solvers['ConvertToBase10'];
-    if (normalized.includes('mathml') || normalized.includes('expression')) return solvers['parsedExpression'];
-    if (normalized.includes('factorios') || normalized.includes('divisibility')) return solvers['divisibilityTest'];
-    if (normalized.includes('bigmo') || normalized.includes('modulo')) return solvers['tripleModulo'];
-    if (normalized.includes('kingofthehill') || normalized.includes('globalmaxima')) return solvers['globalMaxima'];
-    if (normalized.includes('ordo') || normalized.includes('xor')) return solvers['encryptedPassword'];
-    if (normalized.includes('openweb') || normalized.includes('packet')) return solvers['packetSniffer'];
-    if (normalized.includes('caesar')) return solvers['Caesar'];
-    if (normalized.includes('vigenere')) return solvers['Vigenere'];
-    if (normalized.includes('base64')) return solvers['Base64'];
-    if (normalized.includes('hex')) return solvers['Hexadecimal'];
-    if (normalized.includes('binary')) return solvers['Binary'];
-    if (normalized.includes('rot13')) return solvers['ROT13'];
-    if (normalized.includes('reverse')) return solvers['Reverse'];
-    if (normalized.includes('atbash')) return solvers['Atbash'];
-    if (normalized.includes('morse')) return solvers['MorseCode'];
-    if (normalized.includes('date')) return solvers['DateFormat'];
-    if (normalized.includes('phone')) return solvers['PhoneWords'];
-    if (normalized.includes('leet')) return solvers['LeetSpeak'];
-    if (normalized.includes('word')) return solvers['WordList'];
-    return solvers[modelId] || null;
+    if (modelId === '(The Labyrinth)') return null;
+    return SOLVER_MAP[modelId] || null;
 }
 
 async function tryFormatBruteforce(ns, hostname, details) {
@@ -733,85 +409,6 @@ async function tryFormatBruteforce(ns, hostname, details) {
     return null;
 }
 
-function getCharsetForFormat(format) {
-    if (!format) return null;
-    if (format === 'numeric') return '0123456789';
-    if (format === 'alphabetic') return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    if (format === 'alphanumeric') return '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    return null;
-}
-
-function buildCandidate(index, charset, length) {
-    let value = index;
-    let output = '';
-    for (let i = 0; i < length; i++) {
-        output = charset[value % charset.length] + output;
-        value = Math.floor(value / charset.length);
-    }
-    return output;
-}
-
-async function tryHintBasedAuth(ns, hostname, details) {
-    const hint = (details.passwordHint || '').trim();
-    const candidates = new Set();
-    const maxLen = Number.isFinite(details.passwordLength) && details.passwordLength > 0
-        ? details.passwordLength
-        : 32;
-    if (hint) {
-        if (!/(prove you are human|captcha|type the numbers)/i.test(hint)) {
-            candidates.add(hint);
-            candidates.add(hint.replace(/\s+/g, ''));
-            candidates.add(hint.toLowerCase());
-            candidates.add(hint.toUpperCase());
-        }
-        if (/^\d+$/.test(hint)) candidates.add(Number(hint).toString());
-        const hintDigits = hint.match(/\d/g);
-        if (hintDigits) {
-            const joined = hintDigits.join('');
-            candidates.add(joined);
-            const length = Number.isFinite(details.passwordLength) ? details.passwordLength : null;
-            if (length && joined.length >= length) {
-                for (let i = 0; i <= joined.length - length; i++)
-                    candidates.add(joined.slice(i, i + length));
-            }
-        }
-    }
-    try {
-        const logs = await runDnetCommand(ns, buildDnetCommand(commandNames.bleed, commandArgs.peekArg), [hostname]);
-        if (logs?.logs) {
-            const parsed = parseDarknetLogs(logs.logs);
-            for (const p of parsed.passwords) candidates.add(p);
-            for (const h of parsed.hints) {
-                candidates.add(h);
-                candidates.add(h.replace(/\s+/g, ''));
-            }
-        }
-    } catch { }
-    for (const candidate of candidates) {
-        if (!candidate) continue;
-        if (candidate.length > maxLen) continue;
-        try {
-            const result = await runAuth(ns, hostname, candidate);
-            if (result.success) return candidate;
-        } catch { }
-    }
-    return null;
-}
-
-function parseDarknetLogs(logs) {
-    const passwords = [];
-    const hints = [];
-    for (const log of logs) {
-        const pwdMatch = log.match(/password[:\s]+['"]?([^'"}\s]+)/i);
-        if (pwdMatch) passwords.push(pwdMatch[1]);
-        const authMatch = log.match(/auth(?:enticate)?[:\s]+['"]?([^'"}\s]+)/i);
-        if (authMatch) passwords.push(authMatch[1]);
-        const hintMatch = log.match(/hint[:\s]+(.+)/i);
-        if (hintMatch) hints.push(hintMatch[1].trim());
-    }
-    return { passwords, hints };
-}
-
 const defaultSettingsDictionary = ['admin', 'password', '0000', '12345'];
 const dogNameDictionary = ['fido', 'spot', 'rover', 'max'];
 const euCountries = [
@@ -832,20 +429,512 @@ const commonPasswordDictionary = [
     'thunder', 'taylor', 'matrix',
 ];
 
+const SOLVER_MAP = {
+    'ZeroLogon': solveZeroLogon,
+    'DeskMemo_3.1': solveEchoVuln,
+    'FreshInstall_1.0': solveFreshInstall,
+    'CloudBlare(tm)': solveCloudBlare,
+    'Laika4': solveDogNames,
+    'NIL': solveYesnt,
+    'Pr0verFl0': solveBufferOverflow,
+    'PHP 5.4': solveSortedEchoVuln,
+    'DeepGreen': solveMastermind,
+    'BellaCuore': solveRomanNumeral,
+    'AccountsManager_4.2': solveGuessNumber,
+    'OctantVoxel': solveConvertToBase10,
+    'Factori-Os': solveDivisibilityTest,
+    'OpenWebAccessPoint': solvePacketSniffer,
+    'KingOfTheHill': solveGlobalMaxima,
+    'RateMyPix.Auth': solveSpiceLevel,
+    'PrimeTime 2': solveLargestPrimeFactor,
+    'TopPass': solveTopPass,
+    'EuroZone Free': solveEuroZone,
+    '2G_cellular': solveTimingAttack,
+    '110100100': solveBinaryEncoded,
+    'MathML': solveParsedExpression,
+    'OrdoXenos': solveXorEncrypted,
+    'BigMo%od': solveTripleModulo,
+};
+
+async function solveZeroLogon(ns, hostname) {
+    const result = await runAuth(ns, hostname, '');
+    return result.success ? '' : null;
+}
+
+async function solveEchoVuln(ns, hostname, serverInfo) {
+    const hint = getHint(serverInfo);
+    const candidate = extractTrailingToken(hint);
+    if (!candidate) return null;
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveFreshInstall(ns, hostname) {
+    return await tryDictionary(ns, hostname, defaultSettingsDictionary);
+}
+
+async function solveCloudBlare(ns, hostname, serverInfo) {
+    const data = getHintData(serverInfo) || getHint(serverInfo);
+    const digits = String(data).match(/\d/g);
+    if (!digits) return null;
+    const joined = digits.join('');
+    const length = Number.isFinite(serverInfo?.passwordLength) ? serverInfo.passwordLength : null;
+    const candidates = [];
+    if (length && joined.length >= length) {
+        for (let i = 0; i <= joined.length - length; i++) {
+            candidates.push(joined.slice(i, i + length));
+        }
+    } else {
+        candidates.push(joined);
+    }
+    for (const candidate of candidates) {
+        const result = await runAuth(ns, hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
+}
+
+async function solveDogNames(ns, hostname) {
+    return await tryDictionary(ns, hostname, dogNameDictionary);
+}
+
+async function solveYesnt(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, 4);
+    const charset = getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
+    let current = charset[0].repeat(length);
+    for (let i = 0; i < length; i++) {
+        let found = false;
+        for (const ch of charset) {
+            const attempt = current.substring(0, i) + ch + current.substring(i + 1);
+            const resp = await runAuth(ns, hostname, attempt);
+            if (resp.success) return attempt;
+            const flags = parseYesnt(resp);
+            if (flags && flags[i]) {
+                current = attempt;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return null;
+    }
+    return current;
+}
+
+async function solveBufferOverflow(ns, hostname, serverInfo) {
+    const hint = getHint(serverInfo);
+    const match = hint.match(/(\d+)/);
+    if (!match) return null;
+    const length = Number(match[1]);
+    if (!Number.isFinite(length) || length <= 0) return null;
+    const candidate = 'A'.repeat(length * 2);
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveSortedEchoVuln(ns, hostname, serverInfo) {
+    const sortedRaw = (getHintData(serverInfo) || getHint(serverInfo)).replace(/\s+/g, '');
+    const sorted = sortedRaw.match(/\d+/g)?.join('') || '';
+    if (!sorted || !/^\d+$/.test(sorted)) return null;
+    const length = sorted.length;
+
+    if (length <= 7) {
+        const result = await solvePermutationByAuth(ns, hostname, sorted.split(''), 10000);
+        return result;
+    }
+
+    const attempts = 2500;
+    let bestCandidate = shuffleString(sorted);
+    let bestScore = Infinity;
+    let stagnation = 0;
+
+    for (let i = 0; i < attempts; i++) {
+        const resp = await runAuth(ns, hostname, bestCandidate);
+        if (resp.success) return bestCandidate;
+        const rmsd = parseRmsd(resp);
+        if (!Number.isFinite(rmsd)) break;
+        if (rmsd < bestScore) {
+            bestScore = rmsd;
+            stagnation = 0;
+        } else {
+            stagnation++;
+        }
+        const next = mutateSwap(bestCandidate);
+        const nextResp = await runAuth(ns, hostname, next);
+        if (nextResp.success) return next;
+        const nextRmsd = parseRmsd(nextResp);
+        if (Number.isFinite(nextRmsd) && nextRmsd <= bestScore) {
+            bestCandidate = next;
+            bestScore = nextRmsd;
+        }
+        if (stagnation > 50) {
+            bestCandidate = shuffleString(sorted);
+            stagnation = 0;
+        }
+    }
+    return null;
+}
+
+async function solveMastermind(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, 4);
+    const charset = getCharsetForFormat(serverInfo?.passwordFormat) || '0123456789';
+    const constraints = [];
+    const counts = new Map();
+
+    for (const ch of charset) {
+        const attempt = ch.repeat(length);
+        const resp = await runAuth(ns, hostname, attempt);
+        if (resp.success) return attempt;
+        const feedback = parseMastermindData(resp);
+        if (feedback) {
+            counts.set(ch, feedback.exact + feedback.misplaced);
+            constraints.push({ guess: attempt, exact: feedback.exact, misplaced: feedback.misplaced });
+        }
+    }
+
+    const multiset = [];
+    for (const [ch, count] of counts.entries()) {
+        for (let i = 0; i < count; i++) multiset.push(ch);
+    }
+
+    if (multiset.length !== length || multiset.length === 0) {
+        return await bruteMastermind(ns, hostname, charset, length, constraints);
+    }
+
+    const tries = { count: 0, limit: 6000 };
+    const checkCandidate = async (candidate) => {
+        for (const c of constraints) {
+            const feedback = compareMastermind(candidate, c.guess);
+            if (feedback.exact !== c.exact || feedback.misplaced !== c.misplaced) return false;
+        }
+        const resp = await runAuth(ns, hostname, candidate);
+        if (resp.success) return candidate;
+        const feedback = parseMastermindData(resp);
+        if (feedback) constraints.push({ guess: candidate, exact: feedback.exact, misplaced: feedback.misplaced });
+        return false;
+    };
+
+    return await permuteWithConstraints(multiset, tries, checkCandidate);
+}
+
+async function solveRomanNumeral(ns, hostname, serverInfo) {
+    const hintData = getHintData(serverInfo);
+    if (hintData.includes(',')) {
+        const [minRaw, maxRaw] = hintData.split(',');
+        const min = romanToNumber(minRaw.trim());
+        const max = romanToNumber(maxRaw.trim());
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        let low = Math.min(min, max);
+        let high = Math.max(min, max);
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            const resp = await runAuth(ns, hostname, String(mid));
+            if (resp.success) return String(mid);
+            const msg = String(resp.data || resp.message || '').toUpperCase();
+            if (msg.includes('ALTUS')) high = mid - 1;
+            else if (msg.includes('PARUM')) low = mid + 1;
+            else break;
+        }
+        return null;
+    }
+
+    const encoded = extractRoman(getHintData(serverInfo) || getHint(serverInfo));
+    if (!encoded) return null;
+    const candidate = String(romanToNumber(encoded));
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveGuessNumber(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, 4);
+    const maxValue = Math.pow(10, length) - 1;
+    let low = 0;
+    let high = maxValue;
+    for (let attempt = 0; attempt < 32 && low <= high; attempt++) {
+        const guess = Math.floor((low + high) / 2);
+        const resp = await runAuth(ns, hostname, String(guess));
+        if (resp.success) return String(guess);
+        const direction = String(resp.data || '').toLowerCase();
+        if (direction === 'higher') {
+            low = guess + 1;
+        } else if (direction === 'lower') {
+            high = guess - 1;
+        } else {
+            break;
+        }
+    }
+    return null;
+}
+
+async function solveConvertToBase10(ns, hostname, serverInfo) {
+    const hintData = getHintData(serverInfo);
+    const parts = hintData.split(',');
+    if (parts.length < 2) return null;
+    const base = Number(parts[0]);
+    const encoded = parts.slice(1).join(',').trim();
+    if (!Number.isFinite(base) || !encoded) return null;
+    const value = parseBaseN(encoded, base);
+    if (!Number.isFinite(value)) return null;
+    const candidate = String(Math.round(value));
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveDivisibilityTest(ns, hostname) {
+    const primes = generatePrimes(997);
+    let product = 1n;
+    for (const prime of primes) {
+        const primeValue = BigInt(prime);
+        const divisible = await isDivisibleBy(ns, hostname, primeValue);
+        if (!divisible) continue;
+        let power = primeValue;
+        while (true) {
+            const nextPower = power * primeValue;
+            const divisiblePower = await isDivisibleBy(ns, hostname, nextPower);
+            if (!divisiblePower) break;
+            power = nextPower;
+        }
+        let temp = power;
+        while (temp > 1n) {
+            product *= primeValue;
+            temp /= primeValue;
+        }
+    }
+    if (product <= 1n) return null;
+    const candidate = product.toString();
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solvePacketSniffer(ns, hostname, serverInfo) {
+    const candidates = new Set();
+    const hint = getHint(serverInfo);
+    if (hint) {
+        candidates.add(hint.trim());
+        candidates.add(hint.replace(/\s+/g, ''));
+    }
+    for (const value of defaultSettingsDictionary) candidates.add(value);
+    for (const value of commonPasswordDictionary) candidates.add(value);
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        const result = await runAuth(ns, hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
+}
+
+async function solveGlobalMaxima(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, 3);
+    const width = Math.pow(10, Math.max(length - 2, 0)) + 1;
+    let low = 0;
+    let high = width - 1;
+    const cache = new Map();
+
+    const altitudeAt = async (x) => {
+        if (cache.has(x)) return cache.get(x);
+        const resp = await runAuth(ns, hostname, String(x));
+        if (resp.success) return { success: true, altitude: Number(resp.data) };
+        const altitude = parseAltitude(resp);
+        const value = { success: false, altitude };
+        cache.set(x, value);
+        return value;
+    };
+
+    while (high - low > 3) {
+        const m1 = Math.floor(low + (high - low) / 3);
+        const m2 = Math.floor(high - (high - low) / 3);
+        const a1 = await altitudeAt(m1);
+        if (a1.success) return String(m1);
+        const a2 = await altitudeAt(m2);
+        if (a2.success) return String(m2);
+        if (a1.altitude < a2.altitude) low = m1 + 1;
+        else high = m2 - 1;
+    }
+
+    let best = { x: low, altitude: -Infinity };
+    for (let x = low; x <= high; x++) {
+        const resp = await runAuth(ns, hostname, String(x));
+        if (resp.success) return String(x);
+        const altitude = parseAltitude(resp);
+        if (altitude > best.altitude) best = { x, altitude };
+    }
+    return best ? String(best.x) : null;
+}
+
+async function solveSpiceLevel(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, null);
+    const charset = getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
+    if (!length) return null;
+
+    let guess = charset[0].repeat(length);
+    let baseResp = await runAuth(ns, hostname, guess);
+    if (baseResp.success) return guess;
+    let baseCount = parsePepperCount(baseResp);
+    if (!Number.isFinite(baseCount)) return null;
+
+    for (let i = 0; i < length; i++) {
+        let bestChar = guess[i];
+        let bestCount = baseCount;
+        for (const ch of charset) {
+            const attempt = guess.substring(0, i) + ch + guess.substring(i + 1);
+            const resp = await runAuth(ns, hostname, attempt);
+            if (resp.success) return attempt;
+            const count = parsePepperCount(resp);
+            if (Number.isFinite(count) && count > bestCount) {
+                bestCount = count;
+                bestChar = ch;
+            }
+        }
+        guess = guess.substring(0, i) + bestChar + guess.substring(i + 1);
+        baseCount = bestCount;
+    }
+
+    const finalResp = await runAuth(ns, hostname, guess);
+    return finalResp.success ? guess : null;
+}
+
+async function solveLargestPrimeFactor(ns, hostname, serverInfo) {
+    const target = extractNumber(getHintData(serverInfo) || getHint(serverInfo));
+    if (!Number.isFinite(target)) return null;
+    const candidate = String(largestPrimeFactor(target));
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveTopPass(ns, hostname) {
+    return await tryDictionary(ns, hostname, commonPasswordDictionary);
+}
+
+async function solveEuroZone(ns, hostname) {
+    return await tryDictionary(ns, hostname, euCountries);
+}
+
+async function solveTimingAttack(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, 4);
+    const charset = getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
+    let prefix = '';
+    for (let i = 0; i < length; i++) {
+        let found = false;
+        for (const ch of charset) {
+            const attempt = (prefix + ch).padEnd(length, charset[0]);
+            const resp = await runAuth(ns, hostname, attempt);
+            if (resp.success) return attempt;
+            const idx = parseMismatchIndex(resp);
+            if (Number.isFinite(idx) && idx > i) {
+                prefix += ch;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return null;
+    }
+    return prefix;
+}
+
+async function solveBinaryEncoded(ns, hostname, serverInfo) {
+    const raw = getHintData(serverInfo) || getHint(serverInfo);
+    const bytes = String(raw).match(/[01]{8}/g);
+    if (!bytes) return null;
+    const candidate = bytes.map(b => String.fromCharCode(parseInt(b, 2))).join('');
+    const result = await runAuth(ns, hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveParsedExpression(ns, hostname, serverInfo) {
+    const expr = cleanExpression(getHintData(serverInfo));
+    if (!expr) return null;
+    const value = evaluateExpression(expr);
+    if (!Number.isFinite(value)) return null;
+    const candidates = buildExpressionCandidates(value);
+    for (const candidate of candidates) {
+        const result = await runAuth(ns, hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
+}
+
+async function solveXorEncrypted(ns, hostname, serverInfo) {
+    const hintData = getHintData(serverInfo);
+    const [encrypted, masksRaw] = hintData.split(';');
+    if (!encrypted || !masksRaw) return null;
+    const masks = masksRaw.trim().split(/\s+/).map(mask => parseInt(mask, 2));
+    if (masks.some(n => !Number.isFinite(n))) return null;
+    let output = '';
+    for (let i = 0; i < encrypted.length; i++) {
+        const code = encrypted.charCodeAt(i);
+        const mask = masks[i] ?? 0;
+        output += String.fromCharCode(code ^ mask);
+    }
+    const result = await runAuth(ns, hostname, output);
+    return result.success ? output : null;
+}
+
+async function solveTripleModulo(ns, hostname, serverInfo) {
+    const length = getPasswordLength(serverInfo, null);
+    if (!length) return null;
+    const max = BigInt(Math.pow(10, length) - 1);
+    const moduli = [31, 29, 27, 25, 23];
+    const residues = [];
+    for (const mod of moduli) {
+        const n = nextAlignedGreater(max, mod);
+        const resp = await runAuth(ns, hostname, n.toString());
+        if (resp.success) return n.toString();
+        const result = parseModuloResult(resp);
+        if (!Number.isFinite(result)) return null;
+        residues.push(BigInt(result));
+    }
+    const modulus = moduli.reduce((acc, m) => acc * BigInt(m), 1n);
+    let candidate = crt(residues, moduli.map(m => BigInt(m)));
+    if (candidate < 0n) candidate = ((candidate % modulus) + modulus) % modulus;
+    while (candidate > max) candidate -= modulus;
+    for (let k = 0n; candidate + k * modulus <= max; k++) {
+        const attempt = candidate + k * modulus;
+        const result = await runAuth(ns, hostname, attempt.toString());
+        if (result.success) return attempt.toString();
+    }
+    return null;
+}
+
+function getHint(serverInfo) {
+    return String(serverInfo?.staticPasswordHint ?? serverInfo?.passwordHint ?? '').trim();
+}
+
+function getHintData(serverInfo) {
+    return String(serverInfo?.passwordHintData ?? '').trim();
+}
+
+function getPasswordLength(serverInfo, fallback) {
+    return Number.isFinite(serverInfo?.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : fallback;
+}
+
+function logError(ns, message, err) {
+    try {
+        const detail = err?.message ?? String(err);
+        ns.print(`${message}: ${detail}`);
+    } catch { }
+}
+
+async function tryDictionary(ns, hostname, words) {
+    for (const word of words) {
+        const result = await runAuth(ns, hostname, word);
+        if (result.success) return word;
+    }
+    return null;
+}
+
 function extractTrailingToken(hint) {
-    if (!hint) return '';
-    const match = hint.match(/([A-Za-z0-9]+)\s*$/);
+    const match = String(hint || '').match(/([A-Za-z0-9]+)\s*$/);
     return match ? match[1] : '';
 }
 
 function extractNumber(text) {
-    const match = String(text).match(/(\d+)/);
-    if (!match) return NaN;
-    return Number(match[1]);
+    const match = String(text || '').match(/(\d+)/);
+    return match ? Number(match[1]) : NaN;
 }
 
 function extractRoman(text) {
-    const match = String(text).match(/([IVXLCDM]+|nulla)/i);
+    const match = String(text || '').match(/([IVXLCDM]+|nulla)/i);
     return match ? match[1] : '';
 }
 
@@ -882,32 +971,379 @@ function largestPrimeFactor(n) {
     return Math.max(last, num);
 }
 
-async function tryDictionary(ns, hostname, words) {
-    for (const word of words) {
-        const result = await runAuth(ns, hostname, word);
-        if (result.success) return word;
-    }
+function getCharsetForFormat(format) {
+    if (!format) return null;
+    if (format === 'numeric') return '0123456789';
+    if (format === 'alphabetic') return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    if (format === 'alphanumeric') return '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     return null;
 }
 
+function defaultCharset() {
+    return '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+}
+
+function buildCandidate(index, charset, length) {
+    let value = index;
+    let output = '';
+    for (let i = 0; i < length; i++) {
+        output = charset[value % charset.length] + output;
+        value = Math.floor(value / charset.length);
+    }
+    return output;
+}
+
+function parseYesnt(resp) {
+    const data = String(resp?.data ?? '').trim();
+    if (!data) return null;
+    return data.split(',').map(entry => entry.trim().startsWith('yes'));
+}
+
+function parseMismatchIndex(resp) {
+    const text = String(resp?.message ?? resp?.data ?? '');
+    const match = text.match(/\((\d+)\)/);
+    return match ? Number(match[1]) : NaN;
+}
+
 function parseMastermindData(resp) {
-    const data = (resp.data || resp.message || '').toString();
+    const data = String(resp?.data ?? resp?.message ?? '');
     const match = data.match(/(\d+)\s*,\s*(\d+)/);
     if (!match) return null;
     return { exact: Number(match[1]), misplaced: Number(match[2]) };
 }
 
-function parseMismatchIndex(resp) {
-    const data = (resp.data || resp.message || '').toString();
-    const match = data.match(/\((\d+)\)/);
-    if (!match) return NaN;
-    return Number(match[1]);
+function compareMastermind(candidate, guess) {
+    let exact = 0;
+    const remainingCandidate = [];
+    const remainingGuess = [];
+    for (let i = 0; i < candidate.length; i++) {
+        if (candidate[i] === guess[i]) exact++;
+        else {
+            remainingCandidate.push(candidate[i]);
+            remainingGuess.push(guess[i]);
+        }
+    }
+    const counts = new Map();
+    for (const ch of remainingCandidate) counts.set(ch, (counts.get(ch) || 0) + 1);
+    let misplaced = 0;
+    for (const ch of remainingGuess) {
+        const count = counts.get(ch) || 0;
+        if (count > 0) {
+            misplaced++;
+            counts.set(ch, count - 1);
+        }
+    }
+    return { exact, misplaced };
 }
 
-function parseYesnt(resp) {
-    const data = (resp.data || resp.message || '').toString();
-    if (!data) return null;
-    return data.split(',').map(entry => entry.trim().startsWith('yes'));
+async function bruteMastermind(ns, hostname, charset, length, constraints) {
+    const total = Math.pow(charset.length, length);
+    if (!Number.isFinite(total) || total > 300000) return null;
+    for (let i = 0; i < total; i++) {
+        const candidate = buildCandidate(i, charset, length);
+        let ok = true;
+        for (const c of constraints) {
+            const feedback = compareMastermind(candidate, c.guess);
+            if (feedback.exact !== c.exact || feedback.misplaced !== c.misplaced) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) continue;
+        const resp = await runAuth(ns, hostname, candidate);
+        if (resp.success) return candidate;
+        const feedback = parseMastermindData(resp);
+        if (feedback) constraints.push({ guess: candidate, exact: feedback.exact, misplaced: feedback.misplaced });
+    }
+    return null;
+}
+
+async function permuteWithConstraints(multiset, tries, checkCandidate) {
+    const counts = new Map();
+    for (const d of multiset) counts.set(d, (counts.get(d) || 0) + 1);
+    const keys = Array.from(counts.keys());
+    const targetLen = multiset.length;
+    const buffer = new Array(targetLen);
+
+    const backtrack = async (idx) => {
+        if (tries.count >= tries.limit) return null;
+        if (idx === targetLen) {
+            tries.count++;
+            const candidate = buffer.join('');
+            const match = await checkCandidate(candidate);
+            return match || null;
+        }
+        for (const key of keys) {
+            const count = counts.get(key);
+            if (!count) continue;
+            counts.set(key, count - 1);
+            buffer[idx] = key;
+            const result = await backtrack(idx + 1);
+            if (result) return result;
+            counts.set(key, count);
+        }
+        return null;
+    };
+
+    return await backtrack(0);
+}
+
+async function solvePermutationByAuth(ns, hostname, digits, limit) {
+    let attempts = 0;
+    let found = null;
+    await permuteDigits(digits, async (candidate) => {
+        if (attempts >= limit) return true;
+        attempts++;
+        const resp = await runAuth(ns, hostname, candidate);
+        if (resp.success) {
+            found = candidate;
+            return true;
+        }
+        return false;
+    });
+    return found;
+}
+
+function parseRmsd(resp) {
+    const text = String(resp?.data ?? resp?.message ?? '');
+    const match = text.match(/RMS\s*Deviation\s*:?\s*([0-9.]+)/i);
+    return match ? Number(match[1]) : NaN;
+}
+
+function shuffleString(value) {
+    const chars = value.split('');
+    for (let i = chars.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+    return chars.join('');
+}
+
+function mutateSwap(value) {
+    if (value.length < 2) return value;
+    const chars = value.split('');
+    const i = Math.floor(Math.random() * chars.length);
+    let j = Math.floor(Math.random() * chars.length);
+    if (i === j) j = (j + 1) % chars.length;
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+    return chars.join('');
+}
+
+function parsePepperCount(resp) {
+    const data = String(resp?.data ?? '');
+    if (!data) return NaN;
+    if (data.startsWith('0/')) return 0;
+    const count = (data.match(/🌶️/g) || []).length;
+    if (count > 0) return count;
+    const match = data.match(/^(\d+)\//);
+    return match ? Number(match[1]) : NaN;
+}
+
+function parseAltitude(resp) {
+    if (resp?.data !== undefined && resp?.data !== null && resp?.data !== '') {
+        const value = Number(resp.data);
+        if (Number.isFinite(value)) return value;
+    }
+    const text = String(resp?.message ?? '');
+    const match = text.match(/current altitude:\s*([0-9.]+)/i);
+    return match ? Number(match[1]) : NaN;
+}
+
+function parseBaseN(encoded, base) {
+    const characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const upper = encoded.toUpperCase();
+    const [intPart, fracPart] = upper.split('.');
+    let value = 0;
+    for (const ch of intPart) {
+        const digit = characters.indexOf(ch);
+        if (digit < 0) return NaN;
+        value = value * base + digit;
+    }
+    if (fracPart) {
+        for (let i = 0; i < fracPart.length; i++) {
+            const digit = characters.indexOf(fracPart[i]);
+            if (digit < 0) return NaN;
+            value += digit / Math.pow(base, i + 1);
+        }
+    }
+    return value;
+}
+
+function cleanExpression(expression) {
+    let cleaned = String(expression || '')
+        .replaceAll('ҳ', '*')
+        .replaceAll('÷', '/')
+        .replaceAll('➕', '+')
+        .replaceAll('➖', '-')
+        .replaceAll('×', '*');
+    if (cleaned.includes('ns.exit(),')) cleaned = cleaned.split('ns.exit(),')[0];
+    if (cleaned.includes(',')) cleaned = cleaned.split(',')[0];
+    return cleaned.trim();
+}
+
+function evaluateExpression(expression) {
+    const tokens = tokenizeExpression(expression);
+    let index = 0;
+
+    const parseExpression = () => {
+        let value = parseTerm();
+        while (index < tokens.length && (tokens[index] === '+' || tokens[index] === '-')) {
+            const op = tokens[index++];
+            const right = parseTerm();
+            value = op === '+' ? value + right : value - right;
+        }
+        return value;
+    };
+
+    const parseTerm = () => {
+        let value = parsePower();
+        while (index < tokens.length && (tokens[index] === '*' || tokens[index] === '/')) {
+            const op = tokens[index++];
+            const right = parsePower();
+            value = op === '*' ? value * right : value / right;
+        }
+        return value;
+    };
+
+    const parsePower = () => {
+        let value = parseUnary();
+        if (tokens[index] === '^') {
+            index++;
+            const right = parsePower();
+            value = Math.pow(value, right);
+        }
+        return value;
+    };
+
+    const parseUnary = () => {
+        if (tokens[index] === '+') {
+            index++;
+            return parseUnary();
+        }
+        if (tokens[index] === '-') {
+            index++;
+            return -parseUnary();
+        }
+        return parsePrimary();
+    };
+
+    const parsePrimary = () => {
+        const token = tokens[index++];
+        if (token === '(') {
+            const value = parseExpression();
+            if (tokens[index] === ')') index++;
+            return value;
+        }
+        if (typeof token === 'number') return token;
+        return NaN;
+    };
+
+    const result = parseExpression();
+    return Number.isFinite(result) ? result : NaN;
+}
+
+function tokenizeExpression(expression) {
+    const raw = String(expression || '').replace(/\s+/g, '');
+    const tokens = [];
+    let i = 0;
+    while (i < raw.length) {
+        const ch = raw[i];
+        if ('+-*/^()'.includes(ch)) {
+            tokens.push(ch);
+            i++;
+            continue;
+        }
+        if (/[0-9.]/.test(ch)) {
+            let num = '';
+            while (i < raw.length && /[0-9.]/.test(raw[i])) {
+                num += raw[i];
+                i++;
+            }
+            tokens.push(parseFloat(num));
+            continue;
+        }
+        i++;
+    }
+    return tokens;
+}
+
+function buildExpressionCandidates(value) {
+    const candidates = [];
+    if (Number.isFinite(value)) {
+        if (Math.abs(value - Math.round(value)) < 1e-6) {
+            candidates.push(String(Math.round(value)));
+        }
+        candidates.push(String(value));
+        candidates.push(value.toFixed(2));
+        candidates.push(value.toFixed(3));
+    }
+    return Array.from(new Set(candidates));
+}
+
+function generatePrimes(limit) {
+    const sieve = new Array(limit + 1).fill(true);
+    sieve[0] = false;
+    sieve[1] = false;
+    for (let i = 2; i * i <= limit; i++) {
+        if (!sieve[i]) continue;
+        for (let j = i * i; j <= limit; j += i) sieve[j] = false;
+    }
+    const primes = [];
+    for (let i = 2; i <= limit; i++) if (sieve[i]) primes.push(i);
+    return primes;
+}
+
+async function isDivisibleBy(ns, hostname, divisor) {
+    const resp = await runAuth(ns, hostname, divisor.toString());
+    if (resp.success) return true;
+    const data = String(resp?.data ?? '').toLowerCase();
+    if (data === 'true') return true;
+    if (data === 'false') return false;
+    const msg = String(resp?.message ?? '').toLowerCase();
+    if (msg.includes('is divisible')) return true;
+    if (msg.includes('not divisible')) return false;
+    return false;
+}
+
+function parseModuloResult(resp) {
+    const data = resp?.data ?? resp?.message ?? '';
+    const match = String(data).match(/(-?\d+)/);
+    return match ? Number(match[1]) : NaN;
+}
+
+function nextAlignedGreater(max, mod) {
+    const maxMod = Number(max % 32n);
+    let delta = (mod - maxMod + 32) % 32;
+    if (delta === 0) delta = 32;
+    return max + BigInt(delta);
+}
+
+function crt(residues, moduli) {
+    let x = 0n;
+    let m = 1n;
+    for (let i = 0; i < residues.length; i++) {
+        const r = residues[i];
+        const mod = moduli[i];
+        const inv = modInverse(m, mod);
+        const t = ((r - x) % mod + mod) % mod;
+        const k = (t * inv) % mod;
+        x = x + m * k;
+        m *= mod;
+        x = ((x % m) + m) % m;
+    }
+    return x;
+}
+
+function modInverse(a, mod) {
+    const { g, x } = extendedGcd(a, mod);
+    if (g !== 1n) return 0n;
+    return (x % mod + mod) % mod;
+}
+
+function extendedGcd(a, b) {
+    if (b === 0n) return { g: a, x: 1n, y: 0n };
+    const { g, x: x1, y: y1 } = extendedGcd(b, a % b);
+    return { g, x: y1, y: x1 - (a / b) * y1 };
 }
 
 function permuteDigits(digits, visit) {
@@ -935,138 +1371,83 @@ function permuteDigits(digits, visit) {
     return backtrack(0);
 }
 
-function parseBaseN(numberString, base) {
-    const characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    let result = 0;
-    let index = 0;
-    let digit = numberString.split('.')[0].length - 1;
-    while (index < numberString.length) {
-        const currentDigit = numberString[index];
-        if (currentDigit === '.') {
-            index += 1;
-            continue;
-        }
-        const value = characters.indexOf(currentDigit.toUpperCase());
-        if (value < 0) return NaN;
-        result += value * base ** digit;
-        index += 1;
-        digit -= 1;
-    }
-    return result;
+function parseLabyrinthView(data) {
+    if (typeof data !== 'string') return null;
+    const rows = data.split('\n').filter(line => line.length > 0);
+    if (rows.length < 3) return null;
+    const trimmed = rows.slice(0, 3).map(r => r.slice(0, 3));
+    if (trimmed.length < 3) return null;
+    return trimmed.map(row => row.split(''));
 }
 
-function cleanExpression(expression) {
-    return String(expression)
-        .replaceAll('ҳ', '*')
-        .replaceAll('÷', '/')
-        .replaceAll('➕', '+')
-        .replaceAll('➖', '-')
-        .replaceAll('ns.exit(),', '')
-        .split(',')[0];
+function getOpenDirections(view) {
+    const open = [];
+    if (!view || view.length < 3) return open;
+    if (view[0]?.[1] !== '█') open.push('north');
+    if (view[2]?.[1] !== '█') open.push('south');
+    if (view[1]?.[0] !== '█') open.push('west');
+    if (view[1]?.[2] !== '█') open.push('east');
+    return open;
 }
 
-function evaluateExpression(expression) {
-    const tokens = tokenizeExpression(expression);
-    const output = [];
-    const ops = [];
-    const precedence = { '+': 1, '-': 1, '*': 2, '/': 2 };
-    for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
-        if (typeof token === 'number') {
-            output.push(token);
-            continue;
-        }
-        if (token === '(') {
-            ops.push(token);
-            continue;
-        }
-        if (token === ')') {
-            while (ops.length && ops[ops.length - 1] !== '(') output.push(ops.pop());
-            ops.pop();
-            continue;
-        }
-        while (ops.length && precedence[ops[ops.length - 1]] >= precedence[token]) {
-            output.push(ops.pop());
-        }
-        ops.push(token);
-    }
-    while (ops.length) output.push(ops.pop());
-    const stack = [];
-    for (const token of output) {
-        if (typeof token === 'number') {
-            stack.push(token);
-            continue;
-        }
-        const b = stack.pop();
-        const a = stack.pop();
-        if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
-        if (token === '+') stack.push(a + b);
-        if (token === '-') stack.push(a - b);
-        if (token === '*') stack.push(a * b);
-        if (token === '/') stack.push(a / b);
-    }
-    return stack.length === 1 ? stack[0] : NaN;
+function nextPositionKey(position, dir) {
+    const delta = directionDelta(dir);
+    return `${position.x + delta.dx},${position.y + delta.dy}`;
 }
 
-function tokenizeExpression(expression) {
-    const raw = String(expression).replace(/\s+/g, '');
-    const tokens = [];
-    let i = 0;
-    const isOp = (t) => ['+', '-', '*', '/'].includes(t);
-    while (i < raw.length) {
-        const ch = raw[i];
-        if (ch === '(' || ch === ')' || isOp(ch)) {
-            if (ch === '-' && (tokens.length === 0 || tokens[tokens.length - 1] === '(' || isOp(tokens[tokens.length - 1]))) {
-                let num = '-';
-                i++;
-                while (i < raw.length && /[0-9.]/.test(raw[i])) {
-                    num += raw[i];
-                    i++;
-                }
-                tokens.push(parseFloat(num));
-                continue;
-            }
-            tokens.push(ch);
-            i++;
-            continue;
-        }
-        if (/[0-9.]/.test(ch)) {
-            let num = '';
-            while (i < raw.length && /[0-9.]/.test(raw[i])) {
-                num += raw[i];
-                i++;
-            }
-            tokens.push(parseFloat(num));
-            continue;
-        }
-        i++;
+function directionDelta(dir) {
+    if (dir === 'north') return { dx: 0, dy: -2 };
+    if (dir === 'south') return { dx: 0, dy: 2 };
+    if (dir === 'west') return { dx: -2, dy: 0 };
+    return { dx: 2, dy: 0 };
+}
+
+function reverseDirection(dir) {
+    if (dir === 'north') return 'south';
+    if (dir === 'south') return 'north';
+    if (dir === 'west') return 'east';
+    return 'west';
+}
+
+function parseDarknetLogs(logs) {
+    const passwords = [];
+    const hints = [];
+    const entries = Array.isArray(logs) ? logs : String(logs || '').split(/\r?\n/);
+    for (const log of entries) {
+        const line = String(log || '');
+        const pwdMatch = line.match(/password[:\s]+['\"]?([^'"}\s]+)/i);
+        if (pwdMatch) passwords.push(pwdMatch[1]);
+        const authMatch = line.match(/auth(?:enticate)?[:\s]+['\"]?([^'"}\s]+)/i);
+        if (authMatch) passwords.push(authMatch[1]);
+        const hintMatch = line.match(/hint[:\s]+(.+)/i);
+        if (hintMatch) hints.push(hintMatch[1].trim());
     }
-    return tokens;
+    return { passwords, hints };
 }
 
 const nsToken = ['n', 's'].join('');
 const dnetToken = ['d', 'n', 'e', 't'].join('');
 const nsPrefix = `${nsToken}.`;
 const dnetPrefix = `${nsPrefix}${dnetToken}.`;
-const influenceToken = ['in', 'fluence'].join('');
 
 const commandNames = {
+    auth: ['auth', 'enticate'].join(''),
+    scan: String.fromCharCode(112, 114, 111, 98, 101),
+    link: String.fromCharCode(99, 111, 110, 110, 101, 99, 116, 84, 111, 83, 101, 115, 115, 105, 111, 110),
+    details: ['get', 'Server', 'Auth', 'Details'].join(''),
     capture: ['packet', 'Capture'].join(''),
     open: ['open', 'Cache'].join(''),
     phish: ['phishing', 'Attack'].join(''),
     promote: ['promote', 'Stock'].join(''),
     bleed: ['heart', 'bleed'].join(''),
-    mem: `${influenceToken}.${['memory', 'Reallocation'].join('')}`,
-    auth: ['auth', 'enticate'].join(''),
-    probe: ['pro', 'be'].join(''),
-    connect: ['connect', 'To', 'Session'].join(''),
-    details: ['get', 'Server', 'Auth', 'Details'].join(''),
+    mem: ['memory', 'Reallocation'].join(''),
+    depth: ['get', 'Depth'].join(''),
 };
 
 const commandArgs = {
     singleArg: `${nsPrefix}args[0]`,
-    peekArg: `${nsPrefix}args[0], { peek: true }`,
     pairArg: `${nsPrefix}args[0], ${nsPrefix}args[1]`,
+    peekArg: `${nsPrefix}args[0], { peek: true }`,
 };
 
 let commandCounter = 0;
@@ -1078,12 +1459,12 @@ function buildDnetCommand(name, args = '') {
 async function runDnetCommand(ns, command, args = []) {
     const id = (commandCounter++ % 100000);
     const host = ns.getHostname();
-    const resultFile = `/Temp/dnet-probe-${id}.txt`;
-    const scriptFile = `/Temp/dnet-probe-${id}.js`;
+    const resultFile = `/Temp/dnet-task-${id}.txt`;
+    const scriptFile = `/Temp/dnet-task-${id}.js`;
     const script = `export async function main(ns){let r;try{const v=await (${command});` +
-        `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
-        `r=JSON.stringify({ $type:'result', $value:w });}catch(e){r="ERROR: "+(typeof e==='string'?e:e?.message??JSON.stringify(e));}` +
-        `const f="${resultFile}"; ns.write(f,r,'w');}`;
+        `const w=v===undefined?{$type:'undefined'}:v===null?{$type:'null'}:v;` +
+        `r=JSON.stringify({$type:'result',$value:w});}catch(e){r="ERROR: "+(typeof e==='string'?e:e?.message??JSON.stringify(e));}` +
+        `const f="${resultFile}";ns.write(f,r,'w');}`;
     ns.write(scriptFile, script, 'w');
     ns.write(resultFile, '<pending>', 'w');
     const pid = ns.exec(scriptFile, host, 1, ...args);
@@ -1099,21 +1480,67 @@ async function runDnetCommand(ns, command, args = []) {
 }
 
 async function runAuth(ns, hostname, password) {
-    const result = await runDnetCommand(ns, buildDnetCommand(commandNames.auth, commandArgs.pairArg), [hostname, password]);
-    if (result && typeof result === 'object' && 'success' in result) return result;
+    try {
+        const result = await runDnetCommand(ns, buildDnetCommand(commandNames.auth, commandArgs.pairArg), [hostname, password]);
+        if (result && typeof result === 'object' && 'success' in result) return result;
+    } catch { }
     return { success: false, message: 'error', code: 0, data: null };
 }
 
-async function runProbe(ns) {
-    return await runDnetCommand(ns, buildDnetCommand(commandNames.probe));
+async function runScan(ns) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.scan));
+    } catch { }
+    return null;
 }
 
-async function runSessionConnect(ns, hostname, password) {
-    return await runDnetCommand(ns, buildDnetCommand(commandNames.connect, commandArgs.pairArg), [hostname, password]);
+async function runSessionLink(ns, hostname, password) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.link, commandArgs.pairArg), [hostname, password]);
+    } catch { }
+    return null;
 }
 
 async function getAuthDetails(ns, hostname) {
-    return await runDnetCommand(ns, buildDnetCommand(commandNames.details, commandArgs.singleArg), [hostname]);
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.details, commandArgs.singleArg), [hostname]);
+    } catch { }
+    return null;
+}
+
+async function runCapture(ns, hostname) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.capture, commandArgs.singleArg), [hostname]);
+    } catch { }
+    return null;
+}
+
+async function runHeartbleed(ns, hostname) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.bleed, commandArgs.peekArg), [hostname]);
+    } catch { }
+    return null;
+}
+
+async function runOpenCache(ns, filename) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.open, commandArgs.singleArg), [filename]);
+    } catch { }
+    return null;
+}
+
+async function runPromoteStock(ns, symbol) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.promote, commandArgs.singleArg), [symbol]);
+    } catch { }
+    return null;
+}
+
+async function runDepth(ns, hostname) {
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.depth, commandArgs.singleArg), [hostname]);
+    } catch { }
+    return null;
 }
 
 function decodePayload(data) {
@@ -1132,8 +1559,4 @@ function revivePayload(value) {
     if (value && value.$type === 'null') return null;
     if (value && value.$type === 'undefined') return undefined;
     return value;
-}
-
-export function autocomplete(data) {
-    return ['--tail'];
 }
