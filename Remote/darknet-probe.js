@@ -280,6 +280,50 @@ function getSolver(modelId) {
             }
             return defaults[0];
         },
+        'GuessNumber': async (ns, hostname, details) => {
+            const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
+                ? details.passwordLength
+                : 4;
+            const maxValue = Math.pow(10, length) - 1;
+            const hintDigits = (details.passwordHint || '').match(/\d+/g) || [];
+            for (const digits of hintDigits) {
+                const candidate = digits.slice(-length);
+                const result = await ns.dnet.authenticate(hostname, candidate);
+                if (result.success) return candidate;
+            }
+            let low = 0;
+            let high = maxValue;
+            for (let attempt = 0; attempt < 20 && low <= high; attempt++) {
+                const guess = Math.floor((low + high) / 2);
+                const result = await ns.dnet.authenticate(hostname, guess.toString());
+                if (result.success) return guess.toString();
+                const message = (result.message || '').toLowerCase();
+                if (message.includes('too low') || message.includes('higher')) {
+                    low = guess + 1;
+                    continue;
+                }
+                if (message.includes('too high') || message.includes('lower')) {
+                    high = guess - 1;
+                    continue;
+                }
+                const peakMatch = message.match(/highest peak:\s*([\d,.]+)/i);
+                if (peakMatch && typeof result.data === 'number') {
+                    const peak = Number(String(peakMatch[1]).replace(/,/g, ''));
+                    if (Number.isFinite(peak)) {
+                        if (result.data < peak) {
+                            low = guess + 1;
+                            continue;
+                        }
+                        if (result.data > peak) {
+                            high = guess - 1;
+                            continue;
+                        }
+                    }
+                }
+                break;
+            }
+            return null;
+        },
     };
     
     if (!modelId) return null;
@@ -288,6 +332,7 @@ function getSolver(modelId) {
     if (normalized.includes('captcha') || normalized.includes('cloudblare')) return solvers['Captcha'];
     if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return solvers['SimplePin'];
     if (normalized.includes('freshinstall') || normalized.includes('defaultpassword')) return solvers['DefaultPassword'];
+    if (normalized.includes('desk') || normalized.includes('accountsmanager') || normalized.includes('echo')) return solvers['GuessNumber'];
     if (normalized.includes('caesar')) return solvers['Caesar'];
     if (normalized.includes('vigenere')) return solvers['Vigenere'];
     if (normalized.includes('base64')) return solvers['Base64'];
