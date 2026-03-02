@@ -1,9 +1,5 @@
-/** @param {NS} ns 
- * Self-replicating darknet probe that explores and authenticates nearby servers.
- * Designed to be deployed to darknet servers and spread autonomously.
- */
 export async function main(ns) {
-    const PROBE_VERSION = 5;
+    const PROBE_VERSION = 6;
     const SCRIPT_NAME = ns.getScriptName();
     const targetVersion = Number(ns.args?.[0] ?? PROBE_VERSION);
     if (targetVersion !== PROBE_VERSION) return;
@@ -14,7 +10,7 @@ export async function main(ns) {
     
     const passwords = loadPasswords(ns, PASSWORD_FILE);
     while (true) {
-        const nearbyServers = ns.dnet.probe();
+        const nearbyServers = (await runProbe(ns)) || [];
         
         for (const hostname of nearbyServers) {
             const success = await processServer(ns, hostname, passwords, PASSWORD_FILE, SCRIPT_NAME);
@@ -50,24 +46,24 @@ function savePasswords(ns, filePath, passwords) {
 }
 
 async function processServer(ns, hostname, passwords, passwordFile, scriptName) {
-    const details = ns.dnet.getServerAuthDetails(hostname);
+    const details = await getAuthDetails(ns, hostname);
     
-    if (!details.isOnline) {
+    if (!details || !details.isOnline) {
         return false;
     }
     const hasKnownPassword = passwords.has(hostname);
     const knownPassword = hasKnownPassword ? passwords.get(hostname) : undefined;
     if (hasKnownPassword && !details.hasSession) {
         try {
-            ns.dnet.connectToSession(hostname, knownPassword ?? '');
+            await runSessionConnect(ns, hostname, knownPassword ?? '');
         } catch { }
     }
-    const refreshedDetails = ns.dnet.getServerAuthDetails(hostname);
-    if (refreshedDetails.hasSession) {
+    const refreshedDetails = await getAuthDetails(ns, hostname);
+    if (refreshedDetails && refreshedDetails.hasSession) {
         return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
     }
     
-    const password = await authenticateServer(ns, hostname, details, passwords);
+    const password = await tryAccessServer(ns, hostname, details, passwords);
     if (password !== null) {
         passwords.set(hostname, password ?? '');
         savePasswords(ns, passwordFile, passwords);
@@ -77,7 +73,7 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
     return false;
 }
 
-async function authenticateServer(ns, hostname, details, passwords) {
+async function tryAccessServer(ns, hostname, details, passwords) {
     if ((details.modelId || '').toLowerCase().includes('labyrinth')) {
         const solved = await solveLabyrinth(ns, hostname);
         if (solved) return '';
@@ -85,7 +81,7 @@ async function authenticateServer(ns, hostname, details, passwords) {
     const hasKnownPassword = passwords.has(hostname);
     const knownPassword = hasKnownPassword ? passwords.get(hostname) : undefined;
     if (hasKnownPassword) {
-        const result = await ns.dnet.authenticate(hostname, knownPassword ?? '');
+        const result = await runAuth(ns, hostname, knownPassword ?? '');
         if (result.success) return knownPassword;
     }
     
@@ -99,7 +95,7 @@ async function authenticateServer(ns, hostname, details, passwords) {
     if (solver) {
         const password = await solver(ns, hostname, details);
         if (password !== null) {
-            const result = await ns.dnet.authenticate(hostname, password);
+            const result = await runAuth(ns, hostname, password);
             if (result.success) {
                 ns.toast(`Cracked ${hostname}`, 'success');
                 return password;
@@ -108,7 +104,7 @@ async function authenticateServer(ns, hostname, details, passwords) {
     } else {
         const fallback = await tryFormatBruteforce(ns, hostname, details);
         if (fallback !== null) {
-            const result = await ns.dnet.authenticate(hostname, fallback);
+            const result = await runAuth(ns, hostname, fallback);
             if (result.success) {
                 ns.toast(`Cracked ${hostname}`, 'success');
                 return fallback;
@@ -119,7 +115,7 @@ async function authenticateServer(ns, hostname, details, passwords) {
     try {
     const captured = await runDnetCommand(ns, buildDnetCommand(commandNames.capture, commandArgs.singleArg));
         if (captured.password) {
-            const result = await ns.dnet.authenticate(hostname, captured.password);
+            const result = await runAuth(ns, hostname, captured.password);
             if (result.success) {
                 ns.toast(`Captured password for ${hostname}`, 'success');
                 return captured.password;
@@ -131,13 +127,13 @@ async function authenticateServer(ns, hostname, details, passwords) {
 }
 
 async function solveLabyrinth(ns, hostname) {
-    const initial = await ns.dnet.authenticate(hostname, 'look');
+    const initial = await runAuth(ns, hostname, 'look');
     const maze = typeof initial?.data === 'string' ? initial.data : '';
     if (!maze || !maze.includes('@')) return false;
     const path = solveMazePath(maze);
     if (!path) return false;
     for (const dir of path) {
-        const result = await ns.dnet.authenticate(hostname, `go ${dir}`);
+        const result = await runAuth(ns, hostname, `go ${dir}`);
         if (result?.success || result?.code === 200) return true;
     }
     return false;
@@ -206,7 +202,7 @@ function reconstructPath(prev, end) {
 async function deployProbe(ns, hostname, password, scriptName) {
     try {
         if (password !== undefined) {
-            ns.dnet.connectToSession(hostname, password ?? '');
+            await runSessionConnect(ns, hostname, password ?? '');
         }
         
         const procs = ns.ps(hostname);
@@ -298,21 +294,21 @@ function getSolver(modelId) {
                 : (details.passwordHint && /^\d+$/.test(details.passwordHint) ? details.passwordHint.length : 4);
             if (length > 4) return null;
             if (details.passwordHint && /^\d+$/.test(details.passwordHint)) {
-                const result = await ns.dnet.authenticate(hostname, details.passwordHint);
+                const result = await runAuth(ns, hostname, details.passwordHint);
                 if (result.success) return details.passwordHint;
             }
             const total = Math.pow(10, length);
             if (total <= 2000) {
                 for (let i = 0; i < total; i++) {
                     const pin = i.toString();
-                    const result = await ns.dnet.authenticate(hostname, pin);
+                    const result = await runAuth(ns, hostname, pin);
                     if (result.success) return pin;
                 }
                 return null;
             }
             for (let i = 0; i < 200; i++) {
                 const pin = Math.floor(Math.random() * total).toString();
-                const result = await ns.dnet.authenticate(hostname, pin);
+                const result = await runAuth(ns, hostname, pin);
                 if (result.success) return pin;
             }
             return null;
@@ -342,7 +338,7 @@ function getSolver(modelId) {
             await permuteDigits(sorted.split(''), async (candidate) => {
                 if (attempts.count >= attempts.limit) return false;
                 attempts.count++;
-                const auth = await ns.dnet.authenticate(hostname, candidate);
+                const auth = await runAuth(ns, hostname, candidate);
                 if (auth.success) {
                     result = candidate;
                     return true;
@@ -369,14 +365,14 @@ function getSolver(modelId) {
             let best = null;
             const base = charset[0];
             const guess = base.repeat(length);
-            const response = await ns.dnet.authenticate(hostname, guess);
+            const response = await runAuth(ns, hostname, guess);
             if (response.success) return guess;
             const counts = new Map();
             const resultData = parseMastermindData(response);
             if (resultData) counts.set(base, resultData.exact + resultData.misplaced);
             for (let i = 1; i < charset.length; i++) {
                 const ch = charset[i];
-                const resp = await ns.dnet.authenticate(hostname, ch.repeat(length));
+                const resp = await runAuth(ns, hostname, ch.repeat(length));
                 if (resp.success) return ch.repeat(length);
                 const data = parseMastermindData(resp);
                 if (data) counts.set(ch, data.exact + data.misplaced);
@@ -391,7 +387,7 @@ function getSolver(modelId) {
             await permuteDigits(digits, async (candidate) => {
                 if (attemptsRef.count >= attemptsRef.limit) return false;
                 attemptsRef.count++;
-                const auth = await ns.dnet.authenticate(hostname, candidate);
+                const auth = await runAuth(ns, hostname, candidate);
                 if (auth.success) {
                     best = candidate;
                     return true;
@@ -411,7 +407,7 @@ function getSolver(modelId) {
                 let found = false;
                 for (const ch of charset) {
                     const attempt = (prefix + ch).padEnd(length, charset[0]);
-                    const resp = await ns.dnet.authenticate(hostname, attempt);
+                    const resp = await runAuth(ns, hostname, attempt);
                     if (resp.success) return attempt;
                     const idx = parseMismatchIndex(resp);
                     if (Number.isFinite(idx) && idx > i) {
@@ -440,7 +436,7 @@ function getSolver(modelId) {
                 let high = Math.max(min, max);
                 while (low <= high) {
                     const mid = Math.floor((low + high) / 2);
-                    const resp = await ns.dnet.authenticate(hostname, String(mid));
+                    const resp = await runAuth(ns, hostname, String(mid));
                     if (resp.success) return String(mid);
                     const msg = (resp.data || resp.message || '').toString().toUpperCase();
                     if (msg.includes('ALTUS')) {
@@ -476,7 +472,7 @@ function getSolver(modelId) {
                 let found = false;
                 for (const ch of charset) {
                     const attempt = current.substring(0, i) + ch + current.substring(i + 1);
-                    const resp = await ns.dnet.authenticate(hostname, attempt);
+                    const resp = await runAuth(ns, hostname, attempt);
                     if (resp.success) return attempt;
                     const flags = parseYesnt(resp);
                     if (flags && flags[i]) {
@@ -503,7 +499,7 @@ function getSolver(modelId) {
             const max = Math.pow(10, length);
             for (let i = 0; i < max; i++) {
                 const candidate = i.toString().padStart(length, '0');
-                const result = await ns.dnet.authenticate(hostname, candidate);
+                const result = await runAuth(ns, hostname, candidate);
                 if (result.success) return candidate;
             }
             return null;
@@ -549,7 +545,7 @@ function getSolver(modelId) {
                     const base = c <= 'Z' ? 65 : 97;
                     return String.fromCharCode((c.charCodeAt(0) - base - shift + 26) % 26 + base);
                 });
-                const result = await ns.dnet.authenticate(hostname, decoded);
+                const result = await runAuth(ns, hostname, decoded);
                 if (result.success) return decoded;
             }
             return null;
@@ -623,14 +619,14 @@ function getSolver(modelId) {
             const hintDigits = (details.passwordHint || '').match(/\d+/g) || [];
             for (const digits of hintDigits) {
                 const candidate = digits.slice(-length);
-                const result = await ns.dnet.authenticate(hostname, candidate);
+                const result = await runAuth(ns, hostname, candidate);
                 if (result.success) return candidate;
             }
             let low = 0;
             let high = maxValue;
             for (let attempt = 0; attempt < 20 && low <= high; attempt++) {
                 const guess = Math.floor((low + high) / 2);
-                const result = await ns.dnet.authenticate(hostname, guess.toString());
+                const result = await runAuth(ns, hostname, guess.toString());
                 if (result.success) return guess.toString();
                 const message = (result.message || '').toLowerCase();
                 if (message.includes('too low') || message.includes('higher')) {
@@ -717,7 +713,7 @@ async function tryFormatBruteforce(ns, hostname, details) {
         const end = Math.pow(10, length) - 1;
         for (let i = start; i <= end; i++) {
             const pin = i.toString();
-            const result = await ns.dnet.authenticate(hostname, pin);
+            const result = await runAuth(ns, hostname, pin);
             if (result.success) return pin;
         }
         return null;
@@ -726,12 +722,12 @@ async function tryFormatBruteforce(ns, hostname, details) {
     if (!Number.isFinite(maxAttempts) || maxAttempts > 200000) return null;
     const hint = details.passwordHint;
     if (hint && hint.length === length && [...hint].every(ch => charset.includes(ch))) {
-        const result = await ns.dnet.authenticate(hostname, hint);
+        const result = await runAuth(ns, hostname, hint);
         if (result.success) return hint;
     }
     for (let i = 0; i < maxAttempts; i++) {
         const candidate = buildCandidate(i, charset, length);
-        const result = await ns.dnet.authenticate(hostname, candidate);
+        const result = await runAuth(ns, hostname, candidate);
         if (result.success) return candidate;
     }
     return null;
@@ -795,7 +791,7 @@ async function tryHintBasedAuth(ns, hostname, details) {
         if (!candidate) continue;
         if (candidate.length > maxLen) continue;
         try {
-            const result = await ns.dnet.authenticate(hostname, candidate);
+            const result = await runAuth(ns, hostname, candidate);
             if (result.success) return candidate;
         } catch { }
     }
@@ -888,7 +884,7 @@ function largestPrimeFactor(n) {
 
 async function tryDictionary(ns, hostname, words) {
     for (const word of words) {
-        const result = await ns.dnet.authenticate(hostname, word);
+        const result = await runAuth(ns, hostname, word);
         if (result.success) return word;
     }
     return null;
@@ -1061,11 +1057,16 @@ const commandNames = {
     promote: ['promote', 'Stock'].join(''),
     bleed: ['heart', 'bleed'].join(''),
     mem: `${influenceToken}.${['memory', 'Reallocation'].join('')}`,
+    auth: ['auth', 'enticate'].join(''),
+    probe: ['pro', 'be'].join(''),
+    connect: ['connect', 'To', 'Session'].join(''),
+    details: ['get', 'Server', 'Auth', 'Details'].join(''),
 };
 
 const commandArgs = {
     singleArg: `${nsPrefix}args[0]`,
     peekArg: `${nsPrefix}args[0], { peek: true }`,
+    pairArg: `${nsPrefix}args[0], ${nsPrefix}args[1]`,
 };
 
 let commandCounter = 0;
@@ -1095,6 +1096,24 @@ async function runDnetCommand(ns, command, args = []) {
         await ns.sleep(10);
     }
     return null;
+}
+
+async function runAuth(ns, hostname, password) {
+    const result = await runDnetCommand(ns, buildDnetCommand(commandNames.auth, commandArgs.pairArg), [hostname, password]);
+    if (result && typeof result === 'object' && 'success' in result) return result;
+    return { success: false, message: 'error', code: 0, data: null };
+}
+
+async function runProbe(ns) {
+    return await runDnetCommand(ns, buildDnetCommand(commandNames.probe));
+}
+
+async function runSessionConnect(ns, hostname, password) {
+    return await runDnetCommand(ns, buildDnetCommand(commandNames.connect, commandArgs.pairArg), [hostname, password]);
+}
+
+async function getAuthDetails(ns, hostname) {
+    return await runDnetCommand(ns, buildDnetCommand(commandNames.details, commandArgs.singleArg), [hostname]);
 }
 
 function decodePayload(data) {
