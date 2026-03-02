@@ -75,7 +75,7 @@ class DarknetState {
         this.lastRefresh = 0;
         this.lastStatusLog = 0;
         this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
-        this.probeVersion = 3;
+        this.probeVersion = 4;
         this.lastAuthLog = new Map();
 
         // Load persisted passwords from file
@@ -349,13 +349,18 @@ async function deployProbe(ns, state, hostname, options) {
         }
 
         const procs = ns.ps(hostname).filter(p => p.filename === probeScript);
-        const hasMatching = procs.some(p => Number(p.args?.[0]) === state.probeVersion);
+        const matchingProcs = procs.filter(p => Number(p.args?.[0]) === state.probeVersion);
         for (const proc of procs) {
             if (Number(proc.args?.[0]) !== state.probeVersion) {
                 try { ns.kill(proc.pid); } catch { }
             }
         }
-        if (hasMatching) return true;
+        if (matchingProcs.length > 0) {
+            for (const proc of matchingProcs.slice(1)) {
+                try { ns.kill(proc.pid); } catch { }
+            }
+            return true;
+        }
 
         // Execute probe
         const pid = ns.exec(probeScript, hostname, 1, state.probeVersion);
@@ -392,20 +397,31 @@ async function ensureHomeProbes(ns, state, options) {
     // Check for probe on home
     const homeProcs = ns.ps('home');
     const homeProbeProcs = homeProcs.filter(p => p.filename === probeScript);
-    const hasHomeProbe = homeProbeProcs.some(p => Number(p.args?.[0]) === state.probeVersion);
+    const matchingHomeProcs = homeProbeProcs.filter(p => Number(p.args?.[0]) === state.probeVersion);
     for (const proc of homeProbeProcs) {
         if (Number(proc.args?.[0]) !== state.probeVersion) {
             try { ns.kill(proc.pid); } catch { }
         }
     }
-
-    if (!hasHomeProbe && ns.fileExists(probeScript, 'home')) {
-        const pid = ns.exec(probeScript, 'home', 1, state.probeVersion);
-        if (pid > 0) {
-            state.activeProbes.add('home');
+    if (matchingHomeProcs.length > 1) {
+        for (const proc of matchingHomeProcs.slice(1)) {
+            try { ns.kill(proc.pid); } catch { }
         }
     }
 
+    if (matchingHomeProcs.length === 0 && ns.fileExists(probeScript, 'home')) {
+        const maxRam = ns.getServerMaxRam('home');
+        const usedRam = ns.getServerUsedRam('home');
+        const scriptRam = ns.getScriptRam(probeScript, 'home');
+        if (scriptRam <= Math.max(0, maxRam - usedRam)) {
+            const pid = ns.exec(probeScript, 'home', 1, state.probeVersion);
+            if (pid > 0) {
+                state.activeProbes.add('home');
+            }
+        }
+        return state.activeProbes.has('home');
+    }
+    if (matchingHomeProcs.length > 0) state.activeProbes.add('home');
     return state.activeProbes.has('home');
 }
 

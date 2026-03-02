@@ -3,7 +3,7 @@
  * Designed to be deployed to darknet servers and spread autonomously.
  */
 export async function main(ns) {
-    const PROBE_VERSION = 3;
+    const PROBE_VERSION = 4;
     const SCRIPT_NAME = ns.getScriptName();
     const targetVersion = Number(ns.args?.[0] ?? PROBE_VERSION);
     if (targetVersion !== PROBE_VERSION) return;
@@ -618,7 +618,7 @@ async function runDnetCommand(ns, command, args = []) {
     const script = `export async function main(ns){let r;try{const v=await (${command});` +
         `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
         `r=JSON.stringify({ $type:'result', $value:w });}catch(e){r="ERROR: "+(typeof e==='string'?e:e?.message??JSON.stringify(e));}` +
-        `const f="${resultFile}"; if(ns.read(f)!==r) ns.write(f,r,'w');}`;
+        `const f="${resultFile}"; ns.write(f,r,'w');}`;
     ns.write(scriptFile, script, 'w');
     ns.write(resultFile, '<pending>', 'w');
     const pid = ns.exec(scriptFile, host, 1, ...args);
