@@ -480,6 +480,9 @@ function buildCandidate(index, charset, length) {
 async function tryHintBasedAuth(ns, hostname, details) {
     const hint = (details.passwordHint || '').trim();
     const candidates = new Set();
+    const maxLen = Number.isFinite(details.passwordLength) && details.passwordLength > 0
+        ? details.passwordLength
+        : 32;
     if (hint) {
         if (!/(prove you are human|captcha|type the numbers)/i.test(hint)) {
             candidates.add(hint);
@@ -512,6 +515,7 @@ async function tryHintBasedAuth(ns, hostname, details) {
     } catch { }
     for (const candidate of candidates) {
         if (!candidate) continue;
+        if (candidate.length > maxLen) continue;
         const result = await ns.dnet.authenticate(hostname, candidate);
         if (result.success) return candidate;
     }

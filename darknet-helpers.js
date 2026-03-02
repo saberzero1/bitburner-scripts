@@ -52,6 +52,9 @@ export function getDarknetPasswordSolver(modelId) {
 export async function tryHintBasedAuth(ns, hostname, serverInfo) {
     const hint = (serverInfo.passwordHint || '').trim();
     const candidates = new Set();
+    const maxLen = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : 32;
     if (hint) {
         if (!/(prove you are human|captcha|type the numbers)/i.test(hint)) {
             candidates.add(hint);
@@ -84,6 +87,7 @@ export async function tryHintBasedAuth(ns, hostname, serverInfo) {
     } catch { }
     for (const candidate of candidates) {
         if (!candidate) continue;
+        if (candidate.length > maxLen) continue;
         const result = await ns.dnet.authenticate(hostname, candidate);
         if (result.success) return candidate;
     }
