@@ -217,12 +217,14 @@ async function processServer(ns, state, hostname, currentServer, options) {
     }
 
     // If we don't have admin, try to authenticate
-    if (!details.hasSession) {
-        const success = await authenticateServer(ns, state, hostname, serverInfo, options);
-        if (success) {
-            await exploitServer(ns, state, hostname, options);
-            await deployProbe(ns, state, hostname, options);
-        }
+    if (!details.isConnectedToCurrentServer && !state.stasisServers.has(hostname)) {
+        if (verbose) log(ns, `Skipping auth for ${hostname}: not connected`, false, 'warning');
+        return;
+    }
+    const success = await authenticateServer(ns, state, hostname, serverInfo, options);
+    if (success) {
+        await exploitServer(ns, state, hostname, options);
+        await deployProbe(ns, state, hostname, options);
     }
 }
 
