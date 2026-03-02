@@ -136,6 +136,7 @@ class DarknetServerInfo {
         this.hasSession = authDetails.hasSession;
         this.hasAdmin = authDetails.hasAdminRights;
         this.passwordFormat = authDetails.passwordFormat;
+        this.passwordLength = authDetails.passwordLength;
         this.lastSeen = Date.now();
     }
 }
@@ -235,10 +236,11 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     const verbose = options.verbose;
 
     // Check if we already know the password
-    const knownPassword = state.getPassword(hostname);
-    if (knownPassword) {
+    const hasKnownPassword = state.knownPasswords.has(hostname);
+    const knownPassword = hasKnownPassword ? state.getPassword(hostname) : undefined;
+    if (hasKnownPassword) {
         if (verbose) log(ns, `Trying known password for ${hostname}`);
-        const result = await ns.dnet.authenticate(hostname, knownPassword);
+        const result = await ns.dnet.authenticate(hostname, knownPassword ?? '');
         if (result.success) {
             log(ns, `SUCCESS: Authenticated ${hostname} with saved password`);
             return true;
@@ -399,7 +401,7 @@ async function deployProbe(ns, state, hostname, options) {
     try {
         // Establish session if needed
         const password = state.getPassword(hostname);
-        if (password) {
+        if (password !== undefined) {
             ns.dnet.connectToSession(hostname, password);
         }
 
@@ -420,6 +422,17 @@ async function deployProbe(ns, state, hostname, options) {
         if (pid > 0) {
             state.activeProbes.add(hostname);
             log(ns, `Deployed probe to ${hostname} (pid: ${pid})`);
+        } else {
+            const details = ns.dnet.getServerAuthDetails(hostname);
+            const ramInfo = (() => {
+                try {
+                    const maxRam = ns.getServerMaxRam(hostname);
+                    const usedRam = ns.getServerUsedRam(hostname);
+                    return `${formatRam(usedRam)}/${formatRam(maxRam)}`;
+                } catch { return 'unknown'; }
+            })();
+            log(ns, `WARN: Failed to launch probe on ${hostname}. Connected: ${details.isConnectedToCurrentServer}, ` +
+                `Session: ${details.hasSession}, Admin: ${details.hasAdminRights}, RAM: ${ramInfo}`, false, 'warning');
         }
     } catch (err) {
         // Failed to deploy probe

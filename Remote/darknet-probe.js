@@ -54,10 +54,11 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
     if (!details.isOnline) {
         return false;
     }
-    const knownPassword = passwords.get(hostname);
-    if (knownPassword && !details.hasSession) {
+    const hasKnownPassword = passwords.has(hostname);
+    const knownPassword = hasKnownPassword ? passwords.get(hostname) : undefined;
+    if (hasKnownPassword && !details.hasSession) {
         try {
-            ns.dnet.connectToSession(hostname, knownPassword);
+            ns.dnet.connectToSession(hostname, knownPassword ?? '');
         } catch { }
     }
     const refreshedDetails = ns.dnet.getServerAuthDetails(hostname);
@@ -67,7 +68,7 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
     
     const password = await authenticateServer(ns, hostname, details, passwords);
     if (password !== null) {
-        passwords.set(hostname, password);
+        passwords.set(hostname, password ?? '');
         savePasswords(ns, passwordFile, passwords);
         return await deployProbe(ns, hostname, password, scriptName);
     }
@@ -80,9 +81,10 @@ async function authenticateServer(ns, hostname, details, passwords) {
         const solved = await solveLabyrinth(ns, hostname);
         if (solved) return '';
     }
-    const knownPassword = passwords.get(hostname);
-    if (knownPassword) {
-        const result = await ns.dnet.authenticate(hostname, knownPassword);
+    const hasKnownPassword = passwords.has(hostname);
+    const knownPassword = hasKnownPassword ? passwords.get(hostname) : undefined;
+    if (hasKnownPassword) {
+        const result = await ns.dnet.authenticate(hostname, knownPassword ?? '');
         if (result.success) return knownPassword;
     }
     
@@ -202,8 +204,8 @@ function reconstructPath(prev, end) {
 
 async function deployProbe(ns, hostname, password, scriptName) {
     try {
-        if (password) {
-            ns.dnet.connectToSession(hostname, password);
+        if (password !== undefined) {
+            ns.dnet.connectToSession(hostname, password ?? '');
         }
         
         const procs = ns.ps(hostname);
