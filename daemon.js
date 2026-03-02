@@ -388,6 +388,7 @@ export async function main(ns) {
             {
                 name: "darknet.js",
                 shouldRun: () => reqRam(64) && ns.fileExists('DarkscapeNavigator.exe', 'home'),
+                minRamReq: 30,
             },
             {
                 name: "corporation.js",
