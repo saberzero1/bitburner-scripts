@@ -150,10 +150,23 @@ async function solveSimplePin(ns, hostname, serverInfo) {
     const pinLength = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
         ? serverInfo.passwordLength
         : (hint && /^\d+$/.test(hint) ? hint.length : 4);
-    const maxAttempts = Math.pow(10, pinLength);
-    
-    for (let i = 0; i < maxAttempts; i++) {
-        const pin = i.toString();
+    if (pinLength > 4) return null;
+    if (/^\d+$/.test(hint)) {
+        const result = await ns.dnet.authenticate(hostname, hint);
+        if (result.success) return hint;
+    }
+    const total = Math.pow(10, pinLength);
+    const maxAttempts = 2000;
+    if (total <= maxAttempts) {
+        for (let i = 0; i < total; i++) {
+            const pin = i.toString();
+            const result = await ns.dnet.authenticate(hostname, pin);
+            if (result.success) return pin;
+        }
+        return null;
+    }
+    for (let i = 0; i < 200; i++) {
+        const pin = Math.floor(Math.random() * total).toString();
         const result = await ns.dnet.authenticate(hostname, pin);
         if (result.success) return pin;
     }

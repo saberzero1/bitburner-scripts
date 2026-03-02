@@ -173,8 +173,22 @@ function getSolver(modelId) {
             const length = Number.isFinite(details.passwordLength) && details.passwordLength > 0
                 ? details.passwordLength
                 : (details.passwordHint && /^\d+$/.test(details.passwordHint) ? details.passwordHint.length : 4);
-            for (let i = 0; i < Math.pow(10, length); i++) {
-                const pin = i.toString();
+            if (length > 4) return null;
+            if (details.passwordHint && /^\d+$/.test(details.passwordHint)) {
+                const result = await ns.dnet.authenticate(hostname, details.passwordHint);
+                if (result.success) return details.passwordHint;
+            }
+            const total = Math.pow(10, length);
+            if (total <= 2000) {
+                for (let i = 0; i < total; i++) {
+                    const pin = i.toString();
+                    const result = await ns.dnet.authenticate(hostname, pin);
+                    if (result.success) return pin;
+                }
+                return null;
+            }
+            for (let i = 0; i < 200; i++) {
+                const pin = Math.floor(Math.random() * total).toString();
                 const result = await ns.dnet.authenticate(hostname, pin);
                 if (result.success) return pin;
             }
