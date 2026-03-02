@@ -12,6 +12,7 @@ export async function main(ns) {
     const HOST = ns.getHostname();
     const LOOP_INTERVAL = 5000;
     const PASSWORD_FILE = '/data/darknet-passwords.txt';
+    const PROBE_OPTIONS_FILE = '/data/darknet-probe-options.txt';
     
     const passwords = loadPasswords(ns, PASSWORD_FILE);
     const fnRun = getFnRunViaNsExec(ns, HOST);
@@ -28,6 +29,7 @@ export async function main(ns) {
         
         await freeBlockedRam(ns, fnRun);
         await openCacheFiles(ns, HOST, fnRun);
+        await runOptionalActions(ns, fnRun, PROBE_OPTIONS_FILE, HOST);
         await ns.sleep(LOOP_INTERVAL);
     }
 }
@@ -245,6 +247,48 @@ async function openCacheFiles(ns, hostname, fnRun) {
                 if (result) ns.print(`Opened ${cache}`);
             } catch { }
         }
+    } catch { }
+}
+
+async function runOptionalActions(ns, fnRun, optionsFile, hostname) {
+    const options = loadProbeOptions(ns, optionsFile);
+    if (options.enablePhishing) {
+        await runPhishing(ns, fnRun, hostname);
+    }
+    if (options.enableStockManipulation && options.targetStock) {
+        await promoteStock(ns, fnRun, options.targetStock);
+    }
+}
+
+function loadProbeOptions(ns, filePath) {
+    const defaults = { enablePhishing: false, enableStockManipulation: false, targetStock: '' };
+    try {
+        const data = ns.read(filePath);
+        if (!data) return defaults;
+        const parsed = JSON.parse(data);
+        return {
+            enablePhishing: Boolean(parsed.enablePhishing),
+            enableStockManipulation: Boolean(parsed.enableStockManipulation),
+            targetStock: typeof parsed.targetStock === 'string' ? parsed.targetStock : '',
+        };
+    } catch {
+        return defaults;
+    }
+}
+
+async function runPhishing(ns, fnRun, hostname) {
+    try {
+        const result = await runDnetCommand(ns, fnRun, 'ns.dnet.phishingAttack()');
+        if (result && (result.money > 0 || result.cache)) {
+            const gained = result.money > 0 ? result.money : result.cache;
+            ns.print(`Phishing on ${hostname}: ${gained}`);
+        }
+    } catch { }
+}
+
+async function promoteStock(ns, fnRun, targetStock) {
+    try {
+        await runDnetCommand(ns, fnRun, 'ns.dnet.promoteStock(ns.args[0])', [targetStock]);
     } catch { }
 }
 

@@ -52,6 +52,7 @@ export async function main(ns) {
     // Main loop
     while (true) {
         try {
+            writeProbeOptions(ns, options);
             await state.refresh(ns);
             await orchestrateDarknet(ns, state, options);
         } catch (err) {
@@ -75,7 +76,6 @@ class DarknetState {
         this.lastStatusLog = 0;
         this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
         this.probeVersion = 2;
-        this.heavyWorkerVersion = 1;
         this.lastAuthLog = new Map();
 
         // Load persisted passwords from file
@@ -212,7 +212,6 @@ async function processServer(ns, state, hostname, currentServer, options) {
 
     // If we already have admin, do exploitation
     if (details.hasAdminRights) {
-        await exploitServer(ns, state, hostname, options);
         // Deploy probe if not already running
         await deployProbe(ns, state, hostname, options);
         return;
@@ -225,7 +224,6 @@ async function processServer(ns, state, hostname, currentServer, options) {
     }
     const success = await authenticateServer(ns, state, hostname, serverInfo, options);
     if (success) {
-        await exploitServer(ns, state, hostname, options);
         await deployProbe(ns, state, hostname, options);
     }
 }
@@ -299,18 +297,17 @@ function logAuthFailure(ns, state, hostname, serverInfo) {
         `length: ${serverInfo.passwordLength}, hint: ${serverInfo.passwordHint ?? ''})`, false, 'warning');
 }
 
-/**
- * Exploit a server we have access to - extract value
- */
-async function exploitServer(ns, state, hostname, options) {
-    const currentHost = ns.getHostname();
-    // Can only exploit servers we're directly connected to OR have stasis/backdoor on
-    const details = ns.dnet.getServerAuthDetails(hostname);
-    if (!details.isConnectedToCurrentServer && !state.stasisServers.has(hostname)) {
-        return;
+function writeProbeOptions(ns, options) {
+    const filePath = '/data/darknet-probe-options.txt';
+    const payload = {
+        enablePhishing: Boolean(options['enable-phishing']),
+        enableStockManipulation: Boolean(options['enable-stock-manipulation']),
+        targetStock: options['target-stock'] ?? '',
+    };
+    try {
+        ns.write(filePath, JSON.stringify(payload), 'w');
+    } catch {
     }
-
-    await scheduleHeavyWorker(ns, state, hostname, options);
 }
 
 /**
@@ -478,33 +475,4 @@ async function cleanupOrphanedProbes(ns, state) {
     for (const hostname of toRemove) {
         state.activeProbes.delete(hostname);
     }
-}
-
-async function scheduleHeavyWorker(ns, state, hostname, options) {
-    const heavyWorker = getFilePath('/Remote/darknet-heavy-worker.js');
-    if (!ns.fileExists(heavyWorker, 'home')) return;
-    const maxRam = ns.getServerMaxRam(hostname);
-    const usedRam = ns.getServerUsedRam(hostname);
-    const scriptRam = ns.getScriptRam(heavyWorker, 'home');
-    const freeRam = Math.max(0, maxRam - usedRam);
-    if (scriptRam > freeRam) return;
-    const procs = ns.ps(hostname).filter(p => p.filename === heavyWorker);
-    const hasMatching = procs.some(p => Number(p.args?.[0]) === state.heavyWorkerVersion);
-    for (const proc of procs) {
-        if (Number(proc.args?.[0]) !== state.heavyWorkerVersion) {
-            try { ns.kill(proc.pid); } catch { }
-        }
-    }
-    if (hasMatching) return;
-    ns.scp(heavyWorker, hostname, 'home');
-    if (!ns.fileExists(heavyWorker, hostname)) return;
-    ns.exec(
-        heavyWorker,
-        hostname,
-        1,
-        state.heavyWorkerVersion,
-        String(Boolean(options['enable-phishing'])),
-        String(Boolean(options['enable-stock-manipulation'])),
-        options['target-stock'] ?? ''
-    );
 }
