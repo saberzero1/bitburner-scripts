@@ -164,12 +164,19 @@ async function solveCaptcha(ns, hostname, serverInfo) {
     const data = serverInfo.passwordHint || '';
     const digits = data.match(/\d/g);
     if (!digits) return null;
-    let candidate = digits.join('');
+    const joined = digits.join('');
     const expectedLength = Number.isFinite(serverInfo.passwordLength) ? serverInfo.passwordLength : null;
-    if (expectedLength && candidate.length > expectedLength)
-        candidate = candidate.slice(candidate.length - expectedLength);
-    const result = await ns.dnet.authenticate(hostname, candidate);
-    if (result.success) return candidate;
+    const candidates = [];
+    if (expectedLength && joined.length >= expectedLength) {
+        for (let i = 0; i <= joined.length - expectedLength; i++)
+            candidates.push(joined.slice(i, i + expectedLength));
+    } else {
+        candidates.push(joined);
+    }
+    for (const candidate of candidates) {
+        const result = await ns.dnet.authenticate(hostname, candidate);
+        if (result.success) return candidate;
+    }
     return null;
 }
 
