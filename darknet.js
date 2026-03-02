@@ -407,6 +407,10 @@ async function deployProbe(ns, state, hostname, options) {
 
         // Copy probe script
         ns.scp(probeScript, hostname, 'home');
+        if (!ns.fileExists(probeScript, hostname)) {
+            log(ns, `WARN: Probe script missing on ${hostname} after SCP.`, false, 'warning');
+            return false;
+        }
 
         const procs = ns.ps(hostname).filter(p => p.filename === probeScript);
         const hasMatching = procs.some(p => Number(p.args?.[0]) === state.probeVersion);
@@ -418,7 +422,7 @@ async function deployProbe(ns, state, hostname, options) {
         if (hasMatching) return true;
 
         // Execute probe
-        const pid = ns.exec(probeScript, hostname, { preventDuplicates: true }, state.probeVersion);
+        const pid = ns.exec(probeScript, hostname, 1, state.probeVersion);
         if (pid > 0) {
             state.activeProbes.add(hostname);
             log(ns, `Deployed probe to ${hostname} (pid: ${pid})`);
@@ -431,8 +435,14 @@ async function deployProbe(ns, state, hostname, options) {
                     return `${formatRam(usedRam)}/${formatRam(maxRam)}`;
                 } catch { return 'unknown'; }
             })();
+            const scriptRam = (() => {
+                try {
+                    return formatRam(ns.getScriptRam(probeScript, 'home'));
+                } catch { return 'unknown'; }
+            })();
             log(ns, `WARN: Failed to launch probe on ${hostname}. Connected: ${details.isConnectedToCurrentServer}, ` +
-                `Session: ${details.hasSession}, Admin: ${details.hasAdminRights}, RAM: ${ramInfo}`, false, 'warning');
+                `Session: ${details.hasSession}, Admin: ${details.hasAdminRights}, RAM: ${ramInfo}, Script: ${scriptRam}`,
+                false, 'warning');
         }
     } catch (err) {
         // Failed to deploy probe
@@ -456,7 +466,7 @@ async function ensureHomeProbes(ns, state, options) {
     }
 
     if (!hasHomeProbe && ns.fileExists(probeScript, 'home')) {
-        const pid = ns.exec(probeScript, 'home', { preventDuplicates: true }, state.probeVersion);
+        const pid = ns.exec(probeScript, 'home', 1, state.probeVersion);
         if (pid > 0) {
             state.activeProbes.add('home');
         }

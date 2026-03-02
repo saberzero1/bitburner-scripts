@@ -214,7 +214,8 @@ async function deployProbe(ns, hostname, password, scriptName) {
         }
         
         ns.scp(scriptName, hostname);
-        const pid = ns.exec(scriptName, hostname, { preventDuplicates: true });
+        if (!ns.fileExists(scriptName, hostname)) return false;
+        const pid = ns.exec(scriptName, hostname, 1);
         if (pid > 0) {
             ns.print(`Deployed probe to ${hostname}`);
             return true;
