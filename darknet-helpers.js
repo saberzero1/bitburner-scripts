@@ -7,6 +7,22 @@ const PASSWORD_SOLVERS = {
     'ZeroLogon': solveZeroLogon,
     'SimplePin': solveSimplePin,
     'Captcha': solveCaptcha,
+    'EchoVuln': solveEchoVuln,
+    'SortedEchoVuln': solveSortedEchoVuln,
+    'BufferOverflow': solveBufferOverflow,
+    'MastermindHint': solveMastermindHint,
+    'TimingAttack': solveTimingAttack,
+    'LargestPrimeFactor': solveLargestPrimeFactor,
+    'RomanNumeral': solveRomanNumeral,
+    'DogNames': solveDogNames,
+    'CommonPasswordDictionary': solveCommonPasswordDictionary,
+    'EUCountryDictionary': solveEUCountryDictionary,
+    'Yesn_t': solveYesnt,
+    'BinaryEncodedFeedback': solveBinaryEncodedFeedback,
+    'SpiceLevel': solveSpiceLevel,
+    'ConvertToBase10': solveConvertToBase10,
+    'parsedExpression': solveParsedExpression,
+    'encryptedPassword': solveEncryptedPassword,
     'DefaultPassword': solveDefaultPassword,
     'GuessNumber': solveGuessNumber,
     'WordList': solveWordList,
@@ -29,9 +45,25 @@ export function getDarknetPasswordSolver(modelId) {
     const normalized = modelId.toLowerCase();
     if (normalized.includes('zerologon') || normalized.includes('nopassword')) return PASSWORD_SOLVERS['ZeroLogon'];
     if (normalized.includes('captcha') || normalized.includes('cloudblare')) return PASSWORD_SOLVERS['Captcha'];
-    if (normalized.includes('simplepin') || normalized.includes('guessnumber') || normalized.includes('pin')) return PASSWORD_SOLVERS['SimplePin'];
+    if (normalized.includes('simplepin') || normalized.includes('pin')) return PASSWORD_SOLVERS['SimplePin'];
     if (normalized.includes('freshinstall') || normalized.includes('defaultpassword')) return PASSWORD_SOLVERS['DefaultPassword'];
-    if (normalized.includes('desk') || normalized.includes('accountsmanager') || normalized.includes('echo')) return PASSWORD_SOLVERS['GuessNumber'];
+    if (normalized.includes('deskmemo') || normalized.includes('echovuln')) return PASSWORD_SOLVERS['EchoVuln'];
+    if (normalized.includes('php 5.4') || normalized.includes('sortedecho')) return PASSWORD_SOLVERS['SortedEchoVuln'];
+    if (normalized.includes('pr0ver') || normalized.includes('bufferoverflow')) return PASSWORD_SOLVERS['BufferOverflow'];
+    if (normalized.includes('deepgreen') || normalized.includes('mastermind')) return PASSWORD_SOLVERS['MastermindHint'];
+    if (normalized.includes('2g_cellular') || normalized.includes('timing')) return PASSWORD_SOLVERS['TimingAttack'];
+    if (normalized.includes('primetime')) return PASSWORD_SOLVERS['LargestPrimeFactor'];
+    if (normalized.includes('bellacuore') || normalized.includes('roman')) return PASSWORD_SOLVERS['RomanNumeral'];
+    if (normalized.includes('laika') || normalized.includes('dog')) return PASSWORD_SOLVERS['DogNames'];
+    if (normalized.includes('accountsmanager') || normalized.includes('guessnumber')) return PASSWORD_SOLVERS['GuessNumber'];
+    if (normalized.includes('toppass') || normalized.includes('commonpassword')) return PASSWORD_SOLVERS['CommonPasswordDictionary'];
+    if (normalized.includes('eurozone') || normalized.includes('eucountry')) return PASSWORD_SOLVERS['EUCountryDictionary'];
+    if (normalized.includes('yesn') || normalized.includes('nil')) return PASSWORD_SOLVERS['Yesn_t'];
+    if (normalized.includes('110100100') || normalized.includes('binaryencoded')) return PASSWORD_SOLVERS['BinaryEncodedFeedback'];
+    if (normalized.includes('ratemypix') || normalized.includes('spice')) return PASSWORD_SOLVERS['SpiceLevel'];
+    if (normalized.includes('octantvoxel') || normalized.includes('base10')) return PASSWORD_SOLVERS['ConvertToBase10'];
+    if (normalized.includes('mathml') || normalized.includes('expression')) return PASSWORD_SOLVERS['parsedExpression'];
+    if (normalized.includes('ordo') || normalized.includes('xor')) return PASSWORD_SOLVERS['encryptedPassword'];
     if (normalized.includes('labyrinth')) return null;
     if (normalized.includes('caesar')) return PASSWORD_SOLVERS['Caesar'];
     if (normalized.includes('vigenere')) return PASSWORD_SOLVERS['Vigenere'];
@@ -229,7 +261,7 @@ async function solveZeroLogon(ns, hostname, serverInfo) {
 }
 
 async function solveSimplePin(ns, hostname, serverInfo) {
-    const hint = serverInfo.passwordHint || '';
+    const hint = serverInfo.passwordHintData || serverInfo.passwordHint || '';
     const format = (serverInfo.passwordFormat || '').trim();
     const pinLength = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
         ? serverInfo.passwordLength
@@ -279,10 +311,8 @@ async function solveCaptcha(ns, hostname, serverInfo) {
 
 async function solveDefaultPassword(ns, hostname, serverInfo) {
     const hint = (serverInfo.passwordHint || '').toLowerCase();
-    const defaults = [
-        'admin', 'password', 'root', 'guest', 'user', 'default', 'changeme', 'letmein',
-        'passw0rd', 'welcome', 'administrator', 'qwerty'
-    ];
+    const defaults = [...defaultSettingsDictionary, 'root', 'guest', 'user', 'default', 'changeme', 'letmein',
+        'passw0rd', 'welcome', 'administrator', 'qwerty'];
     if (hint) {
         for (const word of defaults) {
             if (hint.includes(word)) {
@@ -609,6 +639,476 @@ async function solveLeetSpeak(ns, hostname, serverInfo) {
     if (result2.success) return hint;
     
     return null;
+}
+
+const defaultSettingsDictionary = ['admin', 'password', '0000', '12345'];
+const dogNameDictionary = ['fido', 'spot', 'rover', 'max'];
+const euCountries = [
+    'Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Republic of Cyprus', 'Czech Republic', 'Denmark', 'Estonia',
+    'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg',
+    'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden',
+];
+const commonPasswordDictionary = [
+    '123456', 'password', '12345678', 'qwerty', '123456789', '12345', '1234', '111111', '1234567', 'dragon',
+    '123123', 'baseball', 'abc123', 'football', 'monkey', 'letmein', '696969', 'shadow', 'master', '666666',
+    'qwertyuiop', '123321', 'mustang', '1234567890', 'michael', '654321', 'superman', '1qaz2wsx', '7777777',
+    '121212', '0', 'qazwsx', '123qwe', 'trustno1', 'jordan', 'jennifer', 'zxcvbnm', 'asdfgh', 'hunter',
+    'buster', 'soccer', 'harley', 'batman', 'andrew', 'tigger', 'sunshine', 'iloveyou', '2000', 'charlie',
+    'robert', 'thomas', 'hockey', 'ranger', 'daniel', 'starwars', '112233', 'george', 'computer', 'michelle',
+    'jessica', 'pepper', '1111', 'zxcvbn', '555555', '11111111', '131313', 'freedom', '777777', 'pass',
+    'maggie', '159753', 'aaaaaa', 'ginger', 'princess', 'joshua', 'cheese', 'amanda', 'summer', 'love', 'ashley',
+    '6969', 'nicole', 'chelsea', 'biteme', 'matthew', 'access', 'yankees', '987654321', 'dallas', 'austin',
+    'thunder', 'taylor', 'matrix',
+];
+
+async function solveEchoVuln(ns, hostname, serverInfo) {
+    const hint = serverInfo.passwordHint || serverInfo.passwordHintData || '';
+    const candidate = extractTrailingToken(hint);
+    if (!candidate) return null;
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveSortedEchoVuln(ns, hostname, serverInfo) {
+    const sorted = (serverInfo.passwordHintData || serverInfo.passwordHint || '').replace(/\s+/g, '');
+    if (!sorted || !/^\d+$/.test(sorted) || sorted.length > 7) return null;
+    const attempts = { count: 0, limit: 3000 };
+    let result = null;
+    await permuteDigits(sorted.split(''), async (candidate) => {
+        if (attempts.count >= attempts.limit) return false;
+        attempts.count++;
+        const auth = await ns.dnet.authenticate(hostname, candidate);
+        if (auth.success) {
+            result = candidate;
+            return true;
+        }
+        return false;
+    });
+    return result;
+}
+
+async function solveBufferOverflow(ns, hostname, serverInfo) {
+    const hint = serverInfo.passwordHint || '';
+    const match = hint.match(/(\d+)/);
+    if (!match) return null;
+    const length = Number(match[1]);
+    if (!Number.isFinite(length) || length <= 0) return null;
+    const candidate = 'A'.repeat(length * 2);
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveMastermindHint(ns, hostname, serverInfo) {
+    const length = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : 4;
+    if (length > 6) return null;
+    const charset = getCharsetForFormat(serverInfo.passwordFormat) || '0123456789';
+    if (charset.length > 12) return null;
+    let best = null;
+    const base = charset[0];
+    const guess = base.repeat(length);
+    const response = await ns.dnet.authenticate(hostname, guess);
+    if (response.success) return guess;
+    const counts = new Map();
+    const resultData = parseMastermindData(response);
+    if (resultData) counts.set(base, resultData.exact + resultData.misplaced);
+    for (let i = 1; i < charset.length; i++) {
+        const ch = charset[i];
+        const resp = await ns.dnet.authenticate(hostname, ch.repeat(length));
+        if (resp.success) return ch.repeat(length);
+        const data = parseMastermindData(resp);
+        if (data) counts.set(ch, data.exact + data.misplaced);
+    }
+    const digits = [];
+    for (const [ch, count] of counts) {
+        for (let i = 0; i < count; i++) digits.push(ch);
+    }
+    if (digits.length !== length || digits.length > 7) return null;
+    const attemptsRef = { count: 0, limit: 3000 };
+    await permuteDigits(digits, async (candidate) => {
+        if (attemptsRef.count >= attemptsRef.limit) return false;
+        attemptsRef.count++;
+        const auth = await ns.dnet.authenticate(hostname, candidate);
+        if (auth.success) {
+            best = candidate;
+            return true;
+        }
+        return false;
+    });
+    return best;
+}
+
+async function solveTimingAttack(ns, hostname, serverInfo) {
+    const length = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : 4;
+    if (length > 12) return null;
+    const charset = getCharsetForFormat(serverInfo.passwordFormat) || '0123456789';
+    let prefix = '';
+    for (let i = 0; i < length; i++) {
+        let found = false;
+        for (const ch of charset) {
+            const attempt = (prefix + ch).padEnd(length, charset[0]);
+            const resp = await ns.dnet.authenticate(hostname, attempt);
+            if (resp.success) return attempt;
+            const idx = parseMismatchIndex(resp);
+            if (Number.isFinite(idx) && idx > i) {
+                prefix += ch;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return null;
+    }
+    return prefix;
+}
+
+async function solveLargestPrimeFactor(ns, hostname, serverInfo) {
+    const target = extractNumber(serverInfo.passwordHintData || serverInfo.passwordHint || '');
+    if (!Number.isFinite(target)) return null;
+    const candidate = String(largestPrimeFactor(target));
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveRomanNumeral(ns, hostname, serverInfo) {
+    const hintData = serverInfo.passwordHintData || '';
+    if (hintData.includes(',')) {
+        const [minRaw, maxRaw] = hintData.split(',');
+        const min = romanToNumber(minRaw.trim());
+        const max = romanToNumber(maxRaw.trim());
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        let low = Math.min(min, max);
+        let high = Math.max(min, max);
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            const resp = await ns.dnet.authenticate(hostname, String(mid));
+            if (resp.success) return String(mid);
+            const msg = (resp.data || resp.message || '').toString().toUpperCase();
+            if (msg.includes('ALTUS')) high = mid - 1;
+            else if (msg.includes('PARUM')) low = mid + 1;
+            else break;
+        }
+        return null;
+    }
+    const encoded = extractRoman(serverInfo.passwordHintData || serverInfo.passwordHint || '');
+    if (!encoded) return null;
+    const candidate = String(romanToNumber(encoded));
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveDogNames(ns, hostname, serverInfo) {
+    return await tryDictionary(ns, hostname, dogNameDictionary);
+}
+
+async function solveCommonPasswordDictionary(ns, hostname, serverInfo) {
+    return await tryDictionary(ns, hostname, commonPasswordDictionary);
+}
+
+async function solveEUCountryDictionary(ns, hostname, serverInfo) {
+    return await tryDictionary(ns, hostname, euCountries);
+}
+
+async function solveYesnt(ns, hostname, serverInfo) {
+    const length = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : 4;
+    const charset = getCharsetForFormat(serverInfo.passwordFormat) || '0123456789';
+    let current = charset[0].repeat(length);
+    for (let i = 0; i < length; i++) {
+        let found = false;
+        for (const ch of charset) {
+            const attempt = current.substring(0, i) + ch + current.substring(i + 1);
+            const resp = await ns.dnet.authenticate(hostname, attempt);
+            if (resp.success) return attempt;
+            const flags = parseYesnt(resp);
+            if (flags && flags[i]) {
+                current = attempt;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return null;
+    }
+    return current;
+}
+
+async function solveBinaryEncodedFeedback(ns, hostname, serverInfo) {
+    const raw = serverInfo.passwordHintData || serverInfo.passwordHint || '';
+    const bytes = raw.match(/[01]{8}/g);
+    if (!bytes) return null;
+    const candidate = bytes.map(b => String.fromCharCode(parseInt(b, 2))).join('');
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveSpiceLevel(ns, hostname, serverInfo) {
+    const length = Number.isFinite(serverInfo.passwordLength) && serverInfo.passwordLength > 0
+        ? serverInfo.passwordLength
+        : 4;
+    if (length > 4) return null;
+    const max = Math.pow(10, length);
+    for (let i = 0; i < max; i++) {
+        const candidate = i.toString().padStart(length, '0');
+        const result = await ns.dnet.authenticate(hostname, candidate);
+        if (result.success) return candidate;
+    }
+    return null;
+}
+
+async function solveConvertToBase10(ns, hostname, serverInfo) {
+    const hintData = serverInfo.passwordHintData || '';
+    const parts = hintData.split(',');
+    if (parts.length < 2) return null;
+    const base = Number(parts[0]);
+    const encoded = parts.slice(1).join(',').trim();
+    if (!Number.isFinite(base) || !encoded) return null;
+    const value = parseBaseN(encoded, base);
+    if (!Number.isFinite(value)) return null;
+    const candidate = String(Math.round(value));
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveParsedExpression(ns, hostname, serverInfo) {
+    const expr = serverInfo.passwordHintData || '';
+    const cleaned = cleanExpression(expr);
+    if (!cleaned) return null;
+    const resultValue = evaluateExpression(cleaned);
+    if (!Number.isFinite(resultValue)) return null;
+    const candidate = String(resultValue);
+    const result = await ns.dnet.authenticate(hostname, candidate);
+    return result.success ? candidate : null;
+}
+
+async function solveEncryptedPassword(ns, hostname, serverInfo) {
+    const hintData = serverInfo.passwordHintData || '';
+    const [encrypted, masks] = hintData.split(';');
+    if (!encrypted || !masks) return null;
+    const maskBits = masks.trim().split(/\s+/).map(b => parseInt(b, 2));
+    if (maskBits.some(n => !Number.isFinite(n))) return null;
+    let output = '';
+    for (let i = 0; i < encrypted.length; i++) {
+        const code = encrypted.charCodeAt(i);
+        const mask = maskBits[i] ?? 0;
+        output += String.fromCharCode(code ^ mask);
+    }
+    const result = await ns.dnet.authenticate(hostname, output);
+    return result.success ? output : null;
+}
+
+function extractTrailingToken(hint) {
+    if (!hint) return '';
+    const match = hint.match(/([A-Za-z0-9]+)\s*$/);
+    return match ? match[1] : '';
+}
+
+function extractNumber(text) {
+    const match = String(text).match(/(\d+)/);
+    if (!match) return NaN;
+    return Number(match[1]);
+}
+
+function extractRoman(text) {
+    const match = String(text).match(/([IVXLCDM]+|nulla)/i);
+    return match ? match[1] : '';
+}
+
+function romanToNumber(input) {
+    if (!input) return NaN;
+    if (input.toLowerCase() === 'nulla') return 0;
+    const romanToInt = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+    let total = 0;
+    let prev = 0;
+    const upper = input.toUpperCase();
+    for (let i = upper.length - 1; i >= 0; i--) {
+        const value = romanToInt[upper[i]];
+        if (!value) return NaN;
+        if (value < prev) total -= value;
+        else total += value;
+        prev = value;
+    }
+    return total;
+}
+
+function largestPrimeFactor(n) {
+    let num = Math.floor(n);
+    if (num < 2) return num;
+    let factor = 2;
+    let last = 1;
+    while (factor * factor <= num) {
+        if (num % factor === 0) {
+            last = factor;
+            num = Math.floor(num / factor);
+        } else {
+            factor += factor === 2 ? 1 : 2;
+        }
+    }
+    return Math.max(last, num);
+}
+
+async function tryDictionary(ns, hostname, words) {
+    for (const word of words) {
+        const result = await ns.dnet.authenticate(hostname, word);
+        if (result.success) return word;
+    }
+    return null;
+}
+
+function parseMastermindData(resp) {
+    const data = (resp.data || resp.message || '').toString();
+    const match = data.match(/(\d+)\s*,\s*(\d+)/);
+    if (!match) return null;
+    return { exact: Number(match[1]), misplaced: Number(match[2]) };
+}
+
+function parseMismatchIndex(resp) {
+    const data = (resp.data || resp.message || '').toString();
+    const match = data.match(/\((\d+)\)/);
+    if (!match) return NaN;
+    return Number(match[1]);
+}
+
+function parseYesnt(resp) {
+    const data = (resp.data || resp.message || '').toString();
+    if (!data) return null;
+    return data.split(',').map(entry => entry.trim().startsWith('yes'));
+}
+
+function permuteDigits(digits, visit) {
+    const counts = new Map();
+    for (const d of digits) counts.set(d, (counts.get(d) || 0) + 1);
+    const keys = Array.from(counts.keys());
+    const targetLen = digits.length;
+    const buffer = new Array(targetLen);
+
+    const backtrack = async (idx) => {
+        if (idx === targetLen) {
+            return await visit(buffer.join(''));
+        }
+        for (const key of keys) {
+            const count = counts.get(key);
+            if (!count) continue;
+            counts.set(key, count - 1);
+            buffer[idx] = key;
+            if (await backtrack(idx + 1)) return true;
+            counts.set(key, count);
+        }
+        return false;
+    };
+
+    return backtrack(0);
+}
+
+function parseBaseN(numberString, base) {
+    const characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let result = 0;
+    let index = 0;
+    let digit = numberString.split('.')[0].length - 1;
+    while (index < numberString.length) {
+        const currentDigit = numberString[index];
+        if (currentDigit === '.') {
+            index += 1;
+            continue;
+        }
+        const value = characters.indexOf(currentDigit.toUpperCase());
+        if (value < 0) return NaN;
+        result += value * base ** digit;
+        index += 1;
+        digit -= 1;
+    }
+    return result;
+}
+
+function cleanExpression(expression) {
+    return String(expression)
+        .replaceAll('ҳ', '*')
+        .replaceAll('÷', '/')
+        .replaceAll('➕', '+')
+        .replaceAll('➖', '-')
+        .replaceAll('ns.exit(),', '')
+        .split(',')[0];
+}
+
+function evaluateExpression(expression) {
+    const tokens = tokenizeExpression(expression);
+    const output = [];
+    const ops = [];
+    const precedence = { '+': 1, '-': 1, '*': 2, '/': 2 };
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (typeof token === 'number') {
+            output.push(token);
+            continue;
+        }
+        if (token === '(') {
+            ops.push(token);
+            continue;
+        }
+        if (token === ')') {
+            while (ops.length && ops[ops.length - 1] !== '(') output.push(ops.pop());
+            ops.pop();
+            continue;
+        }
+        while (ops.length && precedence[ops[ops.length - 1]] >= precedence[token]) {
+            output.push(ops.pop());
+        }
+        ops.push(token);
+    }
+    while (ops.length) output.push(ops.pop());
+    const stack = [];
+    for (const token of output) {
+        if (typeof token === 'number') {
+            stack.push(token);
+            continue;
+        }
+        const b = stack.pop();
+        const a = stack.pop();
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
+        if (token === '+') stack.push(a + b);
+        if (token === '-') stack.push(a - b);
+        if (token === '*') stack.push(a * b);
+        if (token === '/') stack.push(a / b);
+    }
+    return stack.length === 1 ? stack[0] : NaN;
+}
+
+function tokenizeExpression(expression) {
+    const raw = String(expression).replace(/\s+/g, '');
+    const tokens = [];
+    let i = 0;
+    const isOp = (t) => ['+', '-', '*', '/'].includes(t);
+    while (i < raw.length) {
+        const ch = raw[i];
+        if (ch === '(' || ch === ')' || isOp(ch)) {
+            if (ch === '-' && (tokens.length === 0 || tokens[tokens.length - 1] === '(' || isOp(tokens[tokens.length - 1]))) {
+                let num = '-';
+                i++;
+                while (i < raw.length && /[0-9.]/.test(raw[i])) {
+                    num += raw[i];
+                    i++;
+                }
+                tokens.push(parseFloat(num));
+                continue;
+            }
+            tokens.push(ch);
+            i++;
+            continue;
+        }
+        if (/[0-9.]/.test(ch)) {
+            let num = '';
+            while (i < raw.length && /[0-9.]/.test(raw[i])) {
+                num += raw[i];
+                i++;
+            }
+            tokens.push(parseFloat(num));
+            continue;
+        }
+        i++;
+    }
+    return tokens;
 }
 
 export async function bruteForcePassword(ns, hostname, serverInfo, maxAttempts = 10000) {

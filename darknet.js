@@ -75,7 +75,7 @@ class DarknetState {
         this.lastRefresh = 0;
         this.lastStatusLog = 0;
         this.lastStats = { discovered: 0, passwords: 0, probes: 0, stasis: 0, admin: 0 };
-        this.probeVersion = 4;
+        this.probeVersion = 5;
         this.lastAuthLog = new Map();
 
         // Load persisted passwords from file
