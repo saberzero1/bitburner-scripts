@@ -50,10 +50,12 @@ export async function tryHintBasedAuth(ns, hostname, serverInfo) {
     const hint = (serverInfo.passwordHint || '').trim();
     const candidates = new Set();
     if (hint) {
-        candidates.add(hint);
-        candidates.add(hint.replace(/\s+/g, ''));
-        candidates.add(hint.toLowerCase());
-        candidates.add(hint.toUpperCase());
+        if (!/(prove you are human|captcha|type the numbers)/i.test(hint)) {
+            candidates.add(hint);
+            candidates.add(hint.replace(/\s+/g, ''));
+            candidates.add(hint.toLowerCase());
+            candidates.add(hint.toUpperCase());
+        }
         if (/^\d+$/.test(hint)) candidates.add(Number(hint).toString());
         const hintDigits = hint.match(/\d/g);
         if (hintDigits) {
