@@ -88,8 +88,10 @@ export async function tryHintBasedAuth(ns, hostname, serverInfo) {
     for (const candidate of candidates) {
         if (!candidate) continue;
         if (candidate.length > maxLen) continue;
-        const result = await ns.dnet.authenticate(hostname, candidate);
-        if (result.success) return candidate;
+        try {
+            const result = await ns.dnet.authenticate(hostname, candidate);
+            if (result.success) return candidate;
+        } catch { }
     }
     return null;
 }
