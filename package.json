@@ -11,7 +11,6 @@
     "license": "MIT",
     "dependencies": {
         "esbuild": "^0.23.1",
-        "esbuild-bitburner-plugin": "^1.6.3",
-        "ramdodger-extension": "^1.0.1"
+        "esbuild-bitburner-plugin": "^1.6.3"
     }
 }

@@ -1,6 +1,5 @@
 import { context } from "esbuild";
 import { BitburnerPlugin } from "esbuild-bitburner-plugin";
-import { RamDodgerExtension } from "ramdodger-extension";
 
 const buildOnly = process.argv.includes("--build");
 
@@ -18,10 +17,9 @@ const ctx = await context({
             port: 12525,
             types: "NetscriptDefinitions.d.ts",
             usePolling: true,
-            extensions: [RamDodgerExtension],
         }),
     ],
-    bundle: true,
+    bundle: false,
     format: "esm",
     platform: "browser",
     logLevel: "debug",
