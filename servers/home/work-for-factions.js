@@ -1678,20 +1678,6 @@ async function measureCompanyRepGainRate(ns, companyName) {
     );
 }
 
-async function measureFactionRepGainRate(ns, factionName) {
-    return await measureRepGainRate(
-        ns,
-        async () => await getFactionReputation(ns, factionName),
-    );
-}
-
-async function measureCompanyRepGainRate(ns, companyName) {
-    return await measureRepGainRate(
-        ns,
-        async () => await getCompanyReputation(ns, companyName),
-    );
-}
-
 /** @param {NS} ns
  *  @returns {Promise<string[]>} List of new faction invites */
 async function checkFactionInvites(ns) {
