@@ -55,7 +55,7 @@ const OPTIONS_FILE = '/data/darknet-options.txt';
 const CLUE_CACHE_FILE = '/data/darknet-clues-scanned.txt';
 const STASIS_HELPER_SCRIPT = '/Temp/darknet-stasis-helper.js';
 const STASIS_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const enable = ns.args[0] === 'true'; ns.dnet.setStasisLink(enable); }`;
-const PROBE_VERSION = 8;
+const PROBE_VERSION = 9;
 
 // ─── Entry Point ─────────────────────────────────────────────────────────────
 
@@ -87,7 +87,7 @@ export async function main(ns) {
         } catch (err) {
             log(ns, `WARNING: Darknet orchestrator error: ${getErrorInfo(err)}`, false, 'warning');
         }
-        await ns.sleep(options.interval);
+        await Promise.race([ns.dnet.nextMutation(), ns.sleep(options.interval)]);
     }
 }
 
@@ -505,15 +505,20 @@ async function deployProbe(ns, state, hostname, options) {
             return;
         }
 
-        // Check RAM
+        // Calculate optimal thread count based on RAM budget
         const maxRam = ns.getServerMaxRam(hostname);
         const usedRam = ns.getServerUsedRam(hostname);
-        const scriptRam = ns.getScriptRam(probeScript, 'home');
         const freeRam = Math.max(0, maxRam - usedRam);
+        const probeRamPerThread = ns.getScriptRam(probeScript, 'home');
+        const maxTempScriptCost = 7.6; // packetCapture temp script (largest)
 
-        if (scriptRam > freeRam) {
+        // Reserve room for the largest temp script the probe might spawn
+        // threads = floor((freeRam - maxTempScriptCost) / probeRamPerThread)
+        const threads = Math.max(1, Math.floor((freeRam - maxTempScriptCost) / probeRamPerThread));
+
+        if (probeRamPerThread > freeRam) {
             if (options.verbose) {
-                log(ns, `WARN: ${hostname} lacks RAM for probe (needs ${formatRam(scriptRam)}, has ${formatRam(freeRam)} free)`, false, 'warning');
+                log(ns, `WARN: ${hostname} lacks RAM for probe (needs ${formatRam(probeRamPerThread)}, has ${formatRam(freeRam)} free)`, false, 'warning');
             }
             return;
         }
@@ -525,10 +530,10 @@ async function deployProbe(ns, state, hostname, options) {
             return;
         }
 
-        const pid = ns.exec(probeScript, hostname, 1, PROBE_VERSION);
+        const pid = ns.exec(probeScript, hostname, threads, PROBE_VERSION);
         if (pid > 0) {
             state.activeProbes.set(hostname, { pid, version: PROBE_VERSION });
-            log(ns, `Deployed probe v${PROBE_VERSION} to ${hostname} (pid: ${pid})`);
+            log(ns, `Deployed probe v${PROBE_VERSION} to ${hostname} (pid: ${pid}, threads: ${threads})`);
         } else {
             if (options.verbose) {
                 const details = safeGetAuthDetails(ns, hostname);
@@ -573,12 +578,16 @@ async function ensureHomeProbe(ns, state, options) {
         return;
     }
 
-    // Launch new probe on home
+    // Calculate dynamic thread count for home
     const maxRam = ns.getServerMaxRam('home');
     const usedRam = ns.getServerUsedRam('home');
-    const scriptRam = ns.getScriptRam(probeScript, 'home');
-    if (scriptRam <= Math.max(0, maxRam - usedRam)) {
-        const pid = ns.exec(probeScript, 'home', 1, PROBE_VERSION);
+    const freeRam = Math.max(0, maxRam - usedRam);
+    const probeRamPerThread = ns.getScriptRam(probeScript, 'home');
+    const maxTempScriptCost = 7.6; // packetCapture temp script
+    const threads = Math.max(1, Math.floor((freeRam - maxTempScriptCost) / probeRamPerThread));
+
+    if (probeRamPerThread <= freeRam) {
+        const pid = ns.exec(probeScript, 'home', threads, PROBE_VERSION);
         if (pid > 0) {
             state.activeProbes.set('home', { pid, version: PROBE_VERSION });
         }
@@ -610,19 +619,34 @@ async function manageStasisLinks(ns, state, options) {
         if (!info.hasAdmin) continue;
 
         let score = 0;
+        const depth = state.serverDepths.get(hostname);
+
+        if (depth !== undefined) {
+            // Heavily prioritize servers just before air gaps (depths 6-7, 14-15, 22-23, 30-31)
+            // Air gaps are at depths 8, 16, 24, 32, 40
+            const posInGap = depth % AIR_GAP_DEPTH;
+            if (posInGap === AIR_GAP_DEPTH - 2 || posInGap === AIR_GAP_DEPTH - 1) {
+                // Depth is 6,7 / 14,15 / 22,23 / 30,31 — critical for migration staging
+                score += 100;
+            } else if (posInGap === 0 || posInGap === 1) {
+                // Just after an air gap — useful anchor point
+                score += 40;
+            }
+
+            // Penalize shallow servers (depth ≤ 3) — game auto-maintains at 70% density
+            if (depth <= 3) {
+                score -= 50;
+            }
+
+            // Deeper servers are harder to reach, so stasis is more valuable there
+            score += Math.min(depth * 2, 30);
+        }
+
+        // Small bonus for higher RAM servers (normalized, not dominant)
         try {
             const serverRam = ns.getServerMaxRam(hostname);
-            score += serverRam / 1024; // Prefer high RAM servers
+            score += Math.min(serverRam / 256, 10);
         } catch { }
-
-        // Prefer servers near air gaps (strategic value for migration)
-        const depth = state.serverDepths.get(hostname);
-        if (depth !== undefined) {
-            const distToGap = depth % AIR_GAP_DEPTH;
-            if (distToGap <= 2 || distToGap >= AIR_GAP_DEPTH - 2) {
-                score += 50; // Near air gap = strategic value
-            }
-        }
 
         candidates.push({ hostname, score });
     }
@@ -631,7 +655,7 @@ async function manageStasisLinks(ns, state, options) {
 
     const slotsAvailable = stasisLimit - currentLinks;
     for (const candidate of candidates.slice(0, slotsAvailable)) {
-        const success = await execStasisLink(ns, candidate.hostname, true, options);
+        const success = await execStasisLink(ns, state, candidate.hostname, true, options);
         if (success) {
             state.stasisServers.add(candidate.hostname);
             log(ns, `Applied stasis link to ${candidate.hostname}`);
@@ -643,26 +667,41 @@ async function manageStasisLinks(ns, state, options) {
  * Execute a stasis link toggle on a target server by writing and running
  * a temporary helper script ON that server.
  */
-async function execStasisLink(ns, hostname, enable, options) {
+async function execStasisLink(ns, state, hostname, enable, options) {
     if (options['dry-run']) {
         log(ns, `[DRY-RUN] Would ${enable ? 'set' : 'remove'} stasis link on ${hostname}`);
         return false;
     }
 
     try {
+        const probeScript = getFilePath(PROBE_SCRIPT);
+
+        // Kill running probe on this server first — stasis helper (13.6GB) won't fit alongside probe
+        const probeInfo = state.activeProbes.get(hostname);
+        if (probeInfo) {
+            try { ns.kill(probeInfo.pid); } catch { }
+            state.activeProbes.delete(hostname);
+        }
+        // Also kill any probe by filename (safety net)
+        const runningProbes = ns.ps(hostname).filter(p => p.filename === probeScript);
+        for (const proc of runningProbes) {
+            try { ns.kill(proc.pid); } catch { }
+        }
+
         ns.write(STASIS_HELPER_SCRIPT, STASIS_HELPER_CONTENT, 'w');
-
         ns.scp(STASIS_HELPER_SCRIPT, hostname, 'home');
-
 
         const pid = ns.exec(STASIS_HELPER_SCRIPT, hostname, 1, String(enable));
         if (pid <= 0) {
             if (options.verbose) {
                 log(ns, `WARN: Failed to exec stasis helper on ${hostname}`, false, 'warning');
             }
+            // Redeploy probe even on stasis failure
+            await deployProbe(ns, state, hostname, options);
             return false;
         }
 
+        // Wait for stasis helper to finish
         let waited = 0;
         while (waited < 5000) {
             await ns.sleep(100);
@@ -671,11 +710,16 @@ async function execStasisLink(ns, hostname, enable, options) {
             if (!running) break;
         }
 
+        // Redeploy probe after stasis completes
+        await deployProbe(ns, state, hostname, options);
+
         return true;
     } catch (err) {
         if (options.verbose) {
             log(ns, `WARN: Stasis link failed on ${hostname}: ${getErrorInfo(err)}`, false, 'warning');
         }
+        // Attempt to redeploy probe on error too
+        try { await deployProbe(ns, state, hostname, options); } catch { }
         return false;
     }
 }
@@ -690,6 +734,9 @@ async function execStasisLink(ns, hostname, enable, options) {
 async function chargeMigrations(ns, state, options) {
     const verbose = options.verbose;
     const maxLoops = options['migration-charge-loops'];
+
+    const MIGRATION_HELPER_SCRIPT = '/Temp/darknet-migration-helper.js';
+    const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { ns.dnet.induceServerMigration(ns.args[0]); }`;
 
     // Find servers near air gaps that could benefit from migration
     for (const [hostname, info] of state.discoveredServers) {
@@ -709,21 +756,51 @@ async function chargeMigrations(ns, state, options) {
 
         if (verbose) log(ns, `Charging migration for ${hostname} (depth: ${depth})`);
 
-        for (let i = 0; i < maxLoops; i++) {
-            try {
-                const chargeResult = ns.dnet.chargeServerMigration(hostname);
-                if (chargeResult?.migrated) {
-                    log(ns, `SUCCESS: ${hostname} migrated across air gap!`, true, 'success');
+        // Use multi-thread temp script on target server for faster charging
+        // Migration charge scales linearly with threads
+        // Temp script cost: 1.6 (base) + 4.0 (induceServerMigration) = 5.6 GB per thread
+        const migrationScriptCost = 5.6;
+        try {
+            const targetMaxRam = ns.getServerMaxRam(hostname);
+            const targetUsedRam = ns.getServerUsedRam(hostname);
+            const targetFreeRam = Math.max(0, targetMaxRam - targetUsedRam);
+            const migrationThreads = Math.max(1, Math.floor(targetFreeRam / migrationScriptCost));
+
+            ns.write(MIGRATION_HELPER_SCRIPT, MIGRATION_HELPER_CONTENT, 'w');
+            ns.scp(MIGRATION_HELPER_SCRIPT, hostname, 'home');
+
+            for (let i = 0; i < maxLoops; i++) {
+                const pid = ns.exec(MIGRATION_HELPER_SCRIPT, hostname, migrationThreads, hostname);
+                if (pid <= 0) {
+                    if (verbose) log(ns, `Migration exec failed for ${hostname}`);
                     break;
                 }
-                if (chargeResult?.charge >= 1.0) {
-                    log(ns, `Migration charged for ${hostname}, awaiting migration`);
+
+                // Wait for the helper to finish
+                let waited = 0;
+                while (waited < 3000) {
+                    await ns.sleep(50);
+                    waited += 50;
+                    const running = ns.ps(hostname).some(p => p.pid === pid);
+                    if (!running) break;
+                }
+
+                // Check migration status via auth details refresh
+                const newDetails = safeGetAuthDetails(ns, hostname);
+                if (!newDetails || !newDetails.isOnline) {
+                    // Server may have migrated or gone offline
+                    log(ns, `SUCCESS: ${hostname} migrated or moved (depth was: ${depth})`, true, 'success');
                     break;
                 }
-            } catch (err) {
-                if (verbose) log(ns, `Migration charge failed for ${hostname}: ${getErrorInfo(err)}`);
-                break;
+                const newDepth = newDetails.depth;
+                if (newDepth !== undefined && newDepth !== depth) {
+                    log(ns, `SUCCESS: ${hostname} migrated from depth ${depth} to ${newDepth}!`, true, 'success');
+                    state.serverDepths.set(hostname, newDepth);
+                    break;
+                }
             }
+        } catch (err) {
+            if (verbose) log(ns, `Migration charge failed for ${hostname}: ${getErrorInfo(err)}`);
         }
     }
 }

@@ -1,4 +1,4 @@
-const PROBE_VERSION = 8;
+const PROBE_VERSION = 9;
 
 export async function main(ns) {
     const SCRIPT_NAME = ns.getScriptName();
@@ -14,6 +14,9 @@ export async function main(ns) {
 
     while (true) {
         try {
+            // Free blocked RAM FIRST — maximizes available RAM for all subsequent operations
+            await freeBlockedRam(ns);
+
             const nearbyServers = (await runScan(ns)) || [];
             for (const hostname of nearbyServers) {
                 let success = false;
@@ -27,7 +30,6 @@ export async function main(ns) {
                 }
             }
 
-            await freeBlockedRam(ns);
             await handleCacheFiles(ns, HOST);
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
         } catch (err) {
@@ -37,6 +39,7 @@ export async function main(ns) {
         await ns.sleep(LOOP_INTERVAL);
     }
 }
+
 
 export function autocomplete(data) {
     void data;
@@ -78,7 +81,9 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
         return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
     }
 
-    if (passwords.has(hostname) && !details.hasSession) {
+    // Aggressive connectToSession: try on EVERY server before full auth
+    // connectToSession is instant (1.65GB temp script) and works even if server moved
+    if (passwords.has(hostname)) {
         const knownPassword = passwords.get(hostname);
         try {
             await runSessionLink(ns, hostname, knownPassword ?? '');
@@ -86,7 +91,11 @@ async function processServer(ns, hostname, passwords, passwordFile, scriptName) 
     }
 
     const refreshedDetails = await getAuthDetails(ns, hostname);
-    if (refreshedDetails?.hasSession || refreshedDetails?.hasAdminRights) {
+    if (refreshedDetails?.hasAdminRights) {
+        await scanClueFiles(ns, hostname, passwords, passwordFile);
+        return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
+    }
+    if (refreshedDetails?.hasSession) {
         await scanClueFiles(ns, hostname, passwords, passwordFile);
         return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
     }
@@ -135,16 +144,23 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         }
     }
 
-    try {
-        const captured = await runCapture(ns, hostname);
-        if (captured?.password) {
-            const result = await runAuth(ns, hostname, captured.password);
-            if (result.success) {
-                ns.toast(`Captured password for ${hostname}`, 'success');
-                return captured.password;
+    // RAM-aware packetCapture gating: only attempt if enough RAM available
+    // packetCapture temp script costs 7.6GB (1.6 base + 6.0 ns.dnet.packetCapture)
+    const HOST = ns.getHostname();
+    const captureCost = 7.6;
+    const freeRam = ns.getServerMaxRam(HOST) - ns.getServerUsedRam(HOST);
+    if (freeRam >= captureCost) {
+        try {
+            const captured = await runCapture(ns, hostname);
+            if (captured?.password) {
+                const result = await runAuth(ns, hostname, captured.password);
+                if (result.success) {
+                    ns.toast(`Captured password for ${hostname}`, 'success');
+                    return captured.password;
+                }
             }
-        }
-    } catch { }
+        } catch { }
+    }
 
     return null;
 }
@@ -219,9 +235,19 @@ async function deployProbe(ns, hostname, password, scriptName) {
         ns.scp(scriptName, hostname);
         if (!ns.fileExists(scriptName, hostname)) return false;
 
-        const pid = ns.exec(scriptName, hostname, 1, PROBE_VERSION);
+        // Calculate dynamic thread count based on target server RAM
+        const maxRam = ns.getServerMaxRam(hostname);
+        const usedRam = ns.getServerUsedRam(hostname);
+        const freeRam = Math.max(0, maxRam - usedRam);
+        const probeRamPerThread = ns.getScriptRam(scriptName);
+        const maxTempScriptCost = 7.6; // packetCapture temp script (largest)
+
+        // Reserve room for the largest temp script, then fit as many threads as possible
+        const threads = Math.max(1, Math.floor((freeRam - maxTempScriptCost) / probeRamPerThread));
+
+        const pid = ns.exec(scriptName, hostname, threads, PROBE_VERSION);
         if (pid > 0) {
-            ns.print(`Deployed agent to ${hostname}`);
+            ns.print(`Deployed agent to ${hostname} (threads: ${threads})`);
             return true;
         }
     } catch { }
