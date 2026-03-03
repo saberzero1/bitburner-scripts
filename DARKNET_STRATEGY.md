@@ -11,6 +11,7 @@ The DarkNet is composed of 24 distinct authentication models, each representing 
 ZeroLogon represents the most basic form of authentication failure: the null or empty credential. In real-world systems, this often occurs due to misconfigured services, default "no-password" states, or bypasses in the authentication logic where an empty input is treated as a valid token. This model serves as the foundational entry point into the DarkNet, illustrating that even the most complex networks can have trivial vulnerabilities at their perimeter. It highlights the importance of basic security hygiene and the risks associated with uninitialized or default configurations. The name itself is a play on the infamous CVE-2020-1472 vulnerability, though in this context, it refers to a much simpler logic flaw. It is the "Hello World" of DarkNet exploitation, requiring zero information and zero effort to bypass. This model is a reminder that the strongest encryption is useless if the front door is left unlocked. In the DarkNet, it is the only model that does not require a hint or a search space, as the solution is a universal constant. It is the first step in every penetration run, providing the initial foothold from which all further attacks are launched. Understanding ZeroLogon is about understanding the baseline of the network's security posture. If a system fails this test, it is likely that other, more complex vulnerabilities exist deeper within its architecture. It is the ultimate "low-hanging fruit" in the hacker's arsenal.
 
 #### Formal CS Problem Statement
+
 Let $A$ be an authentication function such that $A(P) \in \{True, False\}$, where $P$ is a candidate password string. The ZeroLogon model is defined by the property:
 $$A(\epsilon) = True$$
 where $\epsilon$ denotes the empty string (a string of length zero). The goal is to find any $P$ such that $A(P) = True$. In a more formal sense, we are looking for an element in the kernel of the authentication mapping that corresponds to the identity element of the string monoid. This vulnerability is often the result of a logic error where the system checks for the presence of a password but fails to validate its content, effectively treating a null input as a successful match. It can also be viewed as a failure of the "fail-secure" principle, where the default state of the system is open rather than closed. Mathematically, the search space is reduced to a single point, making the probability of success $P(success) = 1$ for the first attempt. This is the only model in the DarkNet where the entropy of the password is zero. The function $A$ effectively ignores its input $P$ when $P = \epsilon$, bypassing all internal validation routines. This can be modeled as a short-circuit in the boolean logic of the authentication service. In a state machine representation, the "Unauthenticated" state transitions directly to the "Authenticated" state upon receiving an empty input, without passing through any intermediate verification states. This lack of state transition complexity is what makes ZeroLogon so powerful and so dangerous. It is the simplest possible case of an authentication bypass.
@@ -18,7 +19,9 @@ $$A(\epsilon) = True$$
 where $\epsilon$ denotes the empty string (a string of length zero). The goal is to find any $P$ such that $A(P) = True$.
 
 #### Optimal Algorithm
+
 The algorithm is trivial: provide the empty string as the password. This is the simplest possible solver in the DarkNet toolkit. It requires no external data, no complex logic, and no iterative processes. The implementation simply calls the authentication function with a literal empty string. This approach is effective because it targets a specific, well-defined weakness in the target's authentication logic. In a production environment, this solver is usually the first one tried by any automated penetration script. It acts as a "sanity check" for the target's security configuration. The solver does not need to handle any hints or metadata, as the solution is independent of the server's state. It is a pure function that always returns the same result.
+
 ```pseudocode
 function solveZeroLogon():
     // The ZeroLogon model accepts an empty string as a valid credential.
@@ -36,12 +39,14 @@ function solveZeroLogon():
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(1)$. The operation takes a constant amount of time regardless of any external factors. The time taken is independent of the network size, the server's depth, or any other variable. It is the theoretical lower bound for any authentication attempt. There are no loops, no recursions, and no complex operations involved. The execution time is limited only by the overhead of the function call itself.
 - **Space Complexity:** $O(1)$. No additional memory is required to store or process the solution. The memory footprint is minimal and does not scale with any input parameters. The solver does not need to maintain any state or store any intermediate results. It is a stateless operation that is highly efficient in resource-constrained environments.
 - **Network Complexity:** $O(1)$. Only a single network request is sent to the server. This minimizes the risk of detection and reduces the impact of network latency on the overall penetration time. It is the most stealthy and efficient attack possible.
 - **Space Complexity:** $O(1)$. No additional memory is required to store or process the solution.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Initialization:** The solver is invoked for a server identified as running the ZeroLogon model. The manager script detects that the server is at Depth 0 or has no associated hint.
 2.  **Execution:** The solver function `solveZeroLogon()` is called. It prepares the empty string `""` as the payload.
 3.  **Return:** The function immediately returns the empty string `""` to the calling script.
@@ -49,12 +54,13 @@ function solveZeroLogon():
 5.  **Verification:** The server's authentication service receives the empty string and matches it against the null-bypass rule.
 6.  **Result:** The server returns `true`, granting access. The solver records the success and moves to the next node in the network.
 7.  **Post-Action:** The server is now backdoored, and its resources are available for further exploitation.
-2.  **Execution:** The solver function `solveZeroLogon()` is called.
-3.  **Return:** The function immediately returns the empty string `""`.
-4.  **Authentication:** The manager script calls `ns.darknet.authenticate(hostname, "")`.
-5.  **Result:** The server returns `true`, granting access.
+8.  **Execution:** The solver function `solveZeroLogon()` is called.
+9.  **Return:** The function immediately returns the empty string `""`.
+10. **Authentication:** The manager script calls `ns.darknet.authenticate(hostname, "")`.
+11. **Result:** The server returns `true`, granting access.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Entry Point:** ZeroLogon is always the entry point for the DarkNet. It is the model used by the root node (Depth 0). This is a fixed constant in the DarkNet architecture. Every penetration run begins with this model.
 - **No Hint:** Since the solution is always the same, no hint is provided or needed. The absence of a hint is itself a strong indicator that the model is ZeroLogon. If a server provides a hint, it is guaranteed not to be ZeroLogon.
 - **Distance:** The root node is always accessible from the DarkWeb root. It serves as the bridge between the public internet and the private DarkNet segments.
@@ -65,6 +71,7 @@ function solveZeroLogon():
 - **Distance:** The root node is always accessible from the DarkWeb root.
 
 #### Common Failure Modes
+
 - **Network Latency:** While the algorithm is $O(1)$, the `authenticate` call is still subject to network latency and the `skillFactor`. High latency can make even a trivial login feel slow. In extreme cases, the request might time out before the server responds.
 - **Session Expiry:** If the session expires before the command is sent, the authentication will fail. This is common in highly unstable segments of the network or when the player's connection is interrupted.
 - **Incorrect Model Identification:** If a server is misidentified as ZeroLogon, the empty string will fail. This can happen if the solver logic is flawed or if the server's metadata is corrupted.
@@ -81,6 +88,7 @@ function solveZeroLogon():
 DeskMemo_3.1 simulates a scenario where sensitive information is leaked through insecure communication channels. This is often referred to as an "echo" vulnerability or "information disclosure." The password is not hidden but is instead embedded within the metadata or hint text provided by the system. This model reflects real-world instances where administrators leave passwords in plain sight, such as on sticky notes (hence the name) or in publicly accessible configuration files. It tests the attacker's ability to parse and extract relevant data from a noisy environment. The challenge lies not in cracking a code, but in identifying the signal within the noise. This model is a classic example of "security through obscurity" failing in the face of basic observation. In the DarkNet, DeskMemo is a Tier 1 model, appearing in the early segments of the network. It serves as a bridge between the trivial ZeroLogon and the more complex algorithmic challenges. The hint provided is usually a sentence or a phrase that ends with the password. The solver's task is to isolate this final token and use it as the credential. This requires basic string manipulation skills and an understanding of how data is presented in the DarkNet interface. It is a reminder that sometimes the answer is right in front of you, provided you know where to look. The model is highly reliable and has a 100% success rate once the hint is captured. It is one of the most efficient ways to progress through the initial layers of the network.
 
 #### Formal CS Problem Statement
+
 Let $H$ be a hint string provided by the server. Let $P$ be the target password. The DeskMemo model guarantees that $P$ is a substring of $H$, specifically located at the end of the string following a known delimiter or pattern.
 $$H = S + P$$
 where $S$ is a prefix string and $+$ denotes concatenation. The goal is to extract $P$ from $H$. In a more general sense, this is a string parsing problem where the target token is anchored to the end of the input. The prefix $S$ can be of arbitrary length and content, but it always terminates before the password begins. The delimiter is typically a space, a colon, or a specific phrase like "is:". The problem is equivalent to finding the last element in a sequence of tokens. Mathematically, if we define a tokenization function $T(H, \delta)$ that splits $H$ into a sequence of tokens based on delimiter $\delta$, then $P = T(H, \delta)_n$, where $n$ is the index of the final token. This model assumes that the password itself does not contain the delimiter, which is a standard constraint in the DarkNet implementation. The complexity of the problem is linear with respect to the length of the hint string, as the entire string must be scanned to find the final delimiter. This makes it a very efficient problem to solve computationally. The information content of the hint is high, as it contains the exact solution in a clear, albeit slightly obscured, format. The entropy of the password is effectively reduced to zero once the hint is parsed.
@@ -88,7 +96,9 @@ $$H = S + P$$
 where $S$ is a prefix string and $+$ denotes concatenation. The goal is to extract $P$ from $H$.
 
 #### Optimal Algorithm
+
 The algorithm involves identifying the password token within the hint. In DarkNet, this is typically the last word or a specific token at the end of the hint. The solver must be able to handle variations in the prefix text while consistently isolating the final word. This is achieved by splitting the string into an array of tokens based on whitespace and then selecting the final element of that array. The algorithm is robust and handles most variations of the DeskMemo hint without modification. It is a "one-shot" solver that does not require iteration or feedback from the server.
+
 ```pseudocode
 function solveDeskMemo(hint):
     // The hint string contains the password at the very end.
@@ -113,16 +123,17 @@ function solveDeskMemo(hint):
     // The hint string contains the password at the very end.
     // We split the string by whitespace to isolate the individual tokens.
     tokens = split(hint, " ")
-    
+
     // The password is the last token in the resulting array.
     // We access it using the length of the array minus one.
     password = tokens[length(tokens) - 1]
-    
+
     // Return the extracted password.
     return password
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(n)$, where $n$ is the length of the hint string. Splitting the string requires a single pass over the characters to identify delimiters. The subsequent array access is $O(1)$. This makes the solver extremely fast, even for long hints. The time taken scales linearly with the size of the input, which is the optimal complexity for a string parsing problem.
 - **Space Complexity:** $O(n)$, to store the tokens generated by the split operation. In the worst case, where every character is a token, the space required is proportional to the input length. This is well within the limits of modern computing environments. The memory is used temporarily during the parsing phase and can be reclaimed immediately after the password is extracted.
 - **Parsing Overhead:** While $O(n)$ is efficient, very large hints (though rare in DarkNet) could introduce a minor delay in the parsing phase. The solver should be optimized to handle such cases if they occur.
@@ -130,6 +141,7 @@ function solveDeskMemo(hint):
 - **Space Complexity:** $O(n)$, to store the tokens generated by the split operation.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input Hint:** "The password for this terminal is: hunter2"
 2.  **Preprocessing:** The solver receives the hint and trims any accidental whitespace from the ends.
 3.  **Tokenization:** The `split` function is called with a space delimiter. The string is broken into the following array:
@@ -145,7 +157,7 @@ function solveDeskMemo(hint):
 6.  **Result:** The solver returns "hunter2" to the manager script.
 7.  **Authentication:** The manager script calls `ns.darknet.authenticate(hostname, "hunter2")` and receives a success response.
 8.  **Post-Action:** Access is granted, and the server is added to the list of controlled nodes.
-2.  **Tokenization:** The `split` function is called with a space delimiter.
+9.  **Tokenization:** The `split` function is called with a space delimiter.
     - `tokens[0] = "The"`
     - `tokens[1] = "password"`
     - `tokens[2] = "for"`
@@ -153,10 +165,11 @@ function solveDeskMemo(hint):
     - `tokens[4] = "terminal"`
     - `tokens[5] = "is:"`
     - `tokens[6] = "hunter2"`
-3.  **Extraction:** The solver identifies `tokens[6]` as the last element.
-4.  **Result:** The solver returns "hunter2".
+10. **Extraction:** The solver identifies `tokens[6]` as the last element.
+11. **Result:** The solver returns "hunter2".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Trailing Punctuation:** In some cases, the password might be followed by a period or other punctuation. The solver must be robust enough to strip these if necessary, though in DarkNet, the token is usually clean. A regex-based approach can be used for more robust cleaning if the environment becomes noisier.
 - **Empty Hint:** If the hint is empty, the algorithm should handle the error gracefully by returning a failure state. This prevents the script from crashing due to an out-of-bounds array access.
 - **Multiple Spaces:** The split function should handle multiple consecutive spaces correctly (e.g., by filtering out empty tokens). This ensures that the "last token" is always the actual password and not an empty string.
@@ -167,6 +180,7 @@ function solveDeskMemo(hint):
 - **Multiple Spaces:** The split function should handle multiple consecutive spaces correctly (e.g., by filtering out empty tokens).
 
 #### Common Failure Modes
+
 - **Incorrect Delimiter:** If the hint uses a different delimiter than whitespace (e.g., a colon or comma), the split operation might fail to isolate the password, resulting in the entire hint being treated as the password. This will lead to an authentication failure.
 - **Pattern Change:** If the password is moved to the middle of the hint or if additional text is appended after the password, the "last token" logic will fail. The solver would need a more sophisticated pattern-matching approach (e.g., regex) to find the password.
 - **Noise Injection:** If the hint contains trailing noise after the password (e.g., "password: hunter2 [system log]"), the solver will extract the noise instead of the password.
@@ -183,10 +197,13 @@ function solveDeskMemo(hint):
 FreshInstall_1.0 represents the use of default, factory-set credentials. Many systems are deployed with standard passwords like "admin" or "12345" that are never changed by the end-user. This model tests for these common weaknesses, which remain one of the most prevalent security risks in both virtual and physical networks. It emphasizes the "low-hanging fruit" aspect of penetration testing, where simple, well-known values can grant full access to a system. In the DarkNet, this model appears frequently in the early segments, representing newly deployed or poorly maintained nodes. It is a Tier 1 model, requiring no complex computation but rather a simple check against a known list of defaults. The model highlights the human element of security, where convenience often takes precedence over safety. For an attacker, FreshInstall is a gift, providing a quick and easy way to expand their network footprint. The solver for this model is a simple dictionary attack with a very small, fixed search space. It is highly efficient and has a high probability of success on vulnerable nodes. Understanding FreshInstall is about recognizing the patterns of neglect that often plague large-scale network deployments. It is the first thing an automated scanner checks after ZeroLogon, as it provides the highest return on investment for the least amount of effort. In the context of BitNode 15, it is a reliable way to gain access to Tier 1 servers and establish a base of operations for deeper penetration.
 
 #### Formal CS Problem Statement
+
 Let $D = \{d_1, d_2, \dots, d_k\}$ be a finite, static dictionary of common default passwords. The goal is to find $P \in D$ such that $A(P) = True$. In DarkNet, $D$ is exactly `["admin", "password", "0000", "12345"]`. This is a search problem over a very small, discrete space. The probability of success for any single attempt is $1/k$ if the password is chosen uniformly from the set. Since the set is so small, the total search time is negligible. The problem can be viewed as a degenerate case of a dictionary attack where the dictionary is hard-coded and extremely limited. Mathematically, the entropy of the password is $\log_2(k)$, which for $k=4$ is exactly 2 bits. This is an incredibly low level of security. The search space is so small that even with significant network latency, the total time to crack the password is minimal. The problem is equivalent to finding a needle in a very small, well-defined haystack. The information required to solve the problem is entirely contained within the model definition itself, requiring no external hints or data from the target server. This makes it a "blind" attack that is highly effective against unconfigured systems. The simplicity of the problem statement belies its effectiveness in real-world scenarios.
 
 #### Optimal Algorithm
+
 The algorithm is a linear search through the small, fixed dictionary. The solver iterates through each candidate password and attempts to authenticate. The first successful attempt terminates the search. This is a "fail-fast" approach that minimizes the number of network calls. The algorithm is deterministic and guarantees a solution if the password is in the dictionary. It is the most efficient way to handle a small, known search space. The implementation is straightforward and requires no complex data structures or logic.
+
 ```pseudocode
 function solveFreshInstall():
     // The fixed set of default credentials used in DarkNet.
@@ -207,19 +224,20 @@ function solveFreshInstall():
 function solveFreshInstall():
     // Define the set of known default credentials.
     dictionary = ["admin", "password", "0000", "12345"]
-    
+
     // Iterate through each candidate in the dictionary.
     for each password in dictionary:
         // Attempt to authenticate with the current candidate.
         if authenticate(password) == True:
             // If successful, return the password.
             return password
-            
+
     // If none of the candidates work, return a failure state.
     return failure
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(k)$, where $k$ is the size of the dictionary. Since $k=4$, this is effectively $O(1)$. The number of attempts is capped at a very low constant, making this one of the fastest solvers. The execution time is dominated by the network latency of the authentication calls rather than the local processing time. Even in the worst case, the solver only makes four requests, which is negligible in the context of a full network scan.
 - **Space Complexity:** $O(1)$, as the dictionary size is constant and small. The memory required to store the four strings is trivial and does not grow with the complexity of the network. The solver does not need to maintain any complex state or store intermediate results. It is a stateless, lightweight operation.
 - **Network Complexity:** $O(k)$. The solver makes at most $k$ network requests. This is a very low overhead and is unlikely to trigger any security alerts or cause significant network congestion. It is a highly efficient way to gain access to a node.
@@ -227,6 +245,7 @@ function solveFreshInstall():
 - **Space Complexity:** $O(1)$, as the dictionary size is constant and small.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Initialization:** The solver identifies the model as FreshInstall_1.0 based on the server's metadata or the absence of a specific hint.
 2.  **Attempt 1:** The solver selects the first password in the dictionary, "admin", and sends it to the server. The server returns `false`.
 3.  **Attempt 2:** The solver selects the second password, "password", and sends it to the server. The server returns `true`.
@@ -235,11 +254,12 @@ function solveFreshInstall():
 6.  **Verification:** The manager script records the successful penetration and grants access to the server's resources.
 7.  **Post-Action:** The server is now backdoored, and the solver moves on to the next target in the network.
 8.  **Efficiency Note:** In this example, the solver only required two network calls to find the correct password, demonstrating the efficiency of the linear search on a small dictionary.
-2.  **Attempt 1:** The solver tries "admin". The server returns `false`.
-3.  **Attempt 2:** The solver tries "password". The server returns `true`.
-4.  **Result:** The solver returns "password".
+9.  **Attempt 1:** The solver tries "admin". The server returns `false`.
+10. **Attempt 2:** The solver tries "password". The server returns `true`.
+11. **Result:** The solver returns "password".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Fixed Set:** The dictionary is guaranteed to be one of the four specified strings: `["admin", "password", "0000", "12345"]`. Any deviation from this set indicates a different model or a custom configuration. The solver should not attempt any passwords outside of this set.
 - **Order:** The order of attempts does not matter for correctness, but trying the most common ones first might save a few milliseconds. In practice, the order is usually "admin", "password", "0000", "12345". This order is based on historical data of the most common default credentials.
 - **No Hint Required:** Like ZeroLogon, this model does not provide a hint because the search space is already known and small. The model type itself is the only information needed to solve the problem.
@@ -250,6 +270,7 @@ function solveFreshInstall():
 - **Case Sensitivity:** The passwords are case-sensitive and must be provided exactly as defined in the dictionary.
 
 #### Common Failure Modes
+
 - **Exhaustion:** If none of the four passwords work, the model is either not FreshInstall or the environment has been modified. This should trigger a fallback to a more general dictionary attack or a manual review of the server's configuration.
 - **Rate Limiting:** While not a major factor in DarkNet, repeated failed attempts in a real-world scenario would trigger a lockout. The solver should be aware of any such limits and implement a delay between attempts if necessary.
 - **Model Misidentification:** If the solver tries these four passwords on a server with a different model (e.g., one that requires a complex numeric password), it will waste four authentication cycles and fail to gain access.
@@ -266,10 +287,13 @@ function solveFreshInstall():
 CloudBlare(tm) is a simplified CAPTCHA (Completely Automated Public Turing test to tell Computers and Humans Apart). It presents a challenge where the "signal" (the password) is obscured by "noise" (filler characters). The goal is to filter out the noise to reveal the underlying password. This model simulates basic anti-bot measures that rely on simple character filtering. It tests the attacker's ability to implement a basic filter or regular expression to isolate specific character classes. In the DarkNet, the signal is always numeric, while the noise consists of alphabetic characters. This clear separation makes the filtering process straightforward but essential. The name is a humorous take on Cloudflare, a popular web security and performance company. In the context of the game, it represents a Tier 1 security layer that is easily bypassed by automated scripts. The model highlights the importance of data sanitization and the risks of relying on weak obfuscation techniques. For an attacker, CloudBlare is a minor hurdle that can be cleared with a single pass over the input data. The solver is highly efficient and provides a 100% success rate once the hint is captured. It is a common model in the early segments of the DarkNet, serving as a test of the player's basic string manipulation capabilities. Understanding CloudBlare is about recognizing the difference between signal and noise in a data stream. It is a fundamental skill in both data science and cybersecurity. In BitNode 15, it is a reliable way to gain access to Tier 1 and Tier 2 servers, providing a steady stream of new nodes for the player's network. The model is stable and predictable, making it an ideal target for early-game automation.
 
 #### Formal CS Problem Statement
+
 Let $H$ be a hint string consisting of characters from a set $\Sigma$. Let $\Sigma_{signal} \subset \Sigma$ be the set of valid password characters (in this case, digits `[0-9]`). Let $\Sigma_{noise} = \Sigma \setminus \Sigma_{signal}$ be the set of filler characters. The goal is to construct a string $P$ such that $P$ consists only of the characters in $H$ that belong to $\Sigma_{signal}$, in their original relative order. This is a projection operation from the space of all strings over $\Sigma$ to the space of strings over $\Sigma_{signal}$. The relative order of the signal characters is preserved, which is a critical property of the transformation. The problem can be solved by a single pass over the input string, making it highly efficient. Mathematically, if we define a filter function $F(c)$ such that $F(c) = c$ if $c \in \Sigma_{signal}$ and $F(c) = \epsilon$ otherwise, then $P = F(H_1) + F(H_2) + \dots + F(H_n)$. The entropy of the password is reduced to the entropy of the signal characters within the hint. Since the signal characters are explicitly provided, the search space is reduced to a single point. The complexity of the problem is $O(n)$, where $n$ is the length of the hint string. This is the optimal complexity for any algorithm that must process the entire input. The problem is a classic example of data extraction from a noisy channel. It demonstrates that even with significant noise, the signal can be recovered perfectly if the filtering criteria are known. In the DarkNet, the filtering criteria are fixed (digits only), making the problem trivial to solve once identified.
 
 #### Optimal Algorithm
+
 Iterate through the hint string and append any character that is a digit to a new string. This can be implemented using a simple loop or a regular expression that replaces all non-digit characters with an empty string. The loop-based approach is often more transparent and easier to debug in a pseudocode context. The algorithm is a "one-shot" solver that does not require iteration or feedback from the server. It is highly efficient and handles hints of any length.
+
 ```pseudocode
 function solveCloudBlare(hint):
     // Initialize an empty string to store the extracted digits.
@@ -292,19 +316,20 @@ function solveCloudBlare(hint):
 function solveCloudBlare(hint):
     // Initialize an empty string to store the extracted digits.
     password = ""
-    
+
     // Iterate through each character in the hint string.
     for each char in hint:
         // Check if the character is a digit (0-9).
         if isDigit(char):
             // If it is a digit, append it to the password string.
             password = password + char
-            
+
     // Return the resulting string of digits.
     return password
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(n)$, where $n$ is the length of the hint string. We visit each character exactly once to perform the digit check. The complexity is linear with respect to the input size, which is the optimal complexity for this type of problem. The time taken scales predictably with the length of the hint, ensuring consistent performance across different servers.
 - **Space Complexity:** $O(n)$, to store the resulting password string. In the worst case, where the entire hint is composed of digits, the output string will be the same length as the input. The memory usage is minimal and is only required during the extraction process. The resulting string is typically much shorter than the hint, further reducing the actual space required.
 - **Efficiency:** This is an extremely efficient solver, as it requires no complex data structures or recursive calls. It is well-suited for high-speed automation and can process thousands of hints per second. The primary bottleneck is the network latency of fetching the hint and sending the password, rather than the local processing time.
@@ -312,6 +337,7 @@ function solveCloudBlare(hint):
 - **Space Complexity:** $O(n)$, to store the resulting password string.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input Hint:** "a1b2c3d4e5"
 2.  **Initialization:** The solver creates an empty string `password = ""`.
 3.  **Iteration 1:** The solver examines 'a'. It is not a digit. The solver skips it.
@@ -328,19 +354,20 @@ function solveCloudBlare(hint):
 14. **Result:** The solver returns "12345" to the manager script.
 15. **Authentication:** The manager script calls `ns.darknet.authenticate(hostname, "12345")` and receives a success response.
 16. **Post-Action:** Access is granted, and the server is backdoored.
-2.  **Iteration 1:** 'a' is not a digit. Skip.
-3.  **Iteration 2:** '1' is a digit. `password = "1"`.
-4.  **Iteration 3:** 'b' is not a digit. Skip.
-5.  **Iteration 4:** '2' is a digit. `password = "12"`.
-6.  **Iteration 5:** 'c' is not a digit. Skip.
-7.  **Iteration 6:** '3' is a digit. `password = "123"`.
-8.  **Iteration 7:** 'd' is not a digit. Skip.
-9.  **Iteration 8:** '4' is a digit. `password = "1234"`.
-10. **Iteration 9:** 'e' is not a digit. Skip.
-11. **Iteration 10:** '5' is a digit. `password = "12345"`.
-12. **Result:** The solver returns "12345".
+17. **Iteration 1:** 'a' is not a digit. Skip.
+18. **Iteration 2:** '1' is a digit. `password = "1"`.
+19. **Iteration 3:** 'b' is not a digit. Skip.
+20. **Iteration 4:** '2' is a digit. `password = "12"`.
+21. **Iteration 5:** 'c' is not a digit. Skip.
+22. **Iteration 6:** '3' is a digit. `password = "123"`.
+23. **Iteration 7:** 'd' is not a digit. Skip.
+24. **Iteration 8:** '4' is a digit. `password = "1234"`.
+25. **Iteration 9:** 'e' is not a digit. Skip.
+26. **Iteration 10:** '5' is a digit. `password = "12345"`.
+27. **Result:** The solver returns "12345".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Only Digits:** The signal is always composed of digits in the current DarkNet implementation. This simplifies the filtering logic significantly, as the solver only needs to check for a single character class.
 - **No Digits:** If the hint contains no digits, the password is an empty string. The solver should handle this case without error and return `""`. This is a valid, albeit rare, edge case.
 - **Mixed Noise:** The noise can consist of any non-digit characters, including symbols, whitespace, or non-ASCII characters. The `isDigit` check must be robust enough to handle these and correctly identify only the numeric digits.
@@ -352,6 +379,7 @@ function solveCloudBlare(hint):
 - **Large Hints:** The hint string can be quite long, but the $O(n)$ complexity ensures it is processed quickly.
 
 #### Common Failure Modes
+
 - **Non-Digit Signal:** If the model were to change to include letters as signal, the `isDigit` check would fail. A more flexible approach using a whitelist of allowed characters or a regular expression would be safer for future-proofing.
 - **Large Hints:** Very long hints could increase the processing time, though $O(n)$ remains efficient. In extreme cases, this could lead to a timeout if the network is slow or the player's CPU is heavily loaded.
 - **Regex Errors:** If using a regular expression, an incorrect pattern (e.g., one that strips digits instead of noise) will result in an incorrect password and an authentication failure.
@@ -369,10 +397,13 @@ function solveCloudBlare(hint):
 Laika4 is a domain-specific dictionary attack. It simulates a scenario where a user has chosen a password based on a common theme—in this case, popular dog names. This is a step up from FreshInstall as the dictionary is slightly larger and themed. It represents a more targeted approach to password cracking, where knowledge of the user's preferences or the system's context can be used to narrow down the search space. In the DarkNet, this model is often found on servers with a more "personal" or "informal" feel. The name "Laika" is a nod to the famous Soviet space dog, further reinforcing the theme. The number "4" in the name refers to the size of the dictionary used in the current implementation. This model highlights the vulnerability of using predictable, themed passwords. Even if the theme is known, the specific choice within that theme must be determined through trial and error. The search space is small enough that a linear scan is the optimal strategy. For an attacker, Laika4 is a Tier 2 model, requiring a bit more effort than Tier 1 but still being highly automated. The solver is reliable and provides a 100% success rate once the model is identified. It is a common model in the mid-segments of the DarkNet, representing servers that have some level of custom configuration but still rely on weak passwords. Understanding Laika4 is about recognizing the patterns of human behavior that lead to predictable security choices. It is a classic example of how social engineering or contextual knowledge can be used to bypass technical security measures. In BitNode 15, it is a reliable way to gain access to Tier 2 servers and expand the player's network into more secure segments. The model is stable and predictable, making it an ideal target for mid-game automation.
 
 #### Formal CS Problem Statement
+
 Let $D_{dog}$ be a set of common dog names. In the DarkNet implementation, this set is exactly `["fido", "spot", "rover", "max"]`. The goal is to find $P \in D_{dog}$ such that $A(P) = True$. This is a search problem over a small, themed dictionary. The size of the dictionary is fixed at 4 entries, making the search extremely fast. The problem highlights the vulnerability of using predictable, themed passwords. Even if the theme is known, the specific choice within that theme must be determined through trial and error. The search space is small enough that a linear scan is the optimal strategy. Mathematically, the entropy of the password is $\log_2(k)$, where $k=4$ is the number of names in the dictionary. This corresponds to 2 bits of entropy, which is extremely low. The probability of success for any single attempt is $1/k$, and the expected number of attempts to find the correct password is $(k+1)/2 = 2.5$. This makes the attack highly efficient and predictable. The information required to solve the problem is entirely contained within the model definition, requiring no external hints from the target server. This is a "blind" dictionary attack that targets a specific, well-defined theme. The simplicity of the problem statement belies its effectiveness in scenarios where users choose passwords based on common categories. In the DarkNet, the theme is always dog names, and the list is always the same four entries. This makes the model a trivial target for automation once identified.
 
 #### Optimal Algorithm
+
 Iterate through the fixed list of 4 dog names. The solver attempts to authenticate with each name in sequence until a match is found. This is a straightforward implementation of a dictionary attack. The algorithm is deterministic and guarantees a solution if the password is in the dictionary. It is the most efficient way to handle a small, known search space. The implementation is simple and requires no complex logic or data structures.
+
 ```pseudocode
 function solveLaika4():
     // The specific set of dog names used in DarkNet.
@@ -395,19 +426,20 @@ function solveLaika4():
 function solveLaika4():
     // Define the set of common dog names used as passwords.
     names = ["fido", "spot", "rover", "max", "buddy", "rex", "duke", "bear", "lucky", "rocky"]
-    
+
     // Iterate through each name in the list.
     for each name in names:
         // Attempt to authenticate with the current name.
         if authenticate(name) == True:
             // If successful, return the name.
             return name
-            
+
     // If none of the names work, return a failure state.
     return failure
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(k)$, where $k=4$. This is constant time. The number of attempts is fixed and very small, ensuring a quick resolution. The execution time is dominated by the network latency of the authentication calls rather than the local processing time. Even in the worst case, the solver only makes four requests, which is negligible in the context of a full network scan. The time taken is independent of the password length or the server's depth.
 - **Space Complexity:** $O(1)$, as the list size is fixed. The memory required to store the four names is minimal and does not scale with any input parameters. The solver does not need to maintain any complex state or store intermediate results. It is a stateless, lightweight operation that is highly efficient in resource-constrained environments.
 - **Network Complexity:** $O(k)$. The solver makes at most $k$ network requests. This is a very low overhead and is unlikely to trigger any security alerts or cause significant network congestion. It is a highly efficient way to gain access to a node.
@@ -423,13 +455,14 @@ function solveLaika4():
 7.  **Verification:** The manager script records the successful penetration and grants access to the server's resources.
 8.  **Post-Action:** The server is now backdoored, and the solver moves on to the next target in the network.
 9.  **Efficiency Note:** In this example, the solver required three network calls to find the correct password, which is close to the expected average of 2.5 attempts.
-1.  **Initialization:** The solver is invoked for a Laika4 server.
-2.  **Attempt 1:** "fido". Server returns `false`.
-3.  **Attempt 2:** "spot". Server returns `false`.
-4.  **Attempt 3:** "rover". Server returns `true`.
-5.  **Result:** The solver returns "rover".
+10. **Initialization:** The solver is invoked for a Laika4 server.
+11. **Attempt 1:** "fido". Server returns `false`.
+12. **Attempt 2:** "spot". Server returns `false`.
+13. **Attempt 3:** "rover". Server returns `true`.
+14. **Result:** The solver returns "rover".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Case Sensitivity:** The names are typically lowercase in the DarkNet implementation. The solver should ensure it sends the names in the correct case (e.g., "fido" instead of "Fido").
 - **Fixed List:** The list is exactly 4 entries long: `["fido", "spot", "rover", "max"]`. Any other dog names (e.g., "buddy", "rex") are not part of this model in the current version of the game.
 - **No Hint:** Like other Tier 1 and 2 models, Laika4 does not provide a hint, as the search space is predefined and small. The model type itself is the only information needed.
@@ -441,6 +474,7 @@ function solveLaika4():
 - **Theme Consistency:** The model is guaranteed to use one of these 10 names.
 
 #### Common Failure Modes
+
 - **Missing Name:** If the password is a dog name not in the list (e.g., "buddy"), the attack fails. This would indicate a change in the game's constants or a different model that uses a larger dictionary.
 - **Authentication Delay:** With 4 attempts, the total time taken is $4 \times \text{authTime}$. While small, this is still more than a Tier 1 solver. In a high-latency environment, this delay can become noticeable.
 - **Model Misidentification:** Trying dog names on a server that requires a numeric password or a different theme will result in wasted attempts and failure to gain access.
@@ -458,10 +492,13 @@ function solveLaika4():
 NIL is a sophisticated side-channel attack simulation. It provides character-by-character feedback, allowing an attacker to determine the correctness of each position in the password independently. This reduces the search space from exponential to linear. This model represents a critical vulnerability where a system leaks information about the internal state of its authentication process. Instead of a simple "yes/no" for the entire password, the system reveals which specific characters are correct. This is akin to a "timing attack" or a "debugging interface" that was left active in production. It is one of the most powerful models for an attacker, as it guarantees a solution in a predictable amount of time. The name "NIL" might refer to the null-terminated strings in C or the concept of a null pointer, hinting at the low-level nature of the vulnerability. In the DarkNet, NIL is a Tier 2 model, appearing as the player moves deeper into the network. It tests the player's ability to implement an iterative search that builds a solution piece by piece. The model is highly reliable and provides a 100% success rate once the oracle is accessed. It is a classic example of how a small information leak can completely compromise a system's security. For an attacker, NIL is a high-value target, as it allows them to crack complex passwords that would be impossible to brute-force. Understanding NIL is about recognizing the power of side-channel information and how it can be used to decompose a large problem into smaller, manageable parts. In BitNode 15, it is a key tool for penetrating the mid-tier segments of the network, providing access to servers with significant RAM and compute resources. The model is stable and predictable, making it an ideal target for mid-game automation. It is a reminder that the security of a system is only as strong as its weakest information leak.
 
 #### Formal CS Problem Statement
+
 Let $P$ be a password of length $L$. Let $O(i, c)$ be an oracle function that returns $True$ if the character at position $i$ in the password is $c$, and $False$ otherwise. The goal is to reconstruct $P$ by querying $O$ for all $i \in [0, L-1]$ and $c \in \Sigma$, where $\Sigma$ is the character set. This is a search problem over a product space $\Sigma^L$, but the oracle allows us to decompose it into $L$ independent searches over $\Sigma$. The total number of queries is reduced from $|\Sigma|^L$ to $L \times |\Sigma|$. This is a massive reduction in complexity, transforming an intractable problem into a trivial one. Mathematically, the entropy of the password is $L \log_2(|\Sigma|)$, but the oracle reduces the effective entropy to $\log_2(|\Sigma|)$ per position. The total effort required is linear with respect to the password length, rather than exponential. The oracle provides a "gradient" that points directly to the correct character at each position, allowing the solver to converge on the solution with 100% certainty. The information gain from each query is $\log_2(|\Sigma|)$ bits if the query is successful, and a smaller amount if it fails. The optimal strategy is to iterate through the charset for each position until the oracle returns `True`. This ensures that each position is solved in at most $|\Sigma|$ queries. The total number of queries is bounded by $L \times |\Sigma|$, which is a very small number for typical password lengths and charsets. This model demonstrates the devastating impact of position-based feedback on password security. It is a fundamental concept in cryptanalysis and side-channel attacks.
 
 #### Optimal Algorithm
+
 For each position in the password, iterate through the character set until the oracle confirms the correct character. The solver builds the password one character at a time, moving to the next position only after the current one is correctly identified. This is a greedy approach that is guaranteed to find the optimal solution because each position is independent. The algorithm is highly efficient and handles passwords of any length.
+
 ```pseudocode
 function solveNIL(passwordLength):
     // Initialize an array to store the discovered characters.
@@ -490,10 +527,10 @@ function solveNIL(passwordLength):
 function solveNIL(passwordLength):
     // Initialize an array to store the discovered characters.
     password = array of length passwordLength
-    
+
     // Define the character set to search through.
     charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-    
+
     // Iterate through each position in the password.
     for i from 0 to passwordLength - 1:
         // For each position, try every character in the charset.
@@ -504,12 +541,13 @@ function solveNIL(passwordLength):
                 password[i] = char
                 // Move to the next position.
                 break
-                
+
     // Join the characters into a single string and return it.
     return join(password)
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L \times |\Sigma|)$, where $L$ is the password length and $|\Sigma|$ is the size of the character set. This is linear with respect to the length of the password, making it extremely efficient even for long passwords. The time taken scales predictably with both $L$ and $|\Sigma|$, ensuring consistent performance. The average number of queries is $L \times |\Sigma| / 2$, which is a very small number for typical DarkNet passwords.
 - **Space Complexity:** $O(L)$, to store the characters of the password as they are discovered. The memory usage is minimal and scales linearly with the password length. The solver does not need to maintain any complex data structures or store a large number of intermediate results. It is a lightweight, memory-efficient operation.
 - **Query Efficiency:** The number of calls to the oracle is the primary factor in the solver's performance. Each call is a separate network request, so the total time is dominated by network latency. The linear complexity ensures that the number of requests remains manageable even for complex passwords.
@@ -517,6 +555,7 @@ function solveNIL(passwordLength):
 - **Space Complexity:** $O(L)$, to store the characters of the password as they are discovered.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Initialization:** The solver determines the password length is 3 based on the hint provided by the server.
 2.  **Position 0:**
     - The solver tries 'a': The oracle returns "no".
@@ -534,19 +573,20 @@ function solveNIL(passwordLength):
 7.  **Verification:** The manager script calls `ns.darknet.authenticate(hostname, "cat")`. The server accepts the password and grants access.
 8.  **Post-Action:** The server is backdoored, and its resources are added to the player's pool.
 9.  **Efficiency Note:** In this example, the solver required only a few queries per position, demonstrating the power of the side-channel attack.
-2.  **Position 0:**
+10. **Position 0:**
     - Try 'a': "no"
     - Try 'b': "no"
     - Try 'c': "yes" -> `password[0] = 'c'`
-3.  **Position 1:**
+11. **Position 1:**
     - Try 'a': "yes" -> `password[1] = 'a'`
-4.  **Position 2:**
+12. **Position 2:**
     - Try 'a': "no"
     - ...
     - Try 't': "yes" -> `password[2] = 't'`
-5.  **Result:** The solver returns "cat".
+13. **Result:** The solver returns "cat".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Feedback Format:** The feedback is usually a string like "yes" or "no" for a specific index. The solver must parse this string correctly and handle any variations in the response format.
 - **Charset:** The charset is typically alphanumeric (lowercase letters and digits). If the password contains other characters (e.g., symbols or uppercase letters), the solver must be updated to include them in its search.
 - **Length Discovery:** The password length is usually provided in the hint or can be determined by probing the server. The solver must have the correct length to function properly.
@@ -559,6 +599,7 @@ function solveNIL(passwordLength):
 - **Length Discovery:** The password length is usually provided in the hint.
 
 #### Common Failure Modes
+
 - **Unknown Charset:** If the password contains characters outside the expected set (e.g., symbols, spaces, or uppercase letters), the inner loop will never find a match for that position, leading to an infinite loop or a failure.
 - **Length Mismatch:** If the assumed password length is incorrect, the algorithm will either fail to find all characters or will attempt to find characters at non-existent positions, resulting in an incorrect password.
 - **Oracle Failure:** If the oracle becomes unavailable or returns inconsistent results (e.g., due to a mutation or a server restart), the solver will fail to reconstruct the password.
@@ -576,9 +617,11 @@ function solveNIL(passwordLength):
 Pr0verFl0 simulates a buffer overflow vulnerability. In low-level programming, failing to check the bounds of a buffer can allow an attacker to overwrite adjacent memory. In this model, the "authentication" is bypassed by overflowing the input buffer.
 
 #### Formal CS Problem Statement
+
 Let $B$ be a buffer of size $L$. The system expects an input of length $L$. However, providing an input of length $2L$ causes the internal state to be overwritten such that the authentication check is bypassed. The only constraint is that the overflow characters must not be a specific "null" or "terminator" character (in this case, "■").
 
 #### Optimal Algorithm
+
 Construct a string of length $2 \times \text{password\_length}$ using any valid character (e.g., 'A').
 
 ```pseudocode
@@ -586,27 +629,31 @@ function solvePr0verFl0(passwordLength):
     // The goal is to overflow the input buffer to bypass authentication.
     // We construct a string that is twice the expected length.
     overflowString = repeat("A", 2 * passwordLength)
-    
+
     // Return the overflow string.
     return overflowString
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L)$, where $L$ is the password length. Constructing the string takes linear time.
 - **Space Complexity:** $O(L)$, to store the overflow string.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Initialization:** The server expects an 8-character password.
 2.  **Action:** The solver calculates the overflow length: $8 \times 2 = 16$.
 3.  **Construction:** The solver creates a string of 16 'A's: "AAAAAAAAAAAAAAAA".
 4.  **Result:** The solver returns the overflow string, and the server grants access.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Forbidden Character:** The character "■" must be avoided as it likely acts as a terminator that prevents the overflow.
 - **Multiplier:** The overflow must be exactly or at least $2 \times$ the expected length.
 - **Buffer Size:** The expected length $L$ is provided in the hint.
 
 #### Common Failure Modes
+
 - **Insufficient Length:** If the string is too short, the overflow won't reach the target memory area.
 - **Character Filtering:** If the system filters out the chosen character, the attack will fail.
 - **Terminator Collision:** If the chosen character happens to be the terminator for this specific system.
@@ -618,14 +665,17 @@ function solvePr0verFl0(passwordLength):
 PHP 5.4 represents a more complex challenge involving permutations and a distance-based feedback mechanism. It is named after an era of web development known for quirky behaviors and specific vulnerabilities.
 
 #### Formal CS Problem Statement
+
 Given a set of digits $S = \{d_1, d_2, \dots, d_n\}$, find the correct permutation $P$ of $S$. The server provides feedback in the form of the Root Mean Square Deviation (RMSD) between the guess $G$ and the actual password $P$:
 $$RMSD(G, P) = \sqrt{\frac{1}{n}\sum_{i=1}^{n}(G_i - P_i)^2}$$
 where $G_i$ and $P_i$ are the digits at position $i$.
 
 #### Mathematical Foundation
+
 The RMSD is a measure of the average distance between the elements of two vectors. In this context, it provides a "gradient" that can be followed to find the correct permutation. Since the digits are known, the problem is reduced to finding the correct ordering.
 
 #### Optimal Algorithm
+
 Since the search space is $n!$, a brute-force approach is only feasible for small $n$. However, the RMSD provides a continuous metric that can guide a search algorithm like Hill Climbing or Simulated Annealing. Alternatively, a backtracking algorithm with pruning can be used.
 
 ```pseudocode
@@ -633,7 +683,7 @@ function solvePHP54(sortedDigits):
     // Start with the sorted digits as the initial guess.
     currentPermutation = sortedDigits
     minRMSD = getRMSD(currentPermutation)
-    
+
     // Continue searching as long as the RMSD is greater than zero.
     while minRMSD > 0:
         improved = false
@@ -642,7 +692,7 @@ function solvePHP54(sortedDigits):
             for j from i+1 to n-1:
                 nextPermutation = swap(currentPermutation, i, j)
                 currentRMSD = getRMSD(nextPermutation)
-                
+
                 // If the swap reduces the RMSD, accept it.
                 if currentRMSD < minRMSD:
                     minRMSD = currentRMSD
@@ -650,20 +700,22 @@ function solvePHP54(sortedDigits):
                     improved = true
                     break
             if improved: break
-            
+
         // If no swap improves the RMSD, we might be at a local minimum.
         if not improved:
             // Handle local minimum (e.g., by random restart or backtracking).
             break
-            
+
     return currentPermutation
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(n!)$ in the worst case, but the RMSD heuristic typically reduces this to $O(n^2)$ or $O(n^3)$ iterations.
 - **Space Complexity:** $O(n)$, to store the current permutation.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Digits:** {1, 2, 3}
 2.  **Initial Guess:** "123", RMSD = 0.816
 3.  **Swap (1, 2):** "132", RMSD = 0.408 (Improvement!)
@@ -672,11 +724,13 @@ function solvePHP54(sortedDigits):
 6.  **Result:** The solver returns "231".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Digits Only:** The password is always a permutation of the provided digits.
 - **Precision:** The RMSD is a floating-point number; comparisons should account for small epsilon values.
 - **Duplicate Digits:** The algorithm must handle cases where the set $S$ contains duplicate digits.
 
 #### Common Failure Modes
+
 - **Local Minima:** Hill climbing can get stuck in local minima. Using multiple restarts or a more robust search (like backtracking) is recommended.
 - **Large $n$:** If the password is very long, the permutation space becomes prohibitively large.
 - **Floating Point Errors:** Precision issues when comparing RMSD values.
@@ -688,29 +742,32 @@ function solvePHP54(sortedDigits):
 DeepGreen is a classic Mastermind-style game. It requires logical deduction based on two types of feedback: exact matches and misplaced characters.
 
 #### Formal CS Problem Statement
+
 Let $P$ be a secret code of length $L$ using characters from a set $\Sigma$. A guess $G$ returns a pair $(E, M)$, where:
+
 - $E$ (Exact): The number of positions $i$ such that $G_i = P_i$.
 - $M$ (Misplaced): The number of characters in $G$ that appear in $P$ but at different positions, excluding those already counted in $E$.
-The goal is to find $P$ in the minimum number of guesses.
+  The goal is to find $P$ in the minimum number of guesses.
 
 #### Optimal Algorithm
+
 Knuth's Five-Guess Algorithm is a well-known strategy for $L=4, |\Sigma|=6$. For the general case, an information-theoretic approach that selects the guess maximizing the expected reduction in the set of possible codes is optimal.
 
 ```pseudocode
 function solveDeepGreen(charset, length):
     // Generate all possible codes given the charset and length.
     possibleCodes = generateAllCodes(charset, length)
-    
+
     while length(possibleCodes) > 1:
         // Select the guess that provides the most information.
         guess = selectBestGuess(possibleCodes)
-        
+
         // Get feedback from the server for the chosen guess.
         feedback = getFeedback(guess)
-        
+
         // Filter the set of possible codes based on the feedback.
         possibleCodes = filter(possibleCodes, guess, feedback)
-        
+
     // Return the remaining code.
     return possibleCodes[0]
 
@@ -720,10 +777,12 @@ function filter(codes, guess, feedback):
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(|\Sigma|^L)$ to generate the initial set. Filtering is $O(N)$ where $N$ is the number of remaining codes.
 - **Space Complexity:** $O(|\Sigma|^L)$, which can be large (e.g., $10^6$ for $L=6, |\Sigma|=10$).
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Secret:** "1234"
 2.  **Guess 1:** "1122", Feedback: (1, 1)
 3.  **Filter:** Keep only codes that would give (1, 1) if the secret were "1122".
@@ -733,11 +792,13 @@ function filter(codes, guess, feedback):
 7.  **Result:** The solver returns "1234".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Standard Rules:** Follows the standard Mastermind logic.
 - **Large Search Space:** For high difficulty, the number of possible codes can exceed RAM limits if not handled carefully (e.g., using a lazy filter).
 - **Charset Variety:** The charset can include digits, letters, or symbols.
 
 #### Common Failure Modes
+
 - **Memory Exhaustion:** Storing all possible codes for large $L$ and $|\Sigma|$.
 - **Inefficient Guessing:** Random guessing will take much longer than an optimized strategy.
 - **Feedback Parsing:** Errors in parsing the (Exact, Misplaced) tuple from the server response.
@@ -749,12 +810,15 @@ function filter(codes, guess, feedback):
 BellaCuore combines binary search with Roman numeral representation. It tests the ability to map a non-standard encoding to a linear domain where binary search is applicable.
 
 #### Formal CS Problem Statement
+
 The password is an integer $X \in [1, N]$ represented as a Roman numeral. The server provides feedback:
+
 - "ALTUS": The guess $G > X$.
 - "PARUM": The guess $G < X$.
-The goal is to find $X$ using $O(\log N)$ queries.
+  The goal is to find $X$ using $O(\log N)$ queries.
 
 #### Optimal Algorithm
+
 Perform a standard binary search in the integer domain. Convert each integer guess to its Roman numeral equivalent before sending it to the server.
 
 ```pseudocode
@@ -762,17 +826,17 @@ function solveBellaCuore(maxRange):
     // Initialize the search bounds.
     low = 1
     high = maxRange
-    
+
     while low <= high:
         // Calculate the midpoint of the current range.
         mid = floor((low + high) / 2)
-        
+
         // Convert the integer midpoint to a Roman numeral.
         romanGuess = toRoman(mid)
-        
+
         // Send the Roman numeral guess to the server.
         feedback = authenticate(romanGuess)
-        
+
         if feedback == "CORRECT":
             // If correct, return the Roman numeral.
             return romanGuess
@@ -782,15 +846,17 @@ function solveBellaCuore(maxRange):
         else if feedback == "PARUM":
             // If the guess is too low, adjust the lower bound.
             low = mid + 1
-            
+
     return failure
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(\log N \times \text{cost}(\text{toRoman}))$. Binary search is logarithmic, and Roman numeral conversion is linear with respect to the number of digits.
 - **Space Complexity:** $O(1)$, as we only store the bounds and the current guess.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Range:** [1, 100], Target: 42 (XLII)
 2.  **Guess 1:** 50 (L), Feedback: "ALTUS" -> Range: [1, 49]
 3.  **Guess 2:** 25 (XXV), Feedback: "PARUM" -> Range: [26, 49]
@@ -802,11 +868,13 @@ function solveBellaCuore(maxRange):
 9.  **Result:** The solver returns "XLII".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Roman Numeral Limits:** Standard Roman numerals only go up to 3999 (MMMCMXCIX). If the range is larger, a non-standard extension (like vinculum) might be needed, though DarkNet usually stays within standard limits.
 - **Zero:** Roman numerals have no representation for zero.
 - **Case Sensitivity:** Roman numerals are typically uppercase.
 
 #### Common Failure Modes
+
 - **Incorrect Conversion:** Errors in the `toRoman` or `fromRoman` logic.
 - **Off-by-One Errors:** Standard binary search pitfalls.
 - **Range Mismatch:** If the initial `maxRange` is too small, the target will never be found.
@@ -818,9 +886,11 @@ function solveBellaCuore(maxRange):
 AccountsManager_4.2 is a straightforward integer binary search. It represents a common debugging or administrative interface that leaks information about the target value through comparison feedback.
 
 #### Formal CS Problem Statement
+
 Find an integer $X \in [0, N]$ given feedback "Higher" or "Lower".
 
 #### Optimal Algorithm
+
 Standard binary search.
 
 ```pseudocode
@@ -828,14 +898,14 @@ function solveAccountsManager(maxRange):
     // Initialize the search bounds.
     low = 0
     high = maxRange
-    
+
     while low <= high:
         // Calculate the midpoint.
         mid = floor((low + high) / 2)
-        
+
         // Send the integer guess to the server.
         feedback = authenticate(mid)
-        
+
         if feedback == "CORRECT":
             // If correct, return the integer.
             return mid
@@ -845,25 +915,29 @@ function solveAccountsManager(maxRange):
         else if feedback == "Lower":
             // If the target is lower, adjust the upper bound.
             high = mid - 1
-            
+
     return failure
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(\log N)$.
 - **Space Complexity:** $O(1)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Range:** [0, 1000], Target: 750
 2.  **Guess 1:** 500, Feedback: "Higher" -> [501, 1000]
 3.  **Guess 2:** 750, Feedback: "CORRECT"
 4.  **Result:** The solver returns 750.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Range:** The maximum value $N$ is typically provided in the hint or can be inferred from the difficulty.
 - **Integer Domain:** The target is always a whole number.
 
 #### Common Failure Modes
+
 - **Infinite Loop:** If the feedback is inconsistent or the range is not correctly updated.
 - **Overflow:** If $N$ is extremely large, `(low + high)` might overflow before the division.
 - **Incorrect Feedback Interpretation:** Swapping the logic for "Higher" and "Lower".
@@ -875,9 +949,11 @@ function solveAccountsManager(maxRange):
 OctantVoxel tests the ability to perform base conversion. This is a fundamental CS skill, often used in data encoding, memory addressing, and cryptography.
 
 #### Formal CS Problem Statement
+
 Given a number $V$ in base $B_{in}$, convert it to base $B_{out}$. In DarkNet, this usually means converting from a given base (e.g., binary, octal, hexadecimal) to decimal (base 10).
 
 #### Optimal Algorithm
+
 Use the positional notation formula:
 $$Value = \sum_{i=0}^{L-1} d_i \times B^i$$
 where $d_i$ is the digit at position $i$ (starting from the right) and $B$ is the base.
@@ -887,27 +963,29 @@ function solveOctantVoxel(valueStr, base):
     // Initialize the decimal value.
     decimalValue = 0
     power = 0
-    
+
     // Iterate through the string from right to left.
     for i from length(valueStr) - 1 down to 0:
         // Convert the character to its numeric value.
         digit = charToValue(valueStr[i])
-        
+
         // Add the digit's contribution to the total.
         decimalValue = decimalValue + digit * (base ^ power)
-        
+
         // Increment the power for the next position.
         power = power + 1
-        
+
     // Return the decimal value as a string.
     return toString(decimalValue)
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L)$, where $L$ is the number of digits in the input string.
 - **Space Complexity:** $O(1)$ (excluding the output string).
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input:** "1011", Base: 2
 2.  **Calculation:**
     - $1 \times 2^0 = 1$
@@ -918,11 +996,13 @@ function solveOctantVoxel(valueStr, base):
 3.  **Result:** The solver returns "11".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Bases:** Can range from 2 to 36 (using A-Z for digits 10-35).
 - **Large Numbers:** Ensure the integer type can handle the resulting decimal value.
 - **Case Sensitivity:** Letters used as digits (A-Z) are typically case-insensitive.
 
 #### Common Failure Modes
+
 - **Incorrect Digit Mapping:** Mapping 'A' to 10, 'B' to 11, etc.
 - **Overflow:** The decimal value exceeding the maximum safe integer.
 - **Invalid Characters:** The input string containing characters not valid for the given base.
@@ -934,36 +1014,40 @@ function solveOctantVoxel(valueStr, base):
 Factori-Os involves finding the factors of a given integer. This is a core problem in number theory and forms the basis of many cryptographic algorithms (like RSA).
 
 #### Formal CS Problem Statement
+
 Given an integer $n$, find all positive integers $d$ such that $n \pmod d = 0$.
 
 #### Optimal Algorithm
+
 Trial division up to $\sqrt{n}$. For each $d \in [1, \sqrt{n}]$, if $d$ divides $n$, then both $d$ and $n/d$ are factors.
 
 ```pseudocode
 function solveFactoriOs(n):
     // Initialize an empty list to store the factors.
     factors = []
-    
+
     // Iterate from 1 up to the square root of n.
     for d from 1 to sqrt(n):
         // Check if d is a divisor of n.
         if n % d == 0:
             // If it is, add d to the list.
             append(factors, d)
-            
+
             // Also add the corresponding factor n/d, if it's different.
             if d != n / d:
                 append(factors, n / d)
-                
+
     // Sort the factors in ascending order and return the list.
     return sort(factors)
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(\sqrt{n})$.
 - **Space Complexity:** $O(\text{number of factors})$, which is typically small ($O(n^{1/3})$ on average).
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input:** 28
 2.  **Iteration 1:** $d=1$. $28\%1=0 \rightarrow$ Factors: {1, 28}
 3.  **Iteration 2:** $d=2$. $28\%2=0 \rightarrow$ Factors: {1, 28, 2, 14}
@@ -973,11 +1057,13 @@ function solveFactoriOs(n):
 7.  **Result:** The solver returns [1, 2, 4, 7, 14, 28].
 
 #### DarkNet Constraints and Edge Cases
+
 - **Format:** The answer might be the sum of factors, the count of factors, or the list itself.
 - **Perfect Squares:** Handle the case where $d = n/d$ to avoid duplicate factors.
 - **Large $n$:** For very large $n$, trial division is still efficient enough for DarkNet.
 
 #### Common Failure Modes
+
 - **Efficiency:** Using trial division up to $n$ instead of $\sqrt{n}$ for large $n$.
 - **Missing Factors:** Forgetting to include $n/d$ when $d$ is found.
 - **Sorting:** Failing to return the factors in the expected order.
@@ -989,11 +1075,13 @@ function solveFactoriOs(n):
 OpenWebAccessPoint is a unique model that doesn't require a direct algorithmic solution in the traditional sense. Instead, it represents a vulnerable node that leaks information about other nodes in the network.
 
 #### Formal CS Problem Statement
+
 The node acts as a "packet sniffer." It has a high vulnerability multiplier ($8\times$) which increases the rate at which it captures credentials from the network. The capture rate is defined by:
 $$Rate = 0.18 \times \text{vuln} \times 0.88^{(\text{difficulty} \times 1.3)}$$
 The goal is to maintain a connection to this node to passively accumulate passwords.
 
 #### Optimal Algorithm
+
 Deploy a long-running script on the node that monitors the "packet stream" and parses out credentials.
 
 ```pseudocode
@@ -1002,31 +1090,35 @@ function runSniffer():
     while true:
         // Capture the next packet from the network stream.
         packet = capturePacket()
-        
+
         // Check if the packet contains a credential pair.
         if packet contains "hostname:password":
             // Extract the hostname and password and store them in the database.
             extractAndStore(packet)
-            
+
         // Wait for a short interval before capturing the next packet.
         wait(interval)
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(1)$ per packet processed.
 - **Space Complexity:** $O(1)$ (excluding the database of captured passwords).
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Action:** Connect to an `OpenWebAccessPoint` server.
 2.  **Observation:** After 5 minutes, a packet is captured: "...noise... server-alpha:p4ssw0rd ...noise..."
 3.  **Result:** The solver extracts "server-alpha" and "p4ssw0rd" and adds them to the central database.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Vulnerability:** The $8\times$ multiplier makes this the most efficient way to get passwords for deep-tier servers.
 - **Decay:** As difficulty increases, the rate drops significantly, making it less effective for the deepest nodes.
 - **Persistence:** The sniffer must be restarted if the server is rebooted by a mutation.
 
 #### Common Failure Modes
+
 - **Script Termination:** If the script is killed (e.g., by a mutation), sniffing stops.
 - **Buffer Overflow:** If too many packets are captured without being processed.
 - **Parsing Errors:** Failing to correctly identify the hostname and password within the noisy packet.
@@ -1038,9 +1130,11 @@ function runSniffer():
 KingOfTheHill is an optimization problem. It simulates finding the peak of a signal or a "hill" in a mathematical landscape.
 
 #### Formal CS Problem Statement
+
 Find the value $x$ that maximizes a unimodal function $f(x)$ (specifically a Gaussian). Each query to the server returns $f(x)$ for a given $x$.
 
 #### Optimal Algorithm
+
 Ternary search is ideal for unimodal functions. It repeatedly divides the search space into three parts and discards the part that cannot contain the maximum.
 
 ```pseudocode
@@ -1050,7 +1144,7 @@ function solveKingOfTheHill(low, high, epsilon):
         // Divide the range into three equal parts.
         m1 = low + (high - low) / 3
         m2 = high - (high - low) / 3
-        
+
         // Compare the function values at the two midpoints.
         if f(m1) < f(m2):
             // The maximum must be in the right two-thirds.
@@ -1058,16 +1152,18 @@ function solveKingOfTheHill(low, high, epsilon):
         else:
             // The maximum must be in the left two-thirds.
             high = m2
-            
+
     // Return the average of the final bounds.
     return (low + high) / 2
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(\log_{1.5}(1/\epsilon))$, where $\epsilon$ is the desired precision.
 - **Space Complexity:** $O(1)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Range:** [0, 100], Target Peak: 72.5
 2.  **Iteration 1:** $m1=33.3, m2=66.6$. $f(33.3) < f(66.6) \rightarrow$ Range: [33.3, 100]
 3.  **Iteration 2:** $m1=55.5, m2=77.7$. $f(55.5) < f(77.7) \rightarrow$ Range: [55.5, 100]
@@ -1075,11 +1171,13 @@ function solveKingOfTheHill(low, high, epsilon):
 5.  **Result:** The solver converges to 72.5.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Gaussian:** The function is guaranteed to be a Gaussian, which is perfectly unimodal.
 - **Precision:** The server might require a specific number of decimal places.
 - **Range:** The initial range [0, 100] is usually sufficient.
 
 #### Common Failure Modes
+
 - **Non-Unimodal Functions:** If the function had multiple peaks, ternary search would fail.
 - **Step Size:** If the initial range is too small, the peak might be missed.
 - **Query Limit:** If the server limits the number of guesses.
@@ -1088,12 +1186,14 @@ function solveKingOfTheHill(low, high, epsilon):
 
 ### 16. RateMyPix.Auth (Tier 3)
 
-RateMyPix.Auth is a variation of the NIL model but with less granular feedback. Instead of knowing *which* character is correct, you only know *how many* are correct.
+RateMyPix.Auth is a variation of the NIL model but with less granular feedback. Instead of knowing _which_ character is correct, you only know _how many_ are correct.
 
 #### Formal CS Problem Statement
+
 Let $P$ be a password of length $L$. A guess $G$ returns a count $C = \sum_{i=0}^{L-1} [G_i = P_i]$, where $[condition]$ is the Iverson bracket (1 if true, 0 if false). The goal is to find $P$.
 
 #### Optimal Algorithm
+
 Start with an initial guess (e.g., all 'a's). Change one character at a time. If the count increases, the new character is correct. If it decreases, the previous character was correct. If it stays the same, neither was correct.
 
 ```pseudocode
@@ -1102,17 +1202,17 @@ function solveRateMyPix(length):
     password = repeat("a", length)
     currentCount = getCount(password)
     charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-    
+
     // Iterate through each position in the password.
     for i from 0 to length - 1:
         originalChar = password[i]
         // Try each character in the charset for the current position.
         for each char in charset:
             if char == originalChar: continue
-            
+
             password[i] = char
             newCount = getCount(password)
-            
+
             if newCount > currentCount:
                 // If the count increased, we found the correct character.
                 currentCount = newCount
@@ -1122,15 +1222,17 @@ function solveRateMyPix(length):
                 password[i] = originalChar
                 break
             // If the count stayed the same, continue to the next character.
-            
+
     return password
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L \times |\Sigma|)$.
 - **Space Complexity:** $O(L)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Secret:** "cat", Initial Guess: "aaa", Count: 1 (the 'a' in the middle)
 2.  **Position 0:**
     - Try 'b': "baa", Count: 1 (no change)
@@ -1144,11 +1246,13 @@ function solveRateMyPix(length):
 5.  **Result:** The solver returns "cat".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Emoji Feedback:** The count is provided as a string of pepper emojis (🌶). The solver must count the emojis.
 - **Initial Count:** If the initial guess has zero correct characters, the logic still holds.
 - **Charset:** The charset is typically alphanumeric.
 
 #### Common Failure Modes
+
 - **Incorrect Counting:** Failing to correctly parse the number of emojis.
 - **Reversion Logic:** Forgetting to revert the character when the count decreases.
 - **Charset Exhaustion:** If the character is not in the charset.
@@ -1160,21 +1264,23 @@ function solveRateMyPix(length):
 PrimeTime 2 moves into the realm of computational number theory, specifically the problem of integer factorization.
 
 #### Formal CS Problem Statement
+
 Given a large integer $n$, find its largest prime factor $p$.
 
 #### Optimal Algorithm
+
 Trial division is sufficient for the numbers typically encountered in DarkNet. Divide $n$ by 2 until it's odd, then by odd numbers starting from 3 up to $\sqrt{n}$.
 
 ```pseudocode
 function solvePrimeTime2(n):
     // Initialize the maximum prime factor.
     maxPrime = -1
-    
+
     // Remove all factors of 2.
     while n % 2 == 0:
         maxPrime = 2
         n = n / 2
-    
+
     // Check odd divisors starting from 3.
     d = 3
     while d * d <= n:
@@ -1182,19 +1288,21 @@ function solvePrimeTime2(n):
             maxPrime = d
             n = n / d
         d = d + 2
-    
+
     // If n is still greater than 1, then n itself is prime.
     if n > 1:
         maxPrime = n
-        
+
     return maxPrime
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(\sqrt{n})$ in the worst case (when $n$ is a product of two large primes).
 - **Space Complexity:** $O(1)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input:** 13195
 2.  **Calculation:**
     - $13195 / 5 = 2639$
@@ -1204,11 +1312,13 @@ function solvePrimeTime2(n):
 3.  **Result:** The solver returns 29.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Large $n$:** For very large $n$, trial division might be slow. Pollard's rho algorithm could be used as an alternative.
 - **Prime $n$:** If $n$ is prime, the answer is $n$.
 - **Format:** The answer is a single integer.
 
 #### Common Failure Modes
+
 - **Timeout:** If $n$ is extremely large and the algorithm is inefficient.
 - **Non-Prime Factors:** Returning a composite factor instead of a prime one.
 - **Precision:** Using standard floating-point numbers for very large integers.
@@ -1220,31 +1330,35 @@ function solvePrimeTime2(n):
 TopPass is a large-scale dictionary attack using the most common passwords found in real-world data breaches.
 
 #### Formal CS Problem Statement
+
 Let $D_{top}$ be a dictionary of approximately 90 common passwords (e.g., "123456", "password", "qwerty"). Find $P \in D_{top}$ such that $A(P) = True$.
 
 #### Optimal Algorithm
+
 Linear search through the dictionary.
 
 ```pseudocode
 function solveTopPass():
     // Load the dictionary of common passwords.
     dictionary = loadDictionary("top_passwords.txt")
-    
+
     // Iterate through each password in the dictionary.
     for each password in dictionary:
         // Attempt to authenticate with the current password.
         if authenticate(password) == True:
             // If successful, return the password.
             return password
-            
+
     return failure
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(k)$, where $k \approx 90$.
 - **Space Complexity:** $O(k)$, to store the dictionary.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Attempt 1:** "123456". Result: False.
 2.  **Attempt 2:** "password". Result: False.
 3.  **...**
@@ -1252,11 +1366,13 @@ function solveTopPass():
 5.  **Result:** The solver returns "iloveyou".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Static List:** The list is fixed within the game's logic.
 - **Time:** 90 attempts can take significant time if `authTime` is high.
 - **Case Sensitivity:** Passwords must match the dictionary exactly.
 
 #### Common Failure Modes
+
 - **Incomplete Dictionary:** If the solver's dictionary is missing the target password.
 - **Rate Limiting:** (Not applicable in DarkNet).
 - **Incorrect Model:** If the server is not TopPass.
@@ -1268,42 +1384,48 @@ function solveTopPass():
 EuroZone Free is another domain-specific dictionary attack, this time focusing on the member states of the European Union.
 
 #### Formal CS Problem Statement
+
 Let $D_{EU}$ be the set of the 27 EU member countries. Find $P \in D_{EU}$ such that $A(P) = True$.
 
 #### Optimal Algorithm
+
 Linear search through the list of EU countries.
 
 ```pseudocode
 function solveEuroZone():
     // Define the list of EU member states.
     countries = ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"]
-    
+
     // Iterate through each country in the list.
     for each country in countries:
         // Attempt to authenticate with the country name.
         if authenticate(country) == True:
             // If successful, return the country name.
             return country
-            
+
     return failure
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(27)$.
 - **Space Complexity:** $O(1)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Attempt 1:** "Austria". Result: False.
 2.  **...**
 3.  **Attempt 10:** "France". Result: True.
 4.  **Result:** The solver returns "France".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Case Sensitivity:** Usually requires proper capitalization or all lowercase.
 - **Brexit:** Ensure the list does not include the United Kingdom.
 - **Spelling:** Names must be spelled correctly (e.g., "Czech Republic").
 
 #### Common Failure Modes
+
 - **Outdated List:** Using a list that includes non-EU countries or excludes new members.
 - **Case Mismatch:** Providing "france" when the server expects "France".
 - **Incorrect Model:** If the server is not EuroZone Free.
@@ -1315,9 +1437,11 @@ function solveEuroZone():
 2G_cellular simulates a classic timing attack where the system leaks the position of the first incorrect character. This is a devastating side-channel that allows for linear-time cracking.
 
 #### Formal CS Problem Statement
+
 Let $P$ be the secret password. A guess $G$ returns an index $i$ such that $G[0 \dots i-1] = P[0 \dots i-1]$ and $G[i] \neq P[i]$. If $G = P$, it returns a success indicator.
 
 #### Optimal Algorithm
+
 Build the password character by character. For each position, try characters until the returned index increases.
 
 ```pseudocode
@@ -1326,13 +1450,13 @@ function solve2GCellular():
     password = ""
     currentIndex = 0
     charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-    
+
     while true:
         // Try each character in the charset for the next position.
         for each char in charset:
             guess = password + char
             resultIndex = getMismatchIndex(guess)
-            
+
             if resultIndex > currentIndex:
                 // If the mismatch index increased, we found the correct character.
                 password = password + char
@@ -1344,10 +1468,12 @@ function solve2GCellular():
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L \times |\Sigma|)$.
 - **Space Complexity:** $O(L)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Secret:** "hack"
 2.  **Guess "a":** Index 0 (Mismatch at pos 0)
 3.  **...**
@@ -1358,11 +1484,13 @@ function solve2GCellular():
 8.  **Result:** The solver returns "hack".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Index Format:** The index is usually 0-based.
 - **Empty Password:** Handle the case where the password might be empty.
 - **Charset:** The charset is typically alphanumeric.
 
 #### Common Failure Modes
+
 - **Off-by-One:** Misinterpreting the returned index.
 - **Charset Exhaustion:** If the character is not in the charset.
 - **Index Reset:** If the server resets the index on every guess (not the case here).
@@ -1374,49 +1502,55 @@ function solve2GCellular():
 110100100 involves decoding binary-encoded ASCII text. This is a common way to obscure data in transit or storage.
 
 #### Formal CS Problem Statement
+
 Given a string of bits $S \in \{0, 1\}^*$, where each block of 8 bits represents an ASCII character, decode $S$ into its corresponding text.
 
 #### Optimal Algorithm
+
 Split the string into 8-bit chunks, convert each chunk to its decimal value, and then to the ASCII character.
 
 ```pseudocode
 function solve110100100(bitString):
     // Initialize the resulting text string.
     text = ""
-    
+
     // Iterate through the bit string in 8-bit steps.
     for i from 0 to length(bitString) - 1 step 8:
         // Extract an 8-bit chunk.
         chunk = substring(bitString, i, 8)
-        
+
         // Convert the binary chunk to a decimal integer.
         decimal = binaryToDecimal(chunk)
-        
+
         // Convert the decimal integer to its ASCII character.
         char = asciiToChar(decimal)
-        
+
         // Append the character to the text.
         text = text + char
-        
+
     return text
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L)$, where $L$ is the number of bits.
 - **Space Complexity:** $O(L/8)$, to store the resulting string.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input:** "0110100001101001"
 2.  **Chunk 1:** "01101000" -> 104 -> 'h'
 3.  **Chunk 2:** "01101001" -> 105 -> 'i'
 4.  **Result:** The solver returns "hi".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Padding:** Ensure the bit string length is a multiple of 8.
 - **Encoding:** Standard 8-bit ASCII (or UTF-8 for the first 127 characters).
 - **Bit Order:** Most-significant bit first (MSB).
 
 #### Common Failure Modes
+
 - **Incorrect Chunking:** Splitting at the wrong intervals.
 - **Base Conversion Errors:** Errors in the binary-to-decimal logic.
 - **Non-ASCII Bits:** If the bits represent something other than ASCII.
@@ -1428,9 +1562,11 @@ function solve110100100(bitString):
 MathML requires evaluating arithmetic expressions that use non-standard Unicode operators and may contain malicious code injection.
 
 #### Formal CS Problem Statement
+
 Evaluate a string expression $E$ containing numbers and operators $\{ҳ, ÷, ➕, ➖\}$. The expression may also contain non-mathematical substrings that must be ignored or sanitized.
 
 #### Optimal Algorithm
+
 1.  **Sanitization:** Remove any characters that are not digits, decimal points, or the allowed operators.
 2.  **Normalization:** Replace Unicode operators with standard ones (`*`, `/`, `+`, `-`).
 3.  **Evaluation:** Use the Shunting-yard algorithm to convert to Reverse Polish Notation (RPN) and then evaluate, or use a safe expression evaluator.
@@ -1442,32 +1578,36 @@ function solveMathML(expression):
     expression = replace(expression, "÷", "/")
     expression = replace(expression, "➕", "+")
     expression = replace(expression, "➖", "-")
-    
+
     // Sanitization: Remove any non-mathematical characters.
     // This prevents code injection traps like "ns.exit();".
     expression = sanitize(expression, "[0-9+\-*/(). ]")
-    
+
     // Evaluate the sanitized expression using standard precedence rules.
     return evaluate(expression)
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L)$, where $L$ is the length of the expression.
 - **Space Complexity:** $O(L)$, for the operator stack and RPN queue.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Input:** "ns.exit(); 10 ➕ 5 ҳ 2"
 2.  **Sanitization:** "10 ➕ 5 ҳ 2"
-3.  **Normalization:** "10 + 5 * 2"
+3.  **Normalization:** "10 + 5 \* 2"
 4.  **Evaluation:** $10 + (5 \times 2) = 20$
 5.  **Result:** The solver returns "20".
 
 #### DarkNet Constraints and Edge Cases
+
 - **Operator Precedence:** Multiplication and division take precedence over addition and subtraction.
 - **Injection:** The "ns.exit();" or similar traps are common and must be stripped.
 - **Parentheses:** The expression may contain parentheses to override precedence.
 
 #### Common Failure Modes
+
 - **Unsafe Eval:** Using `eval()` directly on the unsanitized string, which would trigger the traps.
 - **Precedence Errors:** Evaluating $10 + 5 \times 2$ as $15 \times 2 = 30$.
 - **Division by Zero:** Handling cases where the expression results in division by zero.
@@ -1479,37 +1619,41 @@ function solveMathML(expression):
 OrdoXenos is a bitwise XOR cipher challenge. XOR is a fundamental operation in cryptography because it is its own inverse.
 
 #### Formal CS Problem Statement
+
 Given an encrypted string $C$ and a key $K$, find the plaintext $P$ such that $P = C \oplus K$. In DarkNet, the hint often contains the encrypted text and the binary mask bits.
 
 #### Optimal Algorithm
+
 Apply the XOR operation between each character of the ciphertext and the corresponding character of the key.
 
 ```pseudocode
 function solveOrdoXenos(ciphertext, key):
     // Initialize the plaintext string.
     plaintext = ""
-    
+
     // Iterate through each character of the ciphertext.
     for i from 0 to length(ciphertext) - 1:
         // Get the numeric code for the current ciphertext character.
         charC = charCodeAt(ciphertext, i)
-        
+
         // Get the numeric code for the corresponding key character.
         // The key is cycled if it is shorter than the ciphertext.
         charK = charCodeAt(key, i % length(key))
-        
+
         // Perform the bitwise XOR operation.
         // P = C ^ K
         plaintext = plaintext + fromCharCode(charC ^ charK)
-        
+
     return plaintext
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(L)$, where $L$ is the length of the ciphertext.
 - **Space Complexity:** $O(L)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Ciphertext:** [72, 101, 108, 108, 111] ("Hello")
 2.  **Key:** [1, 2, 3, 4, 5]
 3.  **XOR:**
@@ -1519,11 +1663,13 @@ function solveOrdoXenos(ciphertext, key):
 4.  **Result:** The solver returns the decrypted string.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Key Reuse:** The key might be shorter than the ciphertext and need to be cycled.
 - **Binary Mask:** The key might be provided as a string of bits.
 - **Encoding:** Standard character encoding (UTF-16).
 
 #### Common Failure Modes
+
 - **Incorrect Key Alignment:** Misaligning the key with the ciphertext.
 - **Encoding Issues:** Errors in converting between characters and their numeric codes.
 - **Key Discovery:** Failing to correctly extract the key from the hint.
@@ -1535,6 +1681,7 @@ function solveOrdoXenos(ciphertext, key):
 BigMo%od is a mathematical challenge based on the Chinese Remainder Theorem (CRT). It involves solving a system of simultaneous congruences.
 
 #### Formal CS Problem Statement
+
 Find the smallest non-negative integer $x$ such that:
 $x \equiv a_1 \pmod{m_1}$
 $x \equiv a_2 \pmod{m_2}$
@@ -1542,7 +1689,9 @@ $x \equiv a_3 \pmod{m_3}$
 where $m_i$ are pairwise coprime.
 
 #### Optimal Algorithm
+
 Use the constructive method for CRT.
+
 1.  Calculate $M = m_1 \times m_2 \times m_3$.
 2.  For each $i$, calculate $M_i = M / m_i$.
 3.  Find $y_i$ such that $M_i y_i \equiv 1 \pmod{m_i}$ using the Extended Euclidean Algorithm.
@@ -1553,27 +1702,29 @@ function solveBigMood(a, m):
     // Calculate the product of all moduli.
     M = m[0] * m[1] * m[2]
     x = 0
-    
+
     // Iterate through each equation.
     for i from 0 to 2:
         // Calculate the partial product.
         Mi = M / m[i]
-        
+
         // Find the modular multiplicative inverse.
         yi = modularInverse(Mi, m[i])
-        
+
         // Add the term to the total sum.
         x = x + a[i] * Mi * yi
-        
+
     // Return the result modulo M.
     return x % M
 ```
 
 #### Complexity Analysis
+
 - **Time Complexity:** $O(k \log m)$, where $k=3$ and $\log m$ is the complexity of the Extended Euclidean Algorithm.
 - **Space Complexity:** $O(1)$.
 
 #### Worked Example: Step-by-Step Execution
+
 1.  **Equations:**
     - $x \equiv 2 \pmod 3$
     - $x \equiv 3 \pmod 5$
@@ -1587,11 +1738,13 @@ function solveBigMood(a, m):
 3.  **Result:** The solver returns 23.
 
 #### DarkNet Constraints and Edge Cases
+
 - **Coprimality:** The moduli $m_i$ are guaranteed to be pairwise coprime.
 - **Large Numbers:** Intermediate products can be very large; use BigInt if necessary.
 - **Exactly Three:** The system always consists of exactly three equations.
 
 #### Common Failure Modes
+
 - **Modular Inverse Error:** Failing to find the correct $y_i$.
 - **Overflow:** Integer overflow during the summation.
 - **Input Parsing:** Errors in extracting $a_i$ and $m_i$ from the hint.
@@ -1610,12 +1763,13 @@ The DarkNet is not a static graph. It is a $40 \times 8$ grid where nodes and ed
 
 **Problem Analysis:**
 The network topology mutates approximately every 30 seconds per row of depth. A mutation can involve:
+
 - **Server Migration:** A server moves to a new (x, y) coordinate.
 - **Connection Shuffling:** Edges between servers are added or removed.
 - **Server Restart:** A server goes offline and comes back with a new password.
 - **Server Deletion/Addition:** Nodes are removed from or added to the grid.
 
-This means that a path found at time $t$ may no longer exist at time $t+1$. Standard algorithms like Dijkstra or A* must be adapted for this volatility.
+This means that a path found at time $t$ may no longer exist at time $t+1$. Standard algorithms like Dijkstra or A\* must be adapted for this volatility.
 
 **Strategy: Reactive Pathfinding**
 Instead of calculating a long-term path, the system should use a "next-hop" approach combined with frequent re-scanning.
@@ -1625,15 +1779,15 @@ function navigateTo(target):
     while currentPos != target:
         // Scan the local neighborhood for connections.
         scanNeighbors()
-        
+
         // If the target is directly connected, move to it.
         if target is neighbor:
             move(target)
             return
-            
+
         // Otherwise, find the best next hop towards the target.
         nextHop = findBestNextHop(target)
-        
+
         if nextHop exists:
             // Move to the next hop.
             move(nextHop)
@@ -1643,6 +1797,7 @@ function navigateTo(target):
 ```
 
 **State Machine Diagram:**
+
 1.  **IDLE:** Waiting for a target.
 2.  **SCANNING:** Mapping local connections.
 3.  **PATHFINDING:** Calculating the shortest path to the target.
@@ -1674,10 +1829,10 @@ function crossAirGap(currentDepth):
             // Use the global connection command to jump the gap.
             connectToSession(hostname, password)
             return
-        
+
         // Monitor the network for servers migrating across the gap.
         monitorMigration(currentDepth, targetDepth)
-        
+
         // Wait for the next mutation cycle.
         wait(30s)
 ```
@@ -1700,23 +1855,23 @@ function solveLabyrinth():
     map = new Map()
     stack = [(1, 1)]
     visited = Set((1, 1))
-    
+
     while stack not empty:
         curr = stack.peek()
-        
+
         // Capture the 3x3 local view.
         view = look()
-        
+
         // Update the global map with the new information.
         updateMap(curr, view)
-        
+
         // Check if the current cell is the exit.
         if isExit(curr):
             return success
-            
+
         // Find an unvisited neighbor that is not blocked by a wall.
         nextCell = getUnvisitedNeighbor(curr, map)
-        
+
         if nextCell:
             // Move to the neighbor and push it onto the stack.
             move(direction(curr, nextCell))
@@ -1730,6 +1885,7 @@ function solveLabyrinth():
 ```
 
 **State Machine Diagram:**
+
 1.  **LOOK:** Capture the $3 \times 3$ local view.
 2.  **UPDATE:** Integrate the view into the global coordinate map.
 3.  **DECIDE:** Choose the next unvisited neighbor or backtrack.
@@ -1746,6 +1902,7 @@ The high frequency of mutations makes the DarkNet a "noisy" environment where pr
 An authentication attempt on a Tier 4 server can take several minutes. If the server restarts or moves during this time, the attempt is lost.
 
 **Strategy: Checkpointing and Persistence**
+
 1.  **Centralized State:** Store all discovered passwords, network maps, and progress in a persistent file (e.g., `DARKNET_STATE.json`).
 2.  **Idempotent Solvers:** Solvers should be able to resume from where they left off. For example, a binary search solver should store its current `low` and `high` bounds.
 3.  **Auto-Reconnect:** A background manager should constantly monitor active sessions. If a session is lost due to a restart, it should immediately re-authenticate using the stored password.
@@ -1760,6 +1917,7 @@ Stasis links are a limited resource that can make a server immutable, protecting
 You have a limited number of stasis links. Using them randomly is inefficient. You want to use them to create a "backbone" of stable servers that bridge gaps and provide high-RAM compute nodes.
 
 **Strategy: Strategic Backbone**
+
 1.  **Bridge Servers:** Always stasis-link servers that have successfully jumped an air gap.
 2.  **High-Tier Solvers:** Stasis-link servers where you are currently running a long-duration Tier 4 solver.
 3.  **Sniffer Nodes:** Stasis-link `OpenWebAccessPoint` nodes to ensure continuous packet capture.
@@ -1775,7 +1933,7 @@ Packet sniffing is a probabilistic process. Optimizing it requires understanding
 The inclusion rate of passwords in the packet stream decays exponentially with difficulty. However, the $8\times$ multiplier on `OpenWebAccessPoint` nodes is a massive advantage.
 
 **Strategy: Distributed Sniffing**
-Deploy sniffing scripts on *every* conquered `OpenWebAccessPoint` node. The aggregate rate of password discovery will be the sum of the individual rates.
+Deploy sniffing scripts on _every_ conquered `OpenWebAccessPoint` node. The aggregate rate of password discovery will be the sum of the individual rates.
 
 #### Clue System Exploitation
 
@@ -1805,6 +1963,7 @@ Before making any moves, you must understand the terrain.
 4.  **Gap Identification:** Mark the rows 8, 16, 24, and 32 as air gaps.
 
 **Decision Tree:**
+
 - Is the server at Depth 0? -> Use ZeroLogon.
 - Is the server at Depth 1-7? -> Prioritize Tier 1 models.
 - Is the server an `OpenWebAccessPoint`? -> Mark as high priority for Phase 1.
@@ -1819,10 +1978,11 @@ The goal of this phase is to establish a stable presence in the first segment of
 4.  **Stasis Anchoring:** Choose 2-3 servers with high connectivity and apply stasis links. These will be your "safe harbors" if the rest of the network mutates unfavorably.
 
 **RAM Budgeting:**
+
 - Sniffer Script: 2.0 GB
 - Tier 1 Solver: 1.6 GB
 - Manager Script: 4.0 GB
-Total: ~8 GB. Most Depth 0-7 servers have 4-16 GB, so you can run 1-2 tasks per server.
+  Total: ~8 GB. Most Depth 0-7 servers have 4-16 GB, so you can run 1-2 tasks per server.
 
 ### Phase 2: Crossing Air Gaps
 
@@ -1847,7 +2007,7 @@ As you move deeper, the models become more difficult and the authentication time
     Where $\text{threadsFactor} \approx 1 / \sqrt{\text{threads}}$.
     Increasing threads significantly reduces the time for Tier 4 servers, which can otherwise take 10+ minutes.
 3.  **Parallelism:** Run multiple solvers on different servers simultaneously. Use your home RAM for the most intensive tasks.
-4.  **Backdoor Management:** Backdooring a server provides a permanent connection but increases the `surplus` factor, slowing down *all* future authentication attempts by $1.07^{\text{surplus}}$. Only backdoor the minimum number of servers required to maintain a path to the Labyrinth.
+4.  **Backdoor Management:** Backdooring a server provides a permanent connection but increases the `surplus` factor, slowing down _all_ future authentication attempts by $1.07^{\text{surplus}}$. Only backdoor the minimum number of servers required to maintain a path to the Labyrinth.
 
 **Thread Formula:**
 To achieve a target `authTime` of $T$, the required threads $N$ is:
@@ -1867,19 +2027,21 @@ A successful DarkNet campaign requires a robust software architecture.
 
 **1. Central Password Database (`/data/passwords.json`)**
 All scripts should read from and write to this file. It acts as the "source of truth" for the network.
+
 ```json
 {
-  "server-alpha": {
-    "password": "hunter2",
-    "depth": 5,
-    "model": "DeskMemo_3.1",
-    "stasis": true
-  }
+    "server-alpha": {
+        "password": "hunter2",
+        "depth": 5,
+        "model": "DeskMemo_3.1",
+        "stasis": true
+    }
 }
 ```
 
 **2. The Orchestrator (`darknet-manager.js`)**
 A single, high-RAM script running on `home` that:
+
 - Monitors the network for mutations.
 - Dispatches solvers to new targets.
 - Manages stasis links.
@@ -1890,6 +2052,7 @@ Instead of one giant script, use small, specialized scripts for each model (e.g.
 
 **4. Error Recovery Procedure**
 Every `authenticate` call should be wrapped in a retry loop:
+
 ```pseudocode
 function robustAuthenticate(target, password):
     while true:
@@ -1919,44 +2082,44 @@ function robustAuthenticate(target, password):
 
 ### Complete Solver Registry Mapping
 
-| Model | Tier | Problem Class | Solver Script |
-| :--- | :--- | :--- | :--- |
-| ZeroLogon | 0 | Null Auth | `solve-null.js` |
-| DeskMemo_3.1 | 1 | String Extraction | `solve-echo.js` |
-| FreshInstall_1.0 | 1 | Dictionary (Static) | `solve-dict-static.js` |
-| CloudBlare(tm) | 1 | Filtering | `solve-filter.js` |
-| Laika4 | 2 | Dictionary (Themed) | `solve-dict-dog.js` |
-| NIL | 2 | Oracle (Per-Char) | `solve-oracle-char.js` |
-| Pr0verFl0 | 2 | Buffer Overflow | `solve-overflow.js` |
-| PHP 5.4 | 3 | Permutation / RMSD | `solve-rmsd.js` |
-| DeepGreen | 3 | Mastermind | `solve-mastermind.js` |
-| BellaCuore | 3 | Binary Search (Roman) | `solve-bs-roman.js` |
-| AccountsManager_4.2 | 3 | Binary Search (Int) | `solve-bs-int.js` |
-| OctantVoxel | 3 | Base Conversion | `solve-base.js` |
-| Factori-Os | 3 | Factorization | `solve-factors.js` |
-| OpenWebAccessPoint | 3 | Packet Sniffing | `run-sniffer.js` |
-| KingOfTheHill | 3 | Ternary Search | `solve-ternary.js` |
-| RateMyPix.Auth | 3 | Oracle (Count) | `solve-oracle-count.js` |
-| PrimeTime 2 | 4 | Prime Factorization | `solve-prime.js` |
-| TopPass | 4 | Dictionary (Large) | `solve-dict-large.js` |
-| EuroZone Free | 4 | Dictionary (EU) | `solve-dict-eu.js` |
-| 2G_cellular | 4 | Timing Attack | `solve-timing.js` |
-| 110100100 | 4 | Binary Decoding | `solve-binary.js` |
-| MathML | 4 | Expression Eval | `solve-math.js` |
-| OrdoXenos | 4 | XOR Cipher | `solve-xor.js` |
-| BigMo%od | 4 | CRT | `solve-crt.js` |
+| Model               | Tier | Problem Class         | Solver Script           |
+| :------------------ | :--- | :-------------------- | :---------------------- |
+| ZeroLogon           | 0    | Null Auth             | `solve-null.js`         |
+| DeskMemo_3.1        | 1    | String Extraction     | `solve-echo.js`         |
+| FreshInstall_1.0    | 1    | Dictionary (Static)   | `solve-dict-static.js`  |
+| CloudBlare(tm)      | 1    | Filtering             | `solve-filter.js`       |
+| Laika4              | 2    | Dictionary (Themed)   | `solve-dict-dog.js`     |
+| NIL                 | 2    | Oracle (Per-Char)     | `solve-oracle-char.js`  |
+| Pr0verFl0           | 2    | Buffer Overflow       | `solve-overflow.js`     |
+| PHP 5.4             | 3    | Permutation / RMSD    | `solve-rmsd.js`         |
+| DeepGreen           | 3    | Mastermind            | `solve-mastermind.js`   |
+| BellaCuore          | 3    | Binary Search (Roman) | `solve-bs-roman.js`     |
+| AccountsManager_4.2 | 3    | Binary Search (Int)   | `solve-bs-int.js`       |
+| OctantVoxel         | 3    | Base Conversion       | `solve-base.js`         |
+| Factori-Os          | 3    | Factorization         | `solve-factors.js`      |
+| OpenWebAccessPoint  | 3    | Packet Sniffing       | `run-sniffer.js`        |
+| KingOfTheHill       | 3    | Ternary Search        | `solve-ternary.js`      |
+| RateMyPix.Auth      | 3    | Oracle (Count)        | `solve-oracle-count.js` |
+| PrimeTime 2         | 4    | Prime Factorization   | `solve-prime.js`        |
+| TopPass             | 4    | Dictionary (Large)    | `solve-dict-large.js`   |
+| EuroZone Free       | 4    | Dictionary (EU)       | `solve-dict-eu.js`      |
+| 2G_cellular         | 4    | Timing Attack         | `solve-timing.js`       |
+| 110100100           | 4    | Binary Decoding       | `solve-binary.js`       |
+| MathML              | 4    | Expression Eval       | `solve-math.js`         |
+| OrdoXenos           | 4    | XOR Cipher            | `solve-xor.js`          |
+| BigMo%od            | 4    | CRT                   | `solve-crt.js`          |
 
 ### RAM Budget Calculations
 
-| Script Type | Base RAM | Thread Overhead | Total (1 Thread) |
-| :--- | :--- | :--- | :--- |
-| Manager | 4.0 GB | N/A | 4.0 GB |
-| Tier 1 Solver | 1.6 GB | 0.1 GB | 1.7 GB |
-| Tier 2 Solver | 2.4 GB | 0.2 GB | 2.6 GB |
-| Tier 3 Solver | 3.2 GB | 0.4 GB | 3.6 GB |
-| Tier 4 Solver | 4.8 GB | 0.8 GB | 5.6 GB |
-| Sniffer | 2.0 GB | N/A | 2.0 GB |
-| Labyrinth Solver | 6.4 GB | N/A | 6.4 GB |
+| Script Type      | Base RAM | Thread Overhead | Total (1 Thread) |
+| :--------------- | :------- | :-------------- | :--------------- |
+| Manager          | 4.0 GB   | N/A             | 4.0 GB           |
+| Tier 1 Solver    | 1.6 GB   | 0.1 GB          | 1.7 GB           |
+| Tier 2 Solver    | 2.4 GB   | 0.2 GB          | 2.6 GB           |
+| Tier 3 Solver    | 3.2 GB   | 0.4 GB          | 3.6 GB           |
+| Tier 4 Solver    | 4.8 GB   | 0.8 GB          | 5.6 GB           |
+| Sniffer          | 2.0 GB   | N/A             | 2.0 GB           |
+| Labyrinth Solver | 6.4 GB   | N/A             | 6.4 GB           |
 
 ### Architecture Diagram (ASCII)
 

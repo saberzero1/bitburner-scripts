@@ -1,12 +1,12 @@
-import { getConfiguration, formatRam, formatMoney } from './helpers.js'
-import { estimateCrackDifficulty } from './darknet-helpers.js'
+import { getConfiguration, formatRam, formatMoney } from "./helpers.js";
+import { estimateCrackDifficulty } from "./darknet-helpers.js";
 
 /**
  * Darknet Network Scanner for BitNode 15
- * 
+ *
  * Terminal-based network visualizer that displays the darknet topology,
  * server details, authentication status, model types, and difficulty tiers.
- * 
+ *
  * Features:
  * - Scans all directly connected darknet servers from current position
  * - Loads persisted data from orchestrator (passwords, clue cache)
@@ -16,7 +16,7 @@ import { estimateCrackDifficulty } from './darknet-helpers.js'
  * - Shows password hints for unauthenticated servers
  * - Summarizes stasis link usage and network health
  * - Supports --json output for programmatic consumption
- * 
+ *
  * Usage:
  *   run darknet-scan.js              — Full scan from terminal
  *   run darknet-scan.js --json       — Output JSON instead of HTML
@@ -25,9 +25,9 @@ import { estimateCrackDifficulty } from './darknet-helpers.js'
  */
 
 const argsSchema = [
-    ['hide-stats', false],  // Hide RAM and blocked RAM stats
-    ['compact', false],     // Compact output — no hints or extra details
-    ['json', false],        // Output as JSON instead of terminal HTML
+    ["hide-stats", false], // Hide RAM and blocked RAM stats
+    ["compact", false], // Compact output — no hints or extra details
+    ["json", false], // Output as JSON instead of terminal HTML
 ];
 
 export function autocomplete(data, _) {
@@ -37,23 +37,23 @@ export function autocomplete(data, _) {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const PASSWORD_FILE = '/data/darknet-passwords.txt';
-const CLUE_CACHE_FILE = '/data/darknet-clues-scanned.txt';
+const PASSWORD_FILE = "/data/darknet-passwords.txt";
+const CLUE_CACHE_FILE = "/data/darknet-clues-scanned.txt";
 
 const TIER_LABELS = {
-    0: 'trivial',
-    1: 'easy',
-    2: 'medium',
-    3: 'hard',
-    4: 'expert',
+    0: "trivial",
+    1: "easy",
+    2: "medium",
+    3: "hard",
+    4: "expert",
 };
 
 const TIER_COLORS = {
-    0: '#4caf50', // green
-    1: '#8bc34a', // light green
-    2: '#ffeb3b', // yellow
-    3: '#ff9800', // orange
-    4: '#f44336', // red
+    0: "#4caf50", // green
+    1: "#8bc34a", // light green
+    2: "#ffeb3b", // yellow
+    3: "#ff9800", // orange
+    4: "#f44336", // red
 };
 
 // ─── Entry Point ────────────────────────────────────────────────────────────
@@ -63,13 +63,13 @@ export function main(ns) {
     const options = getConfiguration(ns, argsSchema);
     if (!options) return;
 
-    const showStats = !options['hide-stats'];
-    const compact = options['compact'];
-    const jsonOutput = options['json'];
+    const showStats = !options["hide-stats"];
+    const compact = options["compact"];
+    const jsonOutput = options["json"];
 
     // Check prerequisites
-    if (!ns.fileExists('DarkscapeNavigator.exe', 'home')) {
-        ns.tprint('ERROR: DarkscapeNavigator.exe required. Buy from darkweb.');
+    if (!ns.fileExists("DarkscapeNavigator.exe", "home")) {
+        ns.tprint("ERROR: DarkscapeNavigator.exe required. Buy from darkweb.");
         return;
     }
 
@@ -85,7 +85,12 @@ export function main(ns) {
     // Gather details for each nearby server
     const serverDetails = [];
     for (const hostname of nearbyServers) {
-        const info = gatherServerInfo(ns, hostname, knownPasswords, stasisServers);
+        const info = gatherServerInfo(
+            ns,
+            hostname,
+            knownPasswords,
+            stasisServers,
+        );
         if (info) serverDetails.push(info);
     }
 
@@ -102,9 +107,27 @@ export function main(ns) {
     // ─── Output ─────────────────────────────────────────────────────────
 
     if (jsonOutput) {
-        outputJson(ns, currentHost, serverDetails, knownPasswords, stasisServers, stasisLimit, instability);
+        outputJson(
+            ns,
+            currentHost,
+            serverDetails,
+            knownPasswords,
+            stasisServers,
+            stasisLimit,
+            instability,
+        );
     } else {
-        outputTerminal(ns, currentHost, serverDetails, knownPasswords, stasisServers, stasisLimit, instability, showStats, compact);
+        outputTerminal(
+            ns,
+            currentHost,
+            serverDetails,
+            knownPasswords,
+            stasisServers,
+            stasisLimit,
+            instability,
+            showStats,
+            compact,
+        );
     }
 }
 
@@ -120,30 +143,38 @@ function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
     if (!details) return null;
 
     let depth = null;
-    try { depth = ns.dnet.getDepth(hostname); } catch { }
+    try {
+        depth = ns.dnet.getDepth(hostname);
+    } catch {}
     if (depth === -1) depth = null;
 
     let blockedRam = 0;
-    try { blockedRam = ns.dnet.getBlockedRam(hostname); } catch { }
+    try {
+        blockedRam = ns.dnet.getBlockedRam(hostname);
+    } catch {}
 
     let maxRam = 0;
     let usedRam = 0;
     try {
         maxRam = ns.getServerMaxRam(hostname);
         usedRam = ns.getServerUsedRam(hostname);
-    } catch { }
+    } catch {}
 
     let requiredCharisma = -1;
-    try { requiredCharisma = ns.dnet.getServerRequiredCharismaLevel(hostname); } catch { }
+    try {
+        requiredCharisma = ns.dnet.getServerRequiredCharismaLevel(hostname);
+    } catch {}
 
     const difficulty = estimateCrackDifficulty({ modelId: details.modelId });
     const hasStasis = stasisServers.has(hostname);
     const hasPassword = knownPasswords.has(hostname);
-    const hasCaches = details.hasAdminRights ? safeLsCaches(ns, hostname) : false;
+    const hasCaches = details.hasAdminRights
+        ? safeLsCaches(ns, hostname)
+        : false;
 
     return {
         hostname,
-        modelId: details.modelId || 'unknown',
+        modelId: details.modelId || "unknown",
         isOnline: details.isOnline,
         isConnected: details.isConnectedToCurrentServer,
         hasSession: details.hasSession,
@@ -156,9 +187,9 @@ function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
         usedRam,
         blockedRam,
         requiredCharisma,
-        passwordHint: details.passwordHint || details.staticPasswordHint || '',
-        passwordHintData: details.passwordHintData || '',
-        passwordFormat: details.passwordFormat || '',
+        passwordHint: details.passwordHint || details.staticPasswordHint || "",
+        passwordHintData: details.passwordHintData || "",
+        passwordFormat: details.passwordFormat || "",
         passwordLength: details.passwordLength || 0,
         tier: difficulty.tier,
         tierLabel: difficulty.label,
@@ -167,19 +198,39 @@ function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
 
 // ─── Terminal HTML Output ───────────────────────────────────────────────────
 
-function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers, stasisLimit, instability, showStats, compact) {
+function outputTerminal(
+    ns,
+    currentHost,
+    servers,
+    knownPasswords,
+    stasisServers,
+    stasisLimit,
+    instability,
+    showStats,
+    compact,
+) {
     const doc = eval("document");
     const terminalInput = doc.getElementById("terminal-input");
     if (!terminalInput) {
         // Fallback to tprint if not in terminal
-        outputTprint(ns, currentHost, servers, knownPasswords, stasisServers, stasisLimit, instability, showStats, compact);
+        outputTprint(
+            ns,
+            currentHost,
+            servers,
+            knownPasswords,
+            stasisServers,
+            stasisLimit,
+            instability,
+            showStats,
+            compact,
+        );
         return;
     }
 
     function terminalInsert(html) {
         const term = doc.getElementById("terminal");
         if (!term) return;
-        term.insertAdjacentHTML('beforeend', `<li>${html}</li>`);
+        term.insertAdjacentHTML("beforeend", `<li>${html}</li>`);
     }
 
     // Inject CSS
@@ -207,11 +258,11 @@ function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers,
         .dnetscan .warn { color: #f80; }
         .dnetscan .separator { color: #606; }
     </style>`;
-    doc.head.insertAdjacentHTML('beforeend', css);
+    doc.head.insertAdjacentHTML("beforeend", css);
 
     // ─── Build output ───────────────────────────────────────────────
 
-    let out = '';
+    let out = "";
 
     // Header
     out += `<span class="header">╔══════════════════════════════════════════════════╗</span>\n`;
@@ -220,15 +271,15 @@ function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers,
     out += `\n`;
 
     // Summary
-    const adminCount = servers.filter(s => s.hasAdmin).length;
-    const onlineCount = servers.filter(s => s.isOnline).length;
-    const offlineCount = servers.filter(s => !s.isOnline).length;
+    const adminCount = servers.filter((s) => s.hasAdmin).length;
+    const onlineCount = servers.filter((s) => s.isOnline).length;
+    const offlineCount = servers.filter((s) => !s.isOnline).length;
 
     out += `<span class="subheader">Scanning from:</span> <span class="authenticated">${escapeHtml(currentHost)}</span>\n`;
     out += `<span class="subheader">Nearby servers:</span> ${servers.length} (${onlineCount} online, ${offlineCount} offline)\n`;
     out += `<span class="subheader">Admin access:</span>  <span class="authenticated">${adminCount}</span> / ${servers.length}\n`;
     out += `<span class="subheader">Known passwords:</span> ${knownPasswords.size}\n`;
-    out += `<span class="subheader">Stasis links:</span>   ${stasisServers.size} / ${stasisLimit >= 0 ? stasisLimit : '?'}\n`;
+    out += `<span class="subheader">Stasis links:</span>   ${stasisServers.size} / ${stasisLimit >= 0 ? stasisLimit : "?"}\n`;
 
     // Instability warning
     if (instability) {
@@ -250,14 +301,14 @@ function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers,
         for (let i = 0; i < servers.length; i++) {
             const s = servers[i];
             const isLast = i === servers.length - 1;
-            const connector = isLast ? '└' : '├';
-            const continuation = isLast ? ' ' : '│';
+            const connector = isLast ? "└" : "├";
+            const continuation = isLast ? " " : "│";
 
             // Status class
-            let statusClass = 'online';
-            if (!s.isOnline) statusClass = 'offline';
-            else if (s.hasAdmin) statusClass = 'authenticated';
-            else if (s.hasSession) statusClass = 'session';
+            let statusClass = "online";
+            if (!s.isOnline) statusClass = "offline";
+            else if (s.hasAdmin) statusClass = "authenticated";
+            else if (s.hasSession) statusClass = "session";
 
             // Main server line
             out += `${connector}─ `;
@@ -272,9 +323,9 @@ function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers,
             out += `\n`;
 
             // Detail line: model, tier, depth
-            const tierClass = s.tier !== null ? `tier${s.tier}` : 'dim';
-            const tierText = s.tierLabel || 'unknown';
-            const depthText = s.depth !== null ? `d:${s.depth}` : 'd:?';
+            const tierClass = s.tier !== null ? `tier${s.tier}` : "dim";
+            const tierText = s.tierLabel || "unknown";
+            const depthText = s.depth !== null ? `d:${s.depth}` : "d:?";
 
             out += `${continuation}  `;
             out += `<span class="${tierClass}">${escapeHtml(s.modelId)}</span>`;
@@ -294,7 +345,8 @@ function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers,
                 const freeRam = Math.max(0, s.maxRam - s.usedRam);
                 out += `${continuation}  <span class="stats">`;
                 out += `RAM: ${formatRam(freeRam)}/${formatRam(s.maxRam)}`;
-                if (s.blockedRam > 0) out += ` (${formatRam(s.blockedRam)} blocked)`;
+                if (s.blockedRam > 0)
+                    out += ` (${formatRam(s.blockedRam)} blocked)`;
                 if (s.requiredCharisma > 0) out += ` CHA≥${s.requiredCharisma}`;
                 out += `</span>\n`;
             }
@@ -329,42 +381,68 @@ function outputTerminal(ns, currentHost, servers, knownPasswords, stasisServers,
 
 // ─── Fallback tprint output ─────────────────────────────────────────────────
 
-function outputTprint(ns, currentHost, servers, knownPasswords, stasisServers, stasisLimit, instability, showStats, compact) {
-    const adminCount = servers.filter(s => s.hasAdmin).length;
-    const onlineCount = servers.filter(s => s.isOnline).length;
+function outputTprint(
+    ns,
+    currentHost,
+    servers,
+    knownPasswords,
+    stasisServers,
+    stasisLimit,
+    instability,
+    showStats,
+    compact,
+) {
+    const adminCount = servers.filter((s) => s.hasAdmin).length;
+    const onlineCount = servers.filter((s) => s.isOnline).length;
 
     ns.tprint(`\n=== DARKNET NETWORK SCANNER v2.0 ===`);
     ns.tprint(`Scanning from: ${currentHost}`);
-    ns.tprint(`Nearby: ${servers.length} servers (${onlineCount} online, ${adminCount} admin)`);
-    ns.tprint(`Known passwords: ${knownPasswords.size} | Stasis: ${stasisServers.size}/${stasisLimit >= 0 ? stasisLimit : '?'}`);
+    ns.tprint(
+        `Nearby: ${servers.length} servers (${onlineCount} online, ${adminCount} admin)`,
+    );
+    ns.tprint(
+        `Known passwords: ${knownPasswords.size} | Stasis: ${stasisServers.size}/${stasisLimit >= 0 ? stasisLimit : "?"}`,
+    );
 
     if (instability) {
         const authMult = instability.authenticationDurationMultiplier ?? 1;
         const timeoutChance = instability.authenticationTimeoutChance ?? 0;
         if (authMult > 1.05 || timeoutChance > 0.01) {
-            ns.tprint(`WARNING: Instability — auth ×${authMult.toFixed(2)}, timeout ${(timeoutChance * 100).toFixed(1)}%`);
+            ns.tprint(
+                `WARNING: Instability — auth ×${authMult.toFixed(2)}, timeout ${(timeoutChance * 100).toFixed(1)}%`,
+            );
         }
     }
 
     ns.tprint(`─────────────────────────────────────`);
 
     for (const s of servers) {
-        let status = s.isOnline ? (s.hasAdmin ? '✓' : (s.hasSession ? '◉' : '○')) : '✗';
-        let badges = '';
-        if (s.hasStasis) badges += ' [STASIS]';
-        if (s.hasCaches) badges += ' [CACHE]';
-        if (s.hasPassword) badges += ' [PWD]';
+        let status = s.isOnline
+            ? s.hasAdmin
+                ? "✓"
+                : s.hasSession
+                  ? "◉"
+                  : "○"
+            : "✗";
+        let badges = "";
+        if (s.hasStasis) badges += " [STASIS]";
+        if (s.hasCaches) badges += " [CACHE]";
+        if (s.hasPassword) badges += " [PWD]";
 
-        const tierText = s.tierLabel || '?';
-        const depthText = s.depth !== null ? `d:${s.depth}` : 'd:?';
+        const tierText = s.tierLabel || "?";
+        const depthText = s.depth !== null ? `d:${s.depth}` : "d:?";
 
-        ns.tprint(`${status} ${s.hostname} — ${s.modelId} [${tierText}] ${depthText}${badges}`);
+        ns.tprint(
+            `${status} ${s.hostname} — ${s.modelId} [${tierText}] ${depthText}${badges}`,
+        );
 
         if (showStats && s.isOnline) {
             const freeRam = Math.max(0, s.maxRam - s.usedRam);
             let statsLine = `    RAM: ${formatRam(freeRam)}/${formatRam(s.maxRam)}`;
-            if (s.blockedRam > 0) statsLine += ` (${formatRam(s.blockedRam)} blocked)`;
-            if (s.requiredCharisma > 0) statsLine += ` CHA≥${s.requiredCharisma}`;
+            if (s.blockedRam > 0)
+                statsLine += ` (${formatRam(s.blockedRam)} blocked)`;
+            if (s.requiredCharisma > 0)
+                statsLine += ` CHA≥${s.requiredCharisma}`;
             ns.tprint(statsLine);
         }
 
@@ -378,14 +456,22 @@ function outputTprint(ns, currentHost, servers, knownPasswords, stasisServers, s
 
 // ─── JSON Output ────────────────────────────────────────────────────────────
 
-function outputJson(ns, currentHost, servers, knownPasswords, stasisServers, stasisLimit, instability) {
+function outputJson(
+    ns,
+    currentHost,
+    servers,
+    knownPasswords,
+    stasisServers,
+    stasisLimit,
+    instability,
+) {
     const output = {
         timestamp: Date.now(),
         currentHost,
         summary: {
             total: servers.length,
-            online: servers.filter(s => s.isOnline).length,
-            admin: servers.filter(s => s.hasAdmin).length,
+            online: servers.filter((s) => s.isOnline).length,
+            admin: servers.filter((s) => s.hasAdmin).length,
             knownPasswords: knownPasswords.size,
             stasisLinks: stasisServers.size,
             stasisLimit: stasisLimit >= 0 ? stasisLimit : null,
@@ -432,7 +518,7 @@ function safeGetInstability(ns) {
 
 function safeLsCaches(ns, hostname) {
     try {
-        return ns.ls(hostname, '.cache').length > 0;
+        return ns.ls(hostname, ".cache").length > 0;
     } catch {
         return false;
     }
@@ -442,22 +528,22 @@ function loadPasswords(ns) {
     try {
         const data = ns.read(PASSWORD_FILE);
         if (data) return new Map(Object.entries(JSON.parse(data)));
-    } catch { }
+    } catch {}
     return new Map();
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
 function truncate(str, maxLen) {
-    if (!str) return '';
+    if (!str) return "";
     if (str.length <= maxLen) return str;
-    return str.substring(0, maxLen - 3) + '...';
+    return str.substring(0, maxLen - 3) + "...";
 }
 
 function escapeHtml(text) {
     return String(text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }

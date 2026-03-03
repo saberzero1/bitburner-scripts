@@ -11,5 +11,7 @@ export async function main(ns) {
     await ns.sleep(delay || 100);
     var pid = ns.run(scriptpath, { temporary: true }, ...forwardedArgs);
     if (!pid)
-        ns.tprint(`Failed to spawn "${scriptpath}" with args: ${forwardedArgs} (bad file name or insufficient RAM?)`);
+        ns.tprint(
+            `Failed to spawn "${scriptpath}" with args: ${forwardedArgs} (bad file name or insufficient RAM?)`,
+        );
 }
