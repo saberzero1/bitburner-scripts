@@ -1,4 +1,17 @@
 
+# Dependency directory
+node_modules/
+
+# Build output
+build/
+
+# Plugin-generated type definitions
+NetscriptDefinitions.d.ts
+
+# Editor config
+.vscode/
+
+# Misc
 *.txt
-.vscode/*.*
 *.ts
+!servers/**/*.ts

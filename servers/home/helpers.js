@@ -552,7 +552,24 @@ const _cachedExports = []; // A cached list of functions exported by helpers.js.
 function getExports(ns) {
     if (_cachedExports.length > 0) return _cachedExports;
     const scriptHelpersRows = ns.read(getFilePath("helpers.js")).split("\n");
+    let inExportBlock = false;
     for (const row of scriptHelpersRows) {
+        const trimmed = row.trim();
+        // Handle "export { name1, name2, ... }" blocks (esbuild output format)
+        if (inExportBlock || trimmed.startsWith("export {")) {
+            inExportBlock = true;
+            // Extract comma-separated names, ignoring braces and "export"
+            const names = trimmed
+                .replace(/^export\s*\{/, "")
+                .replace(/};?$/, "")
+                .split(",")
+                .map((n) => n.trim())
+                .filter((n) => n.length > 0);
+            _cachedExports.push(...names);
+            if (trimmed.includes("}")) inExportBlock = false;
+            continue;
+        }
+        // Handle "export function name(" lines (original source format)
         if (!row.startsWith("export")) continue;
         const funcNameStart = row.indexOf("function") + "function".length + 1;
         const funcNameEnd = row.indexOf("(", funcNameStart);

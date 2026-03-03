@@ -212,17 +212,37 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
         const val2 = ["Corp Rev"];
         if (3 in dictSourceFiles || 3 == bitNode) {
             try {
-                const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+                const hasCorp = await getNsDataThroughFile(
+                    ns,
+                    "ns.corporation.hasCorporation()",
+                );
                 if (hasCorp) {
-                    const corp = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation()');
-                    val1.push(true, formatMoney(corp.funds), `Corporation funds: ${formatMoney(corp.funds)}`);
-                    val2.push(true, formatMoney(corp.revenue) + '/s', `Revenue: ${formatMoney(corp.revenue)}/s, Expenses: ${formatMoney(corp.expenses)}/s`);
+                    const corp = await getNsDataThroughFile(
+                        ns,
+                        "ns.corporation.getCorporation()",
+                    );
+                    val1.push(
+                        true,
+                        formatMoney(corp.funds),
+                        `Corporation funds: ${formatMoney(corp.funds)}`,
+                    );
+                    val2.push(
+                        true,
+                        formatMoney(corp.revenue) + "/s",
+                        `Revenue: ${formatMoney(corp.revenue)}/s, Expenses: ${formatMoney(corp.expenses)}/s`,
+                    );
                 } else {
                     val1.push(false);
                     val2.push(false);
                 }
-            } catch (e) { val1.push(false); val2.push(false); }
-        } else { val1.push(false); val2.push(false); }
+            } catch (e) {
+                val1.push(false);
+                val2.push(false);
+            }
+        } else {
+            val1.push(false);
+            val2.push(false);
+        }
         hudData.push(val1, val2);
     }
 

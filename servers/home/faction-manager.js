@@ -1232,21 +1232,6 @@ function getPrereqSet(augName) {
     return prereqs;
 }
 
-const prereqCache = new Map();
-function getPrereqSet(augName) {
-    if (prereqCache.has(augName)) return prereqCache.get(augName);
-    const aug = augmentationData[augName];
-    const prereqs = new Set();
-    if (aug?.prereqs?.length) {
-        for (const prereq of aug.prereqs) {
-            prereqs.add(prereq);
-            for (const nested of getPrereqSet(prereq)) prereqs.add(nested);
-        }
-    }
-    prereqCache.set(augName, prereqs);
-    return prereqs;
-}
-
 /** Sort augmentations such that they are in order of price, except when there are prerequisites to worry about
  * @param {NS} ns
  * @param {AugmentationData[]} augs augmentations to sort
