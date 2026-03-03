@@ -7,7 +7,7 @@ const argsSchema = [
     ["new-file", []], // If a repository listing fails, only files returned by ns.ls() will be downloaded. You can add additional files to seek out here.
     ["subfolder", ""], // Can be set to download to a sub-folder that is not part of the remote repository structure
     ["extension", [".js", ".ns", ".txt", ".script"]], // Files to download by extension
-    ["omit-folder", ["Temp/"]],
+    ["omit-folder", ["Temp/", "build/", "node_modules/", ".github/"]],
 ];
 
 export function autocomplete(data, args) {
@@ -30,12 +30,16 @@ export async function main(ns) {
     options.subfolder = options.subfolder
         ? trimSlash(options.subfolder) // Remove leading slash from any user-specified folder
         : ns.getScriptName().substring(0, ns.getScriptName().lastIndexOf("/")); // Default to the current folder
-    const baseUrl = `raw.githubusercontent.com/${options.github}/${options.repository}/${options.branch}/`;
-    const filesToDownload = options["new-file"].concat(
-        options.download.length > 0
-            ? options.download
-            : await repositoryListing(ns),
-    );
+    const baseUrl = `raw.githubusercontent.com/${options.github}/${options.repository}/${options.branch}/servers/home/`;
+    const filesToDownload = options["new-file"]
+        .concat(
+            options.download.length > 0
+                ? options.download
+                : await repositoryListing(ns),
+        )
+        .map((f) =>
+            f.startsWith("servers/home/") ? f.slice("servers/home/".length) : f,
+        );
     for (const localFilePath of filesToDownload) {
         let fullLocalFilePath = pathJoin(options.subfolder, localFilePath);
         const remoteFilePath = `https://` + pathJoin(baseUrl, localFilePath);
@@ -107,7 +111,7 @@ export function rewriteFileForSubfolder(ns, path) {
  * Gets a list of files to download, either from the github repository (if supported), or using a local directory listing **/
 async function repositoryListing(ns, folder = "") {
     // Note: Limit of 60 free API requests per day, don't over-do it
-    const listUrl = `https://api.github.com/repos/${options.github}/${options.repository}/contents/${folder}?ref=${options.branch}`;
+    const listUrl = `https://api.github.com/repos/${options.github}/${options.repository}/contents/servers/home/${folder}?ref=${options.branch}`;
     let response = null;
     try {
         response = await fetch(listUrl); // Raw response

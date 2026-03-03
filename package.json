@@ -1,0 +1,16 @@
+{
+    "name": "bitburner-scripts",
+    "version": "1.0.0",
+    "description": "Bitburner scripts with esbuild-bitburner-plugin for remote deployment",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "start": "node ./config.mjs",
+        "build": "node ./config.mjs --build"
+    },
+    "license": "MIT",
+    "dependencies": {
+        "esbuild": "^0.23.1",
+        "esbuild-bitburner-plugin": "^1.6.3"
+    }
+}
