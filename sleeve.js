@@ -297,6 +297,56 @@ function getPreferredFactionWorkIndex(sleeve) {
     return works.indexOf("security");
 }
 
+async function getFactionWorkTargets(ns, playerInfo) {
+    if (Date.now() < factionWorkCacheExpiry) return factionWorkCache;
+    const ownedAugs = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations(true)');
+    const factions = playerInfo.factions ?? [];
+    const factionAugMap = factions.length > 0 ? await getNsDataThroughFile(
+        ns,
+        'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getAugmentationsFromFaction(f)]))',
+        '/Temp/faction-augs.txt',
+        factions
+    ) : {};
+    factionRepCache = factions.length > 0 ? await getNsDataThroughFile(
+        ns,
+        'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionRep(f)]))',
+        '/Temp/faction-rep.txt',
+        factions
+    ) : {};
+    try {
+        factionWorkTypesCache = factions.length > 0 ? await getNsDataThroughFile(
+            ns,
+            'Object.fromEntries(ns.args.map(f => [f, ns.singularity.getFactionWorkTypes(f)]))',
+            '/Temp/faction-work-types.txt',
+            factions
+        ) : {};
+        factionWorkTypesCacheExpiry = Date.now() + 60000;
+    } catch {
+        factionWorkTypesCache = {};
+        factionWorkTypesCacheExpiry = Date.now() + 60000;
+    }
+    factionWorkCache = Object.keys(factionAugMap)
+        .map(name => ({
+            name,
+            unownedCount: factionAugMap[name].filter(aug => !ownedAugs.includes(aug)).length,
+            rep: factionRepCache[name] ?? 0,
+            supportedWorks: (factionWorkTypesCache[name] ?? works),
+            supportedWorksLower: (factionWorkTypesCache[name] ?? works).map(w => w.toLowerCase())
+        }))
+        .filter(entry => entry.unownedCount > 0 && !(unsupportedFactionWork[entry.name] > Date.now()))
+        .filter(entry => entry.supportedWorksLower.some(w => works.includes(w)))
+        .sort((a, b) => (b.unownedCount - a.unownedCount) || (a.rep - b.rep) || a.name.localeCompare(b.name));
+    factionWorkCacheExpiry = Date.now() + 60000;
+    return factionWorkCache;
+}
+
+function getPreferredFactionWorkIndex(sleeve) {
+    const physicalAvg = (sleeve.skills.strength + sleeve.skills.defense + sleeve.skills.dexterity + sleeve.skills.agility) / 4;
+    if (sleeve.skills.hacking >= physicalAvg && sleeve.skills.hacking >= sleeve.skills.charisma) return works.indexOf('hacking');
+    if (sleeve.skills.charisma >= physicalAvg) return works.indexOf('field');
+    return works.indexOf('security');
+}
+
 /** @param {NS} ns
  * @param {number} numSleeves
  * @returns {Promise<SleevePerson[]>} */
