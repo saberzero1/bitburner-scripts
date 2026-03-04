@@ -1031,6 +1031,7 @@ export async function main(ns) {
             daemonArgs.push(
                 "--reserved-ram",
                 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16),
+                // 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16),
             );
 
         // Once stanek's gift is accepted, launch it once per reset before we launch daemon (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)

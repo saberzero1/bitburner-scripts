@@ -9,7 +9,6 @@ import {
 import {
     getDarknetPasswordSolver,
     tryFormatBruteforce,
-    solveLabyrinth,
     parseDarknetLogs,
     estimateCrackDifficulty,
 } from "./darknet-helpers.js";
@@ -54,6 +53,7 @@ export function autocomplete(data, args) {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const AIR_GAP_DEPTH = 8;
+const DARKWEB_HOSTNAME = "darkweb";
 const CLUE_FILE_SUFFIX = ".data.txt";
 const PROBE_SCRIPT = "/Remote/darknet-probe.js";
 const PASSWORD_FILE = "/data/darknet-passwords.txt";
@@ -61,7 +61,17 @@ const OPTIONS_FILE = "/data/darknet-options.txt";
 const CLUE_CACHE_FILE = "/data/darknet-clues-scanned.txt";
 const STASIS_HELPER_SCRIPT = "/Temp/darknet-stasis-helper.js";
 const STASIS_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const enable = ns.args[0] === 'true'; ns.dnet.setStasisLink(enable); }`;
-const PROBE_VERSION = 9;
+const MUTATION_HELPER_SCRIPT = "/Temp/darknet-mutation-wait.js";
+const MUTATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { await ns.dnet.nextMutation(); ns.write('/Temp/mutation-done.txt', 'done', 'w'); ns.rm('${MUTATION_HELPER_SCRIPT}'); }`;
+const RAMFREE_HELPER_SCRIPT = "/Temp/darknet-ramfree.js";
+const RAMFREE_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { while (ns.dnet.getBlockedRam() > 0) { await ns.dnet.memoryReallocation(); await ns.sleep(50); } ns.write('/Temp/ramfree-done.txt', 'done', 'w'); }`;
+const RAMFREE_RESULT_FILE = "/Temp/ramfree-done.txt";
+const PROBE_VERSION = 25;
+
+/** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
+function normalizeFilename(path) {
+    return path.startsWith('/') ? path.substring(1) : path;
+}
 
 // ─── Entry Point ─────────────────────────────────────────────────────────────
 
@@ -114,10 +124,45 @@ export async function main(ns) {
                 "warning",
             );
         }
-        await Promise.race([
-            ns.dnet.nextMutation(),
-            ns.sleep(options.interval),
-        ]);
+        await waitForMutation(ns, options.interval);
+    }
+}
+
+/**
+ * Wait for a darknet mutation event OR a timeout, whichever comes first.
+ * Uses a temp script to call ns.dnet.nextMutation() (1.0GB) so the cost
+ * doesn't inflate the orchestrator's static RAM analysis.
+ */
+async function waitForMutation(ns, interval) {
+    const doneFile = "/Temp/mutation-done.txt";
+    try {
+        ns.write(MUTATION_HELPER_SCRIPT, MUTATION_HELPER_CONTENT, "w");
+        ns.write(doneFile, "", "w");
+        const pid = ns.exec(MUTATION_HELPER_SCRIPT, "home", 1);
+        if (pid <= 0) {
+            // Fallback to plain sleep if we can't spawn the helper
+            await ns.sleep(interval);
+            return;
+        }
+        // Poll for either the mutation helper finishing or timeout
+        const deadline = Date.now() + interval;
+        while (Date.now() < deadline) {
+            const data = ns.read(doneFile);
+            if (data === "done") {
+                break;
+            }
+            // Check if helper died without writing
+            const running = ns.ps("home").some((p) => p.pid === pid);
+            if (!running) break;
+            await ns.sleep(200);
+        }
+        // Kill helper if it's still running (timeout case)
+        try { ns.kill(pid); } catch {}
+        // Clean up temp files
+        try { ns.rm(MUTATION_HELPER_SCRIPT); } catch {}
+        try { ns.rm(doneFile); } catch {}
+    } catch {
+        await ns.sleep(interval);
     }
 }
 
@@ -136,6 +181,7 @@ class DarknetState {
         this.stasisServers = new Set(); // hostnames with active stasis links
         this.scannedClueFiles = new Set(); // set of file paths already scanned
         this.pendingMigrations = new Map(); // hostname -> { charge, lastAttempt }
+        this.authenticatedServers = new Set(); // servers confirmed to have admin
         this.lastRefresh = 0;
         this.lastStatusLog = 0;
         this.lastStats = {
@@ -209,7 +255,7 @@ class DarknetState {
         for (const [hostname, probeInfo] of this.activeProbes) {
             try {
                 const procs = ns.ps(hostname);
-                const probeScript = getFilePath(PROBE_SCRIPT);
+                const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
                 const alive = procs.some(
                     (p) =>
                         p.filename === probeScript && p.pid === probeInfo.pid,
@@ -242,6 +288,19 @@ class DarknetState {
     }
 }
 
+/**
+ * Check if a server is authenticated (has admin rights) without using
+ * the expensive ns.dnet.getServer() API (2 GB). Uses our tracked state instead.
+ * darkweb always has admin. Any server we've successfully authenticated is tracked.
+ */
+function isServerAuthenticated(state, hostname) {
+    if (hostname === DARKWEB_HOSTNAME) return true;
+    if (state.authenticatedServers.has(hostname)) return true;
+    if (state.knownPasswords.has(hostname)) return true;
+    if (state.cluePasswords.has(hostname)) return true;
+    return false;
+}
+
 // ─── Server Info ─────────────────────────────────────────────────────────────
 
 /**
@@ -257,7 +316,7 @@ class DarknetServerInfo {
         this.isOnline = authDetails.isOnline;
         this.isConnected = authDetails.isConnectedToCurrentServer;
         this.hasSession = authDetails.hasSession;
-        this.hasAdmin = authDetails.hasAdminRights;
+        this.hasAdmin = false; // NOTE: getServerAuthDetails does NOT return hasAdminRights; use isServerAuthenticated() instead
         this.passwordFormat = authDetails.passwordFormat;
         this.passwordLength = authDetails.passwordLength;
         this.depth = authDetails.depth ?? null;
@@ -278,8 +337,15 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 1: Ensure home has a probe running
     await ensureHomeProbe(ns, state, options);
 
-    // Step 2: Discover servers via probe from home
-    const nearbyServers = safeProbe(ns);
+    // Step 2: Discover servers via probe from home (sees only darkweb)
+    let nearbyServers = safeProbe(ns);
+
+    // Step 2b: Also probe from darkweb and other authed darknet servers
+    // to discover depth-0+ servers the orchestrator otherwise never learns about
+    const extraServers = await discoverFromAuthedServers(ns, state);
+    for (const s of extraServers) {
+        if (!nearbyServers.includes(s)) nearbyServers.push(s);
+    }
 
     // Step 3: Build a prioritized work queue
     const workQueue = buildWorkQueue(ns, state, nearbyServers, options);
@@ -287,6 +353,77 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 4: Process each server
     for (const hostname of workQueue) {
         await processServer(ns, state, hostname, options);
+    }
+
+    // Step 4b: Collect passwords from stasis servers and deploy probes
+    // Stasis servers are exec/scp-reachable from home at any distance, but we
+    // need the actual password to establish a session. Probes on those servers
+    // saved passwords to their local /data/darknet-passwords.txt — pull those back.
+    for (const stasisHost of state.stasisServers) {
+        if (stasisHost === "home") continue;
+        try {
+            // Alternative approach: exec a tiny helper on the stasis server that writes
+            // its password file contents to a Netscript port. This avoids overwriting
+            // home's password file.
+            const STASIS_PWD_PORT = 19;
+            const helperScript = `/Temp/stasis-pwd-helper-${stasisHost.replace(/[^a-zA-Z0-9]/g, '_')}.js`;
+            const helperContent =
+                `/** @param {NS} ns */ export async function main(ns) {` +
+                ` const data = ns.read("${PASSWORD_FILE}");` +
+                ` if (data) ns.writePort(${STASIS_PWD_PORT}, JSON.stringify({host: ns.getHostname(), data}));` +
+                `}`;
+
+            // Check if stasis server has enough RAM for the helper (~1.6 GB base)
+            const maxRam = ns.getServerMaxRam(stasisHost);
+            const usedRam = ns.getServerUsedRam(stasisHost);
+            const freeRam = Math.max(0, maxRam - usedRam);
+            if (freeRam >= 1.7) {
+                ns.write(helperScript, helperContent, "w");
+                ns.scp(helperScript, stasisHost, "home");
+                const pid = ns.exec(helperScript, stasisHost, 1);
+                if (pid > 0) {
+                    // Wait briefly for it to complete
+                    let waited = 0;
+                    while (waited < 2000) {
+                        await ns.sleep(50);
+                        waited += 50;
+                        if (!ns.ps(stasisHost).some((p) => p.pid === pid)) break;
+                    }
+                    // Read result from port
+                    while (ns.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
+                        const raw = ns.readPort(STASIS_PWD_PORT);
+                        try {
+                            const msg = JSON.parse(String(raw));
+                            if (msg.data) {
+                                const remotePwds = JSON.parse(msg.data);
+                                let newCount = 0;
+                                for (const [host, pwd] of Object.entries(remotePwds)) {
+                                    if (!state.knownPasswords.has(host)) {
+                                        state.addPassword(ns, host, pwd);
+                                        newCount++;
+                                    }
+                                }
+                                if (newCount > 0) {
+                                    log(ns, `Collected ${newCount} new password(s) from stasis server ${stasisHost}`);
+                                }
+                            }
+                        } catch {}
+                    }
+                }
+                // Cleanup
+                try { ns.rm(helperScript); } catch {}
+                try { ns.rm(helperScript, stasisHost); } catch {}
+            }
+
+            // Now try to establish session and deploy probe with known password
+            const pwd = state.getPassword(stasisHost);
+            if (pwd !== undefined) {
+                try { ns.dnet.connectToSession(stasisHost, pwd); } catch {}
+            }
+            await deployProbe(ns, state, stasisHost, options);
+        } catch (err) {
+            if (verbose) log(ns, `Stasis probe deploy to ${stasisHost} failed: ${getErrorInfo(err)}`);
+        }
     }
 
     // Step 5: Scan clue files on all cracked servers
@@ -323,6 +460,99 @@ function safeProbe(ns) {
 }
 
 /**
+ * Discover servers by probing from darkweb and other authenticated darknet servers.
+ * From home, ns.dnet.probe() only returns ["darkweb"] because home is not a DarknetServer.
+ * From darkweb, probe returns all depth-0 servers. From depth-0 servers, probe returns
+ * depth-1 neighbors, etc. This expands the orchestrator's visibility beyond just darkweb.
+ * Uses a temp script pattern to call probe() on remote servers (0.2 GB + 1.6 GB base).
+ */
+async function discoverFromAuthedServers(ns, state) {
+    const discovered = [];
+
+    // Always try darkweb first — it sees all depth-0 servers
+    const probeTargets = [DARKWEB_HOSTNAME];
+
+    // Also add authenticated servers that have active probes (we know they're reachable)
+    for (const [hostname] of state.activeProbes) {
+        if (hostname === "home" || hostname === DARKWEB_HOSTNAME) continue;
+        if (isServerAuthenticated(state, hostname)) {
+            probeTargets.push(hostname);
+        }
+    }
+
+    // Use a dedicated Netscript port for receiving probe results from remote servers.
+    // Ports are global — any server can write to them regardless of network topology.
+    // Port 20 is reserved for darknet discovery (helpers.js uses ports 1-20 round-robin,
+    // but only briefly; we clear before and after use).
+    const DISCOVERY_PORT = 20;
+    ns.clearPort(DISCOVERY_PORT);
+
+    let probeCounter = 0;
+
+    for (const target of probeTargets) {
+        try {
+            // Check if target has enough RAM for temp probe script (1.8 GB)
+            const maxRam = ns.getServerMaxRam(target);
+            const usedRam = ns.getServerUsedRam(target);
+            const freeRam = Math.max(0, maxRam - usedRam);
+            if (freeRam < 1.8) continue;
+
+            const probeId = probeCounter++;
+            const helperScript = `/Temp/darknet-probe-helper-${probeId}.js`;
+
+            // The temp script runs probe() on the remote server and writes result to a port.
+            // This avoids scp back to home which may be unreachable from the darknet.
+            const helperContent =
+                `/** @param {NS} ns */ export async function main(ns) {` +
+                ` const result = ns.dnet.probe();` +
+                ` const data = JSON.stringify(result ?? []);` +
+                ` ns.writePort(${DISCOVERY_PORT}, data);` +
+                `}`;
+
+            ns.write(helperScript, helperContent, "w");
+            ns.scp(helperScript, target, "home");
+
+            const pid = ns.exec(helperScript, target, 1);
+            if (pid <= 0) continue;
+
+            // Wait for the temp script to finish (probe is near-instant)
+            let waited = 0;
+            while (waited < 2000) {
+                await ns.sleep(50);
+                waited += 50;
+                if (!ns.ps(target).some((p) => p.pid === pid)) break;
+            }
+
+            // Read all results from the port (the script wrote one JSON array)
+            while (ns.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
+                const raw = ns.readPort(DISCOVERY_PORT);
+                try {
+                    const servers = JSON.parse(String(raw));
+                    if (Array.isArray(servers)) {
+                        for (const s of servers) {
+                            if (!discovered.includes(s)) discovered.push(s);
+                        }
+                    }
+                } catch {}
+            }
+
+            // Cleanup temp script on both home and target
+            try { ns.rm(helperScript); } catch {}
+            try { ns.rm(helperScript, target); } catch {}
+        } catch {
+            // Target server offline or inaccessible
+        }
+    }
+
+    // Final cleanup: drain any leftover port data
+    while (ns.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
+        ns.readPort(DISCOVERY_PORT);
+    }
+
+    return discovered;
+}
+
+/**
  * Build a prioritized work queue. Easy servers first (low tier),
  * then servers we already have passwords for, then the rest.
  */
@@ -346,8 +576,8 @@ function buildWorkQueue(ns, state, nearbyServers, options) {
             state.serverDepths.set(hostname, serverInfo.depth);
         }
 
-        // Skip already-admin servers for auth (but still add to discovered)
-        if (details.hasAdminRights) {
+        // Skip already-authenticated servers for auth (but still add to discovered)
+        if (isServerAuthenticated(state, hostname)) {
             // Still need to deploy probes, but prioritize new servers for auth
             withInfo.push({ hostname, serverInfo, priority: 1000 }); // low priority
             continue;
@@ -399,8 +629,8 @@ async function processServer(ns, state, hostname, options) {
     const serverInfo = new DarknetServerInfo(hostname, details);
     state.discoveredServers.set(hostname, serverInfo);
 
-    // Already have admin — deploy probe
-    if (details.hasAdminRights) {
+    // Already authenticated — deploy probe
+    if (isServerAuthenticated(state, hostname)) {
         await deployProbe(ns, state, hostname, options);
         return;
     }
@@ -426,6 +656,7 @@ async function processServer(ns, state, hostname, options) {
         options,
     );
     if (success) {
+        state.authenticatedServers.add(hostname);
         await deployProbe(ns, state, hostname, options);
     }
 }
@@ -473,22 +704,21 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
         state.cluePasswords.delete(hostname);
     }
 
-    // Labyrinth — special solver
+    // Labyrinth — must be solved by a probe running on an adjacent darknet server.
+    // labreport/labradar/authenticate all require direct connection or running on a
+    // darknet server, which the orchestrator on home cannot satisfy.
+    // Probes detect labyrinth modelId and solve it using a persistent-PID temp script.
     if (serverInfo.modelId === "(The Labyrinth)") {
-        try {
-            const solved = await solveLabyrinth(ns, hostname);
-            if (solved) {
-                log(ns, `SUCCESS: Solved labyrinth on ${hostname}`);
-                return true;
-            }
-        } catch (err) {
-            if (verbose)
-                log(
-                    ns,
-                    `Labyrinth solve failed on ${hostname}: ${getErrorInfo(err)}`,
-                );
-        }
+        if (verbose)
+            log(ns, `Labyrinth detected on ${hostname} — delegating to probes`);
         return false;
+    }
+
+    // Re-check: another agent (probe) may have cracked this while we waited
+    const preCheck = safeGetAuthDetails(ns, hostname);
+    if (preCheck?.hasAdminRights) {
+        if (verbose) log(ns, `${hostname} already cracked by another agent`);
+        return true;
     }
 
     // Model-specific solver
@@ -511,6 +741,13 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
             if (verbose)
                 log(ns, `Solver error on ${hostname}: ${getErrorInfo(err)}`);
         }
+    }
+
+    // Re-check before bruteforce: another agent may have cracked this
+    const preBrute = safeGetAuthDetails(ns, hostname);
+    if (preBrute?.hasAdminRights) {
+        if (verbose) log(ns, `${hostname} already cracked by another agent`);
+        return true;
     }
 
     // Format-based bruteforce fallback
@@ -547,6 +784,93 @@ function logAuthFailure(ns, state, hostname, serverInfo) {
     );
 }
 
+
+/**
+ * Free blocked RAM on a target server by running memoryReallocation via temp script.
+ * Must be called BEFORE deploying probe so there's enough free RAM.
+ * The temp script costs ~2.6 GB (1.6 base + 1.0 memoryReallocation).
+ * getBlockedRam costs 0 GB and doesn't require direct connection — safe from home.
+ * memoryReallocation requires direct connection + admin — must run on target.
+ */
+async function freeBlockedRamOnServer(ns, state, hostname, options) {
+    try {
+        const blockedRam = ns.dnet.getBlockedRam(hostname);
+        if (blockedRam <= 0) return; // Already free
+
+        // Check there's enough free RAM on target for the helper script (~2.6 GB)
+        const maxRam = ns.getServerMaxRam(hostname);
+        const usedRam = ns.getServerUsedRam(hostname);
+        const freeRam = Math.max(0, maxRam - usedRam);
+        const helperCost = 2.6; // 1.6 base + 1.0 memoryReallocation
+        if (freeRam < helperCost) {
+            if (options.verbose) {
+                log(ns, `WARN: ${hostname} lacks RAM for RAM-free helper (needs ${helperCost}GB, has ${formatRam(freeRam)} free)`, false, 'warning');
+            }
+            return;
+        }
+        // Guard: ns.exec requires adjacency, backdoor, or stasis link from the calling server.
+        // The orchestrator runs on home. From home, only 'darkweb' is adjacent.
+        // For non-adjacent, non-stasis servers, we cannot exec the helper.
+        const ramFreeDetails = safeGetAuthDetails(ns, hostname);
+        const canExec =
+            hostname === DARKWEB_HOSTNAME ||
+            ramFreeDetails?.isConnectedToCurrentServer ||
+            state.stasisServers.has(hostname);
+
+        if (!canExec) {
+            if (options.verbose) {
+                log(ns, `INFO: Cannot exec RAM-free helper on ${hostname} from home (not adjacent/stasis). Skipping.`);
+            }
+            return;
+        }
+
+        log(ns, `Freeing ${formatRam(blockedRam)} blocked RAM on ${hostname}...`);
+
+        // Write, SCP, and execute the helper script on the target
+        ns.write(RAMFREE_HELPER_SCRIPT, RAMFREE_HELPER_CONTENT, 'w');
+        ns.scp(RAMFREE_HELPER_SCRIPT, hostname, 'home');
+
+        // Clear old result file
+        try { ns.rm(RAMFREE_RESULT_FILE); } catch {}
+
+        const pid = ns.exec(RAMFREE_HELPER_SCRIPT, hostname, 1);
+        if (pid <= 0) {
+            if (options.verbose) {
+                log(ns, `WARN: Failed to launch RAM-free helper on ${hostname}`, false, 'warning');
+            }
+            return;
+        }
+
+        // Wait for completion (memoryReallocation takes ~0.2-8s per call, may need many calls)
+        // For 1 GB blocked RAM at difficulty 0 with modest charisma: ~14 calls * ~2s each = ~28s
+        // Generous timeout of 120s to handle slow cases
+        const maxWait = 120000;
+        let waited = 0;
+        while (waited < maxWait) {
+            await ns.sleep(500);
+            waited += 500;
+            // Check if the script finished
+            if (!ns.ps(hostname).some(p => p.pid === pid)) break;
+        }
+
+        // Verify success
+        const remaining = ns.dnet.getBlockedRam(hostname);
+        if (remaining <= 0) {
+            log(ns, `Freed all blocked RAM on ${hostname} (was ${formatRam(blockedRam)})`);
+        } else {
+            log(ns, `Partially freed RAM on ${hostname}: ${formatRam(blockedRam - remaining)} freed, ${formatRam(remaining)} remaining`, false, 'warning');
+        }
+
+        // Cleanup
+        try { ns.rm(RAMFREE_HELPER_SCRIPT, hostname); } catch {}
+        try { ns.rm(RAMFREE_RESULT_FILE); } catch {}
+        try { ns.rm(RAMFREE_RESULT_FILE, hostname); } catch {}
+    } catch (err) {
+        if (options.verbose) {
+            log(ns, `WARN: RAM-free failed on ${hostname}: ${getErrorInfo(err)}`, false, 'warning');
+        }
+    }
+}
 // ─── Probe Deployment ────────────────────────────────────────────────────────
 
 /**
@@ -561,19 +885,21 @@ async function deployProbe(ns, state, hostname, options) {
     )
         return;
 
-    const probeScript = getFilePath(PROBE_SCRIPT);
+    const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
 
     // Check if probe script exists on home
     if (!ns.fileExists(probeScript, "home")) return;
 
     try {
-        // Establish session if we know the password
-        const password = state.getPassword(hostname);
-        if (password !== undefined) {
-            try {
-                ns.dnet.connectToSession(hostname, password);
-            } catch {
-                /* session already exists or failed */
+        // Establish session if we know the password (skip for darkweb — always accessible)
+        if (hostname !== DARKWEB_HOSTNAME) {
+            const password = state.getPassword(hostname);
+            if (password !== undefined) {
+                try {
+                    ns.dnet.connectToSession(hostname, password);
+                } catch {
+                    /* session already exists or failed */
+                }
             }
         }
 
@@ -607,19 +933,15 @@ async function deployProbe(ns, state, hostname, options) {
             return;
         }
 
-        // Calculate optimal thread count based on RAM budget
+        // Free blocked RAM before checking if probe fits (especially important for 16GB servers)
+        await freeBlockedRamOnServer(ns, state, hostname, options);
+
+        // Probe logic is not thread-parallelized; extra threads just duplicate work and waste RAM
+        const threads = 1;
         const maxRam = ns.getServerMaxRam(hostname);
         const usedRam = ns.getServerUsedRam(hostname);
         const freeRam = Math.max(0, maxRam - usedRam);
         const probeRamPerThread = ns.getScriptRam(probeScript, "home");
-        const maxTempScriptCost = 7.6; // packetCapture temp script (largest)
-
-        // Reserve room for the largest temp script the probe might spawn
-        // threads = floor((freeRam - maxTempScriptCost) / probeRamPerThread)
-        const threads = Math.max(
-            1,
-            Math.floor((freeRam - maxTempScriptCost) / probeRamPerThread),
-        );
 
         if (probeRamPerThread > freeRam) {
             if (options.verbose) {
@@ -633,7 +955,8 @@ async function deployProbe(ns, state, hostname, options) {
             return;
         }
 
-        // Copy and execute
+        // Always scp the probe script — scp works at any distance with a session.
+        // Even if we can't exec from home, the probe network can pick it up later.
         ns.scp(probeScript, hostname, "home");
         if (!ns.fileExists(probeScript, hostname)) {
             log(
@@ -642,6 +965,37 @@ async function deployProbe(ns, state, hostname, options) {
                 false,
                 "warning",
             );
+            return;
+        }
+
+        // Also scp the password file so the probe has known passwords on startup
+        try {
+            const passwordData = ns.read(PASSWORD_FILE);
+            if (passwordData) {
+                ns.scp(PASSWORD_FILE, hostname, "home");
+            }
+        } catch {}
+
+        // Per darknet docs: ns.exec requires the target to be either:
+        //   (a) adjacent AND connected to the server running this script, OR
+        //   (b) backdoored, OR
+        //   (c) stasis-linked
+        // The orchestrator runs on home. From home, only 'darkweb' is adjacent.
+        // For non-adjacent servers without stasis/backdoor, we can only scp the script;
+        // the probe network must propagate via hop-by-hop exec from adjacent darknet servers.
+        const details = safeGetAuthDetails(ns, hostname);
+        const canExec =
+            hostname === DARKWEB_HOSTNAME ||
+            details?.isConnectedToCurrentServer ||
+            state.stasisServers.has(hostname);
+
+        if (!canExec) {
+            if (options.verbose) {
+                log(
+                    ns,
+                    `INFO: SCP'd probe to ${hostname} but cannot exec from home (not adjacent/stasis). Probes will propagate it.`,
+                );
+            }
             return;
         }
 
@@ -654,7 +1008,6 @@ async function deployProbe(ns, state, hostname, options) {
             );
         } else {
             if (options.verbose) {
-                const details = safeGetAuthDetails(ns, hostname);
                 log(
                     ns,
                     `WARN: Failed to launch probe on ${hostname}. ` +
@@ -681,7 +1034,7 @@ async function deployProbe(ns, state, hostname, options) {
  * Ensure a probe is running on home.
  */
 async function ensureHomeProbe(ns, state, options) {
-    const probeScript = getFilePath(PROBE_SCRIPT);
+    const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
     if (!ns.fileExists(probeScript, "home")) return;
 
     const homeProcs = ns.ps("home").filter((p) => p.filename === probeScript);
@@ -716,16 +1069,12 @@ async function ensureHomeProbe(ns, state, options) {
         return;
     }
 
-    // Calculate dynamic thread count for home
+    // Probe logic is not thread-parallelized; extra threads just duplicate work and waste RAM
+    const threads = 1;
     const maxRam = ns.getServerMaxRam("home");
     const usedRam = ns.getServerUsedRam("home");
     const freeRam = Math.max(0, maxRam - usedRam);
     const probeRamPerThread = ns.getScriptRam(probeScript, "home");
-    const maxTempScriptCost = 7.6; // packetCapture temp script
-    const threads = Math.max(
-        1,
-        Math.floor((freeRam - maxTempScriptCost) / probeRamPerThread),
-    );
 
     if (probeRamPerThread <= freeRam) {
         const pid = ns.exec(probeScript, "home", threads, PROBE_VERSION);
@@ -751,64 +1100,109 @@ async function manageStasisLinks(ns, state, options) {
     }
 
     const currentLinks = state.stasisServers.size;
-    if (currentLinks >= stasisLimit) return;
 
-    // Find candidate servers: must have admin, not already stasis-linked
-    const candidates = [];
-    for (const [hostname, info] of state.discoveredServers) {
-        if (state.stasisServers.has(hostname)) continue;
-        if (!info.hasAdmin) continue;
-
+    // Build scored candidate list for ALL authenticated servers (including current stasis)
+    const scoreServer = (hostname) => {
         let score = 0;
         const depth = state.serverDepths.get(hostname);
 
         if (depth !== undefined) {
-            // Heavily prioritize servers just before air gaps (depths 6-7, 14-15, 22-23, 30-31)
-            // Air gaps are at depths 8, 16, 24, 32, 40
             const posInGap = depth % AIR_GAP_DEPTH;
             if (
                 posInGap === AIR_GAP_DEPTH - 2 ||
                 posInGap === AIR_GAP_DEPTH - 1
             ) {
                 // Depth is 6,7 / 14,15 / 22,23 / 30,31 — critical for migration staging
-                score += 100;
+                score += 80;
             } else if (posInGap === 0 || posInGap === 1) {
-                // Just after an air gap — useful anchor point
-                score += 40;
+                score += 30;
             }
 
-            // Penalize shallow servers (depth ≤ 3) — game auto-maintains at 70% density
             if (depth <= 3) {
                 score -= 50;
             }
 
-            // Deeper servers are harder to reach, so stasis is more valuable there
             score += Math.min(depth * 2, 30);
         }
 
-        // Small bonus for higher RAM servers (normalized, not dominant)
+        // RAM is the DOMINANT factor — high-RAM servers are the primary goal
+        // for stasis (they serve as additional hacking infrastructure for daemon.js)
         try {
             const serverRam = ns.getServerMaxRam(hostname);
-            score += Math.min(serverRam / 256, 10);
+            // Strong RAM bonus: 1 point per 2GB, up to 400 points for 800GB+
+            score += Math.min(Math.floor(serverRam / 2), 400);
         } catch {}
 
-        candidates.push({ hostname, score });
-    }
+        return score;
+    };
 
+    // Find candidates not yet stasis-linked
+    const candidates = [];
+    for (const [hostname] of state.discoveredServers) {
+        if (state.stasisServers.has(hostname)) continue;
+        if (hostname === DARKWEB_HOSTNAME) continue; // darkweb is always reachable from home — stasis is pointless
+        if (!isServerAuthenticated(state, hostname)) continue;
+        candidates.push({ hostname, score: scoreServer(hostname) });
+    }
     candidates.sort((a, b) => b.score - a.score);
 
-    const slotsAvailable = stasisLimit - currentLinks;
-    for (const candidate of candidates.slice(0, slotsAvailable)) {
-        const success = await execStasisLink(
-            ns,
-            state,
-            candidate.hostname,
-            true,
-            options,
-        );
-        if (success) {
-            state.stasisServers.add(candidate.hostname);
-            log(ns, `Applied stasis link to ${candidate.hostname}`);
+    if (currentLinks < stasisLimit) {
+        // Free slots available — fill them with best candidates
+        const slotsAvailable = stasisLimit - currentLinks;
+        for (const candidate of candidates.slice(0, slotsAvailable)) {
+            if (candidate.score <= 0) break; // Not worth stasis-linking
+            const success = await execStasisLink(
+                ns,
+                state,
+                candidate.hostname,
+                true,
+                options,
+            );
+            if (success) {
+                state.stasisServers.add(candidate.hostname);
+                log(ns, `Applied stasis link to ${candidate.hostname} (score: ${candidate.score})`);
+            }
+        }
+    } else if (candidates.length > 0 && candidates[0].score > 0) {
+        // All slots full — check if the best unlinked candidate beats the weakest linked server
+        let weakestHost = null;
+        let weakestScore = Infinity;
+        for (const stasisHost of state.stasisServers) {
+            const score = scoreServer(stasisHost);
+            if (score < weakestScore) {
+                weakestScore = score;
+                weakestHost = stasisHost;
+            }
+        }
+
+        const bestCandidate = candidates[0];
+        // Only replace if the candidate beats the weakest by 20%+
+        if (weakestHost && bestCandidate.score > weakestScore * 1.1) {
+            // Remove stasis from weakest
+            const removed = await execStasisLink(
+                ns,
+                state,
+                weakestHost,
+                false,
+                options,
+            );
+            if (removed) {
+                state.stasisServers.delete(weakestHost);
+                log(ns, `Removed stasis from ${weakestHost} (score: ${weakestScore})`);
+
+                // Apply stasis to better candidate
+                const added = await execStasisLink(
+                    ns,
+                    state,
+                    bestCandidate.hostname,
+                    true,
+                    options,
+                );
+                if (added) {
+                    state.stasisServers.add(bestCandidate.hostname);
+                    log(ns, `Applied stasis link to ${bestCandidate.hostname} (score: ${bestCandidate.score}, replacing ${weakestHost})`);
+                }
+            }
         }
     }
 }
@@ -826,8 +1220,28 @@ async function execStasisLink(ns, state, hostname, enable, options) {
         return false;
     }
 
+    // Guard: ns.exec requires adjacency, backdoor, or stasis link from the calling server.
+    // The orchestrator runs on home. From home, only 'darkweb' is adjacent.
+    // We can also exec on servers that already have stasis links.
+    // For all other servers, we CANNOT exec from home — probes must handle stasis locally.
+    const details = safeGetAuthDetails(ns, hostname);
+    const canExec =
+        hostname === DARKWEB_HOSTNAME ||
+        details?.isConnectedToCurrentServer ||
+        state.stasisServers.has(hostname);
+
+    if (!canExec) {
+        if (options.verbose) {
+            log(
+                ns,
+                `INFO: Cannot exec stasis helper on ${hostname} from home (not adjacent/stasis). Probes will handle stasis locally.`,
+            );
+        }
+        return false;
+    }
+
     try {
-        const probeScript = getFilePath(PROBE_SCRIPT);
+        const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
 
         // Kill running probe on this server first — stasis helper (13.6GB) won't fit alongside probe
         const probeInfo = state.activeProbes.get(hostname);
@@ -873,6 +1287,9 @@ async function execStasisLink(ns, state, hostname, enable, options) {
             const running = ns.ps(hostname).some((p) => p.pid === pid);
             if (!running) break;
         }
+        // Clean up stasis helper temp files
+        try { ns.rm(STASIS_HELPER_SCRIPT); } catch {}
+        try { ns.rm(STASIS_HELPER_SCRIPT, hostname); } catch {}
 
         // Redeploy probe after stasis completes
         await deployProbe(ns, state, hostname, options);
@@ -907,11 +1324,11 @@ async function chargeMigrations(ns, state, options) {
     const maxLoops = options["migration-charge-loops"];
 
     const MIGRATION_HELPER_SCRIPT = "/Temp/darknet-migration-helper.js";
-    const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { ns.dnet.induceServerMigration(ns.args[0]); }`;
+    const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { ns.dnet.induceServerMigration(ns.args[0]); ns.rm('${MIGRATION_HELPER_SCRIPT}'); }`;
 
     // Find servers near air gaps that could benefit from migration
     for (const [hostname, info] of state.discoveredServers) {
-        if (!info.hasAdmin) continue;
+        if (!isServerAuthenticated(state, hostname)) continue;
         if (!info.isOnline) continue;
 
         const depth = state.serverDepths.get(hostname);
@@ -922,8 +1339,21 @@ async function chargeMigrations(ns, state, options) {
         const rowBelowGap = depth % AIR_GAP_DEPTH;
         if (rowBelowGap !== 1 && rowBelowGap !== 2) continue; // Only charge if 1-2 rows below gap
 
-        // Ensure we're connected/have session
-        if (!info.isConnected && !state.stasisServers.has(hostname)) continue;
+        // Guard: ns.exec requires adjacency, backdoor, or stasis link from the calling server.
+        // The orchestrator runs on home. From home, only 'darkweb' is adjacent.
+        // For non-adjacent, non-stasis servers, we cannot exec the migration helper.
+        const migDetails = safeGetAuthDetails(ns, hostname);
+        const canExec =
+            hostname === DARKWEB_HOSTNAME ||
+            migDetails?.isConnectedToCurrentServer ||
+            state.stasisServers.has(hostname);
+
+        if (!canExec) {
+            if (verbose) {
+                log(ns, `INFO: Cannot exec migration helper on ${hostname} from home (not adjacent/stasis). Skipping.`);
+            }
+            continue;
+        }
 
         if (verbose)
             log(ns, `Charging migration for ${hostname} (depth: ${depth})`);
@@ -997,6 +1427,9 @@ async function chargeMigrations(ns, state, options) {
                     `Migration charge failed for ${hostname}: ${getErrorInfo(err)}`,
                 );
         }
+        // Clean up migration helper temp files
+        try { ns.rm(MIGRATION_HELPER_SCRIPT); } catch {}
+        try { ns.rm(MIGRATION_HELPER_SCRIPT, hostname); } catch {}
     }
 }
 
@@ -1015,7 +1448,7 @@ async function scanAllClueFiles(ns, state, options) {
     let newCluesFound = 0;
 
     for (const [hostname, info] of state.discoveredServers) {
-        if (!info.hasAdmin) continue;
+        if (!isServerAuthenticated(state, hostname)) continue;
 
         try {
             const files = ns.ls(hostname);
@@ -1055,7 +1488,7 @@ async function scanAllClueFiles(ns, state, options) {
                             nearHost,
                             nearInfo,
                         ] of state.discoveredServers) {
-                            if (nearInfo.hasAdmin) continue;
+                            if (isServerAuthenticated(state, nearHost)) continue;
                             if (
                                 state.knownPasswords.has(nearHost) ||
                                 state.cluePasswords.has(nearHost)
@@ -1172,8 +1605,8 @@ function writeProbeOptions(ns, options) {
 // ─── Status Logging ──────────────────────────────────────────────────────────
 
 function logStatus(ns, state, verbose) {
-    const adminCount = Array.from(state.discoveredServers.values()).filter(
-        (s) => s.hasAdmin,
+    const adminCount = Array.from(state.discoveredServers.keys()).filter(
+        (hostname) => isServerAuthenticated(state, hostname),
     ).length;
     const stats = {
         discovered: state.discoveredServers.size,

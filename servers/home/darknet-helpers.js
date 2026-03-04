@@ -220,50 +220,95 @@ export function getDarknetPasswordSolver(modelId) {
 
 export async function solveLabyrinth(ns, hostname) {
     const visited = new Set();
-    const stack = [];
-    let position = { x: 0, y: 0 };
-    let lastView = null;
+    const pathStack = [];
+    // Start position is always (1,1) per source
+    let pos = { x: 1, y: 1 };
 
-    const initial = await safeAuthenticate(ns, hostname, "go north");
-    if (initial?.success) return true;
-    lastView = parseLabyrinthView(initial?.data);
-    if (!lastView) return false;
+    // Try labreport first to get reliable position + open directions
+    try {
+        const report = ns.dnet.labreport();
+        if (report && report.success && report.coords) {
+            pos = { x: report.coords[0], y: report.coords[1] };
+        }
+    } catch {}
 
-    while (true) {
-        const key = `${position.x},${position.y}`;
-        if (!visited.has(key)) visited.add(key);
+    // Maximum iterations to prevent infinite loops (largest maze is 60x40 = 2400 cells)
+    const maxIter = 5000;
+    let iter = 0;
 
-        const openDirs = getOpenDirections(lastView);
-        const nextDir = openDirs.find(
-            (dir) => !visited.has(nextPositionKey(position, dir)),
-        );
-        if (nextDir) {
-            stack.push({ position: { ...position }, dir: nextDir });
-            const moved = await moveLabyrinth(ns, hostname, position, nextDir);
-            if (moved.success) return true;
-            if (moved.moved) {
-                position = moved.position;
+    while (iter++ < maxIter) {
+        const key = `${pos.x},${pos.y}`;
+        visited.add(key);
+
+        // Get open directions — prefer labreport (free, reliable), fallback to labradar/view parsing
+        let openDirs = null;
+        try {
+            const rpt = ns.dnet.labreport();
+            if (rpt && rpt.success) {
+                openDirs = [];
+                if (rpt.north) openDirs.push("north");
+                if (rpt.south) openDirs.push("south");
+                if (rpt.east) openDirs.push("east");
+                if (rpt.west) openDirs.push("west");
+                if (rpt.coords) {
+                    pos = { x: rpt.coords[0], y: rpt.coords[1] };
+                }
             }
-            lastView = moved.view;
-            if (!lastView) return false;
+        } catch {}
+
+        // Fallback: try labradar and parse the 7x7 view
+        if (!openDirs) {
+            try {
+                const radar = ns.dnet.labradar();
+                if (radar && radar.success && radar.message) {
+                    openDirs = parseRadarDirections(radar.message);
+                }
+            } catch {}
+        }
+
+        // Last resort: send a dummy auth to get surroundings from 3x3 view data
+        if (!openDirs) {
+            const probe = await safeAuthenticate(ns, hostname, "go north");
+            if (probe?.success) return true;
+            const view = parseLabyrinthView(probe?.data);
+            if (view) {
+                openDirs = getOpenDirections(view);
+            }
+        }
+
+        if (!openDirs) return false;
+
+        // Find an unvisited direction (maze moves 2 cells per step)
+        const nextDir = openDirs.find((dir) => {
+            const delta = directionDelta(dir);
+            const nk = `${pos.x + delta.dx},${pos.y + delta.dy}`;
+            return !visited.has(nk);
+        });
+
+        if (nextDir) {
+            pathStack.push({ position: { ...pos }, dir: nextDir });
+            const moveResult = await moveLabyrinth(ns, hostname, pos, nextDir);
+            if (moveResult.success) return true;
+            if (moveResult.moved) {
+                pos = moveResult.position;
+            } else {
+                // Wall hit despite directions saying it's open — pop stack entry
+                pathStack.pop();
+            }
             continue;
         }
 
-        if (stack.length === 0) return false;
-        const back = stack.pop();
+        // No unvisited neighbors — backtrack
+        if (pathStack.length === 0) return false;
+        const back = pathStack.pop();
         const reverseDir = reverseDirection(back.dir);
-        const movedBack = await moveLabyrinth(
-            ns,
-            hostname,
-            position,
-            reverseDir,
-        );
-        if (movedBack.success) return true;
-        if (!movedBack.moved) return false;
-        position = movedBack.position;
-        lastView = movedBack.view;
-        if (!lastView) return false;
+        const moveBack = await moveLabyrinth(ns, hostname, pos, reverseDir);
+        if (moveBack.success) return true;
+        if (!moveBack.moved) return false; // Can't backtrack — stuck
+        pos = moveBack.position;
     }
+
+    return false; // Exceeded max iterations
 }
 
 export function parseDarknetLogs(logs) {
@@ -327,6 +372,7 @@ export function estimateCrackDifficulty(serverInfo) {
 }
 
 export async function tryFormatBruteforce(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const format = serverInfo?.passwordFormat;
     const length =
         Number.isFinite(serverInfo?.passwordLength) &&
@@ -343,6 +389,7 @@ export async function tryFormatBruteforce(ns, hostname, serverInfo) {
             const pin = i.toString();
             const result = await safeAuthenticate(ns, hostname, pin);
             if (result.success) return pin;
+            if (await isAlreadyCracked(ns, hostname)) return null;
         }
         return null;
     }
@@ -361,6 +408,7 @@ export async function tryFormatBruteforce(ns, hostname, serverInfo) {
         const candidate = buildCandidate(i, charset, length);
         const result = await safeAuthenticate(ns, hostname, candidate);
         if (result.success) return candidate;
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
 }
@@ -409,27 +457,41 @@ async function solveDogNames(ns, hostname) {
 }
 
 async function solveYesnt(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 4);
     const charset =
         getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
-    let current = charset[0].repeat(length);
-    for (let i = 0; i < length; i++) {
-        let found = false;
-        for (const ch of charset) {
-            const attempt =
-                current.substring(0, i) + ch + current.substring(i + 1);
-            const resp = await safeAuthenticate(ns, hostname, attempt);
-            if (resp.success) return attempt;
-            const flags = parseYesnt(resp);
-            if (flags && flags[i]) {
-                current = attempt;
-                found = true;
-                break;
+    const locked = new Array(length).fill(false);
+    const result = new Array(length).fill(charset[0]);
+    let feedbackAvailable = false;
+
+    for (const ch of charset) {
+        // Set all unlocked positions to the current character
+        const guess = result
+            .map((c, i) => (locked[i] ? c : ch))
+            .join("");
+        const resp = await safeAuthenticate(ns, hostname, guess);
+        if (resp.success) return guess;
+        if (await isAlreadyCracked(ns, hostname)) return null;
+        const flags = parseYesnt(resp);
+        if (!flags) {
+            if (!feedbackAvailable && !locked.some(Boolean)) return null;
+            continue;
+        }
+        feedbackAvailable = true;
+        for (let i = 0; i < length; i++) {
+            if (!locked[i] && flags[i]) {
+                result[i] = ch;
+                locked[i] = true;
             }
         }
-        if (!found) return null;
+        if (locked.every(Boolean)) return result.join("");
     }
-    return current;
+
+    // Try final assembled result even if not all locked
+    const finalGuess = result.join("");
+    const finalResp = await safeAuthenticate(ns, hostname, finalGuess);
+    return finalResp.success ? finalGuess : null;
 }
 
 async function solveBufferOverflow(ns, hostname, serverInfo) {
@@ -444,6 +506,7 @@ async function solveBufferOverflow(ns, hostname, serverInfo) {
 }
 
 async function solveSortedEchoVuln(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const sortedRaw = (getHintData(serverInfo) || getHint(serverInfo)).replace(
         /\s+/g,
         "",
@@ -470,6 +533,7 @@ async function solveSortedEchoVuln(ns, hostname, serverInfo) {
     for (let i = 0; i < attempts; i++) {
         const resp = await safeAuthenticate(ns, hostname, bestCandidate);
         if (resp.success) return bestCandidate;
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const rmsd = parseRmsd(resp);
         if (!Number.isFinite(rmsd)) break;
         if (rmsd < bestScore) {
@@ -481,6 +545,7 @@ async function solveSortedEchoVuln(ns, hostname, serverInfo) {
         const next = mutateSwap(bestCandidate);
         const nextResp = await safeAuthenticate(ns, hostname, next);
         if (nextResp.success) return next;
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const nextRmsd = parseRmsd(nextResp);
         if (Number.isFinite(nextRmsd) && nextRmsd <= bestScore) {
             bestCandidate = next;
@@ -495,24 +560,39 @@ async function solveSortedEchoVuln(ns, hostname, serverInfo) {
 }
 
 async function solveMastermind(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 4);
     const charset =
         getCharsetForFormat(serverInfo?.passwordFormat) || "0123456789";
     const constraints = [];
     const counts = new Map();
 
+    // Mastermind feedback requires the `data` field from authenticate(), which is
+    // only returned for labyrinth models. For Mastermind (DeepGreen), the game source
+    // does NOT include `data` in the response from home. The probe running ON the
+    // darknet server uses heartbleed logs to get feedback instead.
+    // From the orchestrator (home), we can only try the first character to detect
+    // whether feedback is available. If not, bail early and let the probe handle it.
+    let feedbackAvailable = false;
+
     for (const ch of charset) {
         const attempt = ch.repeat(length);
         const resp = await safeAuthenticate(ns, hostname, attempt);
         if (resp.success) return attempt;
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const feedback = parseMastermindData(resp);
         if (feedback) {
+            feedbackAvailable = true;
             counts.set(ch, feedback.exact + feedback.misplaced);
             constraints.push({
                 guess: attempt,
                 exact: feedback.exact,
                 misplaced: feedback.misplaced,
             });
+        } else if (!feedbackAvailable && constraints.length === 0) {
+            // First auth returned no feedback — we can't solve Mastermind from here.
+            // Defer to the probe which has heartbleed access on the target server.
+            return null;
         }
     }
 
@@ -541,6 +621,7 @@ async function solveMastermind(ns, hostname, serverInfo) {
             )
                 return false;
         }
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const resp = await safeAuthenticate(ns, hostname, candidate);
         if (resp.success) return candidate;
         const feedback = parseMastermindData(resp);
@@ -557,6 +638,7 @@ async function solveMastermind(ns, hostname, serverInfo) {
 }
 
 async function solveRomanNumeral(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const hintData = getHintData(serverInfo);
     if (hintData.includes(",")) {
         const [minRaw, maxRaw] = hintData.split(",");
@@ -569,6 +651,7 @@ async function solveRomanNumeral(ns, hostname, serverInfo) {
             const mid = Math.floor((low + high) / 2);
             const resp = await safeAuthenticate(ns, hostname, String(mid));
             if (resp.success) return String(mid);
+            if (await isAlreadyCracked(ns, hostname)) return null;
             const msg = String(resp.data || resp.message || "").toUpperCase();
             if (msg.includes("ALTUS")) high = mid - 1;
             else if (msg.includes("PARUM")) low = mid + 1;
@@ -587,18 +670,43 @@ async function solveRomanNumeral(ns, hostname, serverInfo) {
 }
 
 async function solveGuessNumber(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
+    // Parse range from hint: "The password is a number between X and Y"
+    const hint = getHint(serverInfo);
     const length = getPasswordLength(serverInfo, 4);
-    const maxValue = Math.pow(10, length) - 1;
-    let low = 0;
-    let high = maxValue;
-    for (let attempt = 0; attempt < 32 && low <= high; attempt++) {
+    const maxVal = Math.pow(10, length) - 1;
+    const rangeMatch = hint.match(/between\s+(\d+)\s+and\s+(\d+)/i);
+    let low, high;
+    if (rangeMatch) {
+        low = Number(rangeMatch[1]);
+        high = Math.min(Number(rangeMatch[2]), maxVal);
+    } else {
+        low = 0;
+        high = maxVal;
+    }
+    for (let attempt = 0; attempt < 64 && low <= high; attempt++) {
         const guess = Math.floor((low + high) / 2);
         const resp = await safeAuthenticate(ns, hostname, String(guess));
         if (resp.success) return String(guess);
-        const direction = String(resp.data || "").toLowerCase();
-        if (direction === "higher") {
+        if (await isAlreadyCracked(ns, hostname)) return null;
+        const direction = String(resp.data || "").trim().toLowerCase();
+        // On first response, try to extract range from message if we didn't get it from hint
+        if (attempt === 0 && !rangeMatch) {
+            const msgRange = String(resp.message || "").match(/between\s+(\d+)\s+and\s+(\d+)/i);
+            if (msgRange) {
+                low = Number(msgRange[1]);
+                high = Math.min(Number(msgRange[2]), maxVal);
+                if (direction.includes("higher")) {
+                    low = Math.max(low, guess + 1);
+                } else if (direction.includes("lower")) {
+                    high = Math.min(high, guess - 1);
+                }
+                continue;
+            }
+        }
+        if (direction.includes("higher")) {
             low = guess + 1;
-        } else if (direction === "lower") {
+        } else if (direction.includes("lower")) {
             high = guess - 1;
         } else {
             break;
@@ -621,18 +729,25 @@ async function solveConvertToBase10(ns, hostname, serverInfo) {
     return result.success ? candidate : null;
 }
 
-async function solveDivisibilityTest(ns, hostname) {
-    const primes = generatePrimes(997);
+async function solveDivisibilityTest(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
+    const length = getPasswordLength(serverInfo, 6);
+    const maxValue = Math.pow(10, length) - 1;
+    const primes = generatePrimes(Math.min(997, maxValue));
     let product = 1n;
     for (const prime of primes) {
         const primeValue = BigInt(prime);
         const divisible = await isDivisibleBy(ns, hostname, primeValue);
+        if (divisible === null) return null;
         if (!divisible) continue;
+        if (await isAlreadyCracked(ns, hostname)) return null;
         let power = primeValue;
         while (true) {
             const nextPower = power * primeValue;
             const divisiblePower = await isDivisibleBy(ns, hostname, nextPower);
+            if (divisiblePower === null) return null;
             if (!divisiblePower) break;
+            if (await isAlreadyCracked(ns, hostname)) return null;
             power = nextPower;
         }
         let temp = power;
@@ -648,6 +763,29 @@ async function solveDivisibilityTest(ns, hostname) {
 }
 
 async function solvePacketSniffer(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
+    try {
+        const maxAttempts = 20;
+        const seen = new Set();
+        for (let i = 0; i < maxAttempts; i++) {
+            const traffic = await ns.dnet.packetCapture(hostname);
+            if (!traffic) continue;
+            const lines = String(traffic).split("\n");
+            for (const line of lines) {
+                const matches = line.matchAll(/(\S+):(\S+)/g);
+                for (const m of matches) {
+                    const captured = m[2];
+                    if (seen.has(captured)) continue;
+                    seen.add(captured);
+                    const resp = await safeAuthenticate(ns, hostname, captured);
+                    if (resp.success) return captured;
+                    if (await isAlreadyCracked(ns, hostname)) return null;
+                }
+            }
+        }
+    } catch (err) {
+    }
+
     const candidates = new Set();
     const hint = getHint(serverInfo);
     if (hint) {
@@ -656,53 +794,90 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
     }
     for (const value of defaultSettingsDictionary) candidates.add(value);
     for (const value of commonPasswordDictionary) candidates.add(value);
+    const expectedLength = serverInfo?.passwordLength;
+    const format = serverInfo?.passwordFormat;
     for (const candidate of candidates) {
         if (!candidate) continue;
+        if (expectedLength && candidate.length !== expectedLength) continue;
+        if (format === "numeric" && !/^\d+$/.test(candidate)) continue;
+        if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate)) continue;
+        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate)) continue;
         const result = await safeAuthenticate(ns, hostname, candidate);
         if (result.success) return candidate;
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
 }
 
 async function solveGlobalMaxima(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 3);
+    const domainHigh = Math.pow(10, length) - 1;
     const width = Math.pow(10, Math.max(length - 2, 0)) + 1;
-    let low = 0;
-    let high = width - 1;
+    const step = Math.max(1, Math.floor(3 * width));
     const cache = new Map();
 
     const altitudeAt = async (x) => {
         if (cache.has(x)) return cache.get(x);
         const resp = await safeAuthenticate(ns, hostname, String(x));
-        if (resp.success) return { success: true, altitude: Number(resp.data) };
+        if (resp.success) return { success: true, altitude: Infinity };
         const altitude = parseAltitude(resp);
         const value = { success: false, altitude };
         cache.set(x, value);
         return value;
     };
 
-    while (high - low > 3) {
+    // Phase 1: Coarse scan across entire domain
+    let bestX = 0;
+    let bestA = -Infinity;
+    for (let x = 0; x <= domainHigh; x += step) {
+        const result = await altitudeAt(x);
+        if (result.success) return String(x);
+        if (await isAlreadyCracked(ns, hostname)) return null;
+        if (x === 0 && Number.isNaN(result.altitude)) return null;
+        if (result.altitude > bestA) {
+            bestA = result.altitude;
+            bestX = x;
+        }
+    }
+
+    // Phase 2: Ternary search in local window around best coarse point
+    let low = Math.max(0, bestX - 3 * step);
+    let high = Math.min(domainHigh, bestX + 3 * step);
+
+    while (high - low > 20) {
         const m1 = Math.floor(low + (high - low) / 3);
         const m2 = Math.floor(high - (high - low) / 3);
         const a1 = await altitudeAt(m1);
         if (a1.success) return String(m1);
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const a2 = await altitudeAt(m2);
         if (a2.success) return String(m2);
+        if (await isAlreadyCracked(ns, hostname)) return null;
         if (a1.altitude < a2.altitude) low = m1 + 1;
         else high = m2 - 1;
     }
 
-    let best = { x: low, altitude: -Infinity };
+    // Phase 3: Linear scan of final candidates
+    bestX = low;
+    bestA = -Infinity;
     for (let x = low; x <= high; x++) {
-        const resp = await safeAuthenticate(ns, hostname, String(x));
-        if (resp.success) return String(x);
-        const altitude = parseAltitude(resp);
-        if (altitude > best.altitude) best = { x, altitude };
+        const result = await altitudeAt(x);
+        if (result.success) return String(x);
+        if (await isAlreadyCracked(ns, hostname)) return null;
+        if (result.altitude > bestA) {
+            bestA = result.altitude;
+            bestX = x;
+        }
     }
-    return best ? String(best.x) : null;
+
+    // Final attempt with best candidate
+    const finalResp = await safeAuthenticate(ns, hostname, String(bestX));
+    return finalResp.success ? String(bestX) : null;
 }
 
 async function solveSpiceLevel(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, null);
     const charset =
         getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
@@ -711,24 +886,23 @@ async function solveSpiceLevel(ns, hostname, serverInfo) {
     let guess = charset[0].repeat(length);
     let baseResp = await safeAuthenticate(ns, hostname, guess);
     if (baseResp.success) return guess;
-    let baseCount = parsePepperCount(baseResp);
-    if (!Number.isFinite(baseCount)) return null;
+    let currentCount = parsePepperCount(baseResp);
+    if (!Number.isFinite(currentCount)) return null;
 
     for (let i = 0; i < length; i++) {
-        let bestChar = guess[i];
-        let bestCount = baseCount;
         for (const ch of charset) {
-            const attempt = guess.substring(0, i) + ch + guess.substring(i + 1);
-            const resp = await safeAuthenticate(ns, hostname, attempt);
-            if (resp.success) return attempt;
+            if (ch === guess[i]) continue;
+            const trial = guess.substring(0, i) + ch + guess.substring(i + 1);
+            const resp = await safeAuthenticate(ns, hostname, trial);
+            if (resp.success) return trial;
+            if (await isAlreadyCracked(ns, hostname)) return null;
             const count = parsePepperCount(resp);
-            if (Number.isFinite(count) && count > bestCount) {
-                bestCount = count;
-                bestChar = ch;
+            if (Number.isFinite(count) && count > currentCount) {
+                guess = guess.substring(0, i) + ch + guess.substring(i + 1);
+                currentCount = count;
+                break;
             }
         }
-        guess = guess.substring(0, i) + bestChar + guess.substring(i + 1);
-        baseCount = bestCount;
     }
     const finalResp = await safeAuthenticate(ns, hostname, guess);
     return finalResp.success ? guess : null;
@@ -753,6 +927,7 @@ async function solveEuroZone(ns, hostname) {
 }
 
 async function solveTimingAttack(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 4);
     const charset =
         getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
@@ -763,6 +938,7 @@ async function solveTimingAttack(ns, hostname, serverInfo) {
             const attempt = (prefix + ch).padEnd(length, charset[0]);
             const resp = await safeAuthenticate(ns, hostname, attempt);
             if (resp.success) return attempt;
+            if (await isAlreadyCracked(ns, hostname)) return null;
             const idx = parseMismatchIndex(resp);
             if (Number.isFinite(idx) && idx > i) {
                 prefix += ch;
@@ -820,6 +996,7 @@ async function solveXorEncrypted(ns, hostname, serverInfo) {
 }
 
 async function solveTripleModulo(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, null);
     if (!length) return null;
     const max = BigInt(Math.pow(10, length) - 1);
@@ -829,6 +1006,7 @@ async function solveTripleModulo(ns, hostname, serverInfo) {
         const n = nextAlignedGreater(max, mod);
         const resp = await safeAuthenticate(ns, hostname, n.toString());
         if (resp.success) return n.toString();
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const result = parseModuloResult(resp);
         if (!Number.isFinite(result)) return null;
         residues.push(BigInt(result));
@@ -844,6 +1022,7 @@ async function solveTripleModulo(ns, hostname, serverInfo) {
         const attempt = candidate + k * modulus;
         const result = await safeAuthenticate(ns, hostname, attempt.toString());
         if (result.success) return attempt.toString();
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
 }
@@ -855,7 +1034,7 @@ function getHint(serverInfo) {
 }
 
 function getHintData(serverInfo) {
-    return String(serverInfo?.passwordHintData ?? "").trim();
+    return String(serverInfo?.data ?? serverInfo?.passwordHintData ?? "").trim();
 }
 
 function getPasswordLength(serverInfo, fallback) {
@@ -886,10 +1065,44 @@ function logError(ns, message, err) {
     } catch {}
 }
 
-async function tryDictionary(ns, hostname, words) {
+/** Auth-attempt counter per hostname — used to throttle isAlreadyCracked checks. */
+const _crackedCheckCounters = new Map();
+const _CRACKED_CHECK_INTERVAL = 25;
+
+/**
+ * Throttled check: has another agent already cracked this server?
+ * Only actually queries every _CRACKED_CHECK_INTERVAL calls per hostname.
+ * Returns true if server already has admin rights (cracked by someone else).
+ */
+async function isAlreadyCracked(ns, hostname) {
+    const count = (_crackedCheckCounters.get(hostname) || 0) + 1;
+    _crackedCheckCounters.set(hostname, count);
+    if (count % _CRACKED_CHECK_INTERVAL !== 0) return false;
+    try {
+        const details = await ns.dnet.getServerAuthDetails(hostname);
+        return details?.hasAdminRights === true;
+    } catch {
+        return false;
+    }
+}
+
+/** Reset the cracked-check counter for a hostname (call at start of each solver). */
+function resetCrackedCheck(hostname) {
+    _crackedCheckCounters.delete(hostname);
+}
+
+async function tryDictionary(ns, hostname, words, serverInfo) {
+    resetCrackedCheck(hostname);
+    const expectedLength = serverInfo?.passwordLength;
+    const format = serverInfo?.passwordFormat;
     for (const word of words) {
+        if (expectedLength && word.length !== expectedLength) continue;
+        if (format === "numeric" && !/^\d+$/.test(word)) continue;
+        if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(word)) continue;
+        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(word)) continue;
         const result = await safeAuthenticate(ns, hostname, word);
         if (result.success) return word;
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
 }
@@ -969,7 +1182,7 @@ function buildCandidate(index, charset, length) {
 function parseYesnt(resp) {
     const data = String(resp?.data ?? "").trim();
     if (!data) return null;
-    return data.split(",").map((entry) => entry.trim().startsWith("yes"));
+    return data.split(",").map((entry) => entry.trim() === "yes");
 }
 
 function parseMismatchIndex(resp) {
@@ -1011,8 +1224,12 @@ function compareMastermind(candidate, guess) {
 }
 
 async function bruteMastermind(ns, hostname, charset, length, constraints) {
+    resetCrackedCheck(hostname);
     const total = Math.pow(charset.length, length);
     if (!Number.isFinite(total) || total > 300000) return null;
+    // If no constraints at all, we have no feedback mechanism — can't narrow search.
+    // This happens when called from home where authenticate() doesn't return data.
+    if (constraints.length === 0) return null;
     for (let i = 0; i < total; i++) {
         const candidate = buildCandidate(i, charset, length);
         let ok = true;
@@ -1029,6 +1246,7 @@ async function bruteMastermind(ns, hostname, charset, length, constraints) {
         if (!ok) continue;
         const resp = await safeAuthenticate(ns, hostname, candidate);
         if (resp.success) return candidate;
+        if (await isAlreadyCracked(ns, hostname)) return null;
         const feedback = parseMastermindData(resp);
         if (feedback)
             constraints.push({
@@ -1071,6 +1289,7 @@ async function permuteWithConstraints(multiset, tries, checkCandidate) {
 }
 
 async function solvePermutationByAuth(ns, hostname, digits, limit) {
+    resetCrackedCheck(hostname);
     const counts = new Map();
     for (const d of digits) counts.set(d, (counts.get(d) || 0) + 1);
     const keys = Array.from(counts.keys());
@@ -1084,6 +1303,7 @@ async function solvePermutationByAuth(ns, hostname, digits, limit) {
             const candidate = buffer.join("");
             const resp = await safeAuthenticate(ns, hostname, candidate);
             if (resp.success) return candidate;
+            if (await isAlreadyCracked(ns, hostname)) return null;
             return null;
         }
         for (const key of keys) {
@@ -1130,10 +1350,18 @@ function parsePepperCount(resp) {
     const data = String(resp?.data ?? "");
     if (!data) return NaN;
     if (data.startsWith("0/")) return 0;
-    const count = (data.match(/🌶️/g) || []).length;
+    // Split on '/' to get pepper part vs total part
+    const parts = data.split("/");
+    const pepperPart = parts[0];
+    // Count U+1F336 (hot pepper) code points regardless of variation selector
+    let count = 0;
+    for (const ch of pepperPart) {
+        if (ch.codePointAt(0) === 0x1F336) count++;
+    }
     if (count > 0) return count;
-    const match = data.match(/^(\d+)\//);
-    return match ? Number(match[1]) : NaN;
+    // Fallback: try parsing as a plain number
+    const numMatch = data.match(/^(\d+)\//);
+    return numMatch ? Number(numMatch[1]) : NaN;
 }
 
 function parseAltitude(resp) {
@@ -1306,6 +1534,7 @@ async function isDivisibleBy(ns, hostname, divisor) {
     const msg = String(resp?.message ?? "").toLowerCase();
     if (msg.includes("is divisible")) return true;
     if (msg.includes("not divisible")) return false;
+    if (!data && !msg) return null;
     return false;
 }
 
@@ -1378,11 +1607,6 @@ function getOpenDirections(view) {
     return open;
 }
 
-function nextPositionKey(position, dir) {
-    const delta = directionDelta(dir);
-    return `${position.x + delta.dx},${position.y + delta.dy}`;
-}
-
 function directionDelta(dir) {
     if (dir === "north") return { dx: 0, dy: -2 };
     if (dir === "south") return { dx: 0, dy: 2 };
@@ -1399,17 +1623,40 @@ function reverseDirection(dir) {
 
 async function moveLabyrinth(ns, hostname, position, dir) {
     const resp = await safeAuthenticate(ns, hostname, `go ${dir}`);
-    if (resp.success) return { success: true };
-    const view = parseLabyrinthView(resp.data);
-    const moved = resp?.code !== 401;
-    if (moved) {
-        const delta = directionDelta(dir);
+    if (resp.success) return { success: true, moved: true, position };
+
+    // Parse movement from message text
+    // Moved: "You have moved to X,Y."
+    // Wall:  "You cannot go that way. You are still at X,Y."
+    const msg = resp.message || "";
+    const movedMatch = msg.match(/moved to (\d+),(\d+)/);
+    if (movedMatch) {
+        const newX = parseInt(movedMatch[1], 10);
+        const newY = parseInt(movedMatch[2], 10);
         return {
             success: false,
             moved: true,
-            position: { x: position.x + delta.dx, y: position.y + delta.dy },
-            view,
+            position: { x: newX, y: newY },
         };
     }
-    return { success: false, moved: false, position, view };
+
+    // Not moved (wall or invalid command)
+    return { success: false, moved: false, position };
+}
+
+function parseRadarDirections(radarText) {
+    // labradar returns a 7x7 grid with @ at center (row 3, col 3 in 0-indexed)
+    // We only need the immediate neighbors (1 cell away) to check for walls
+    const rows = radarText.split("\n");
+    if (rows.length < 7) return null;
+    const dirs = [];
+    // North: row 2, col 3 (one cell above center in the 7x7 grid)
+    if (rows[2]?.[3] !== "\u2588") dirs.push("north");
+    // South: row 4, col 3
+    if (rows[4]?.[3] !== "\u2588") dirs.push("south");
+    // West: row 3, col 2
+    if (rows[3]?.[2] !== "\u2588") dirs.push("west");
+    // East: row 3, col 4
+    if (rows[3]?.[4] !== "\u2588") dirs.push("east");
+    return dirs;
 }

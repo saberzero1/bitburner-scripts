@@ -1151,4 +1151,95 @@ const codingContractTypesMetadata = [
             return root.toString();
         },
     },
+    {
+        name: "Total Number of Primes",
+        solver: function (data) {
+            // Segmented Sieve of Eratosthenes to count primes in [low, high]
+            // Based on https://github.com/bitburner-official/bitburner-src/blob/dev/src/CodingContract/contracts/TotalPrimesInRange.ts
+            function simpleSieve(max) {
+                const primes = [];
+                const arr = Array(max);
+                for (let i = 2; i * i <= max; i++) {
+                    if (!arr[i]) {
+                        for (let p = i * i; p <= max; p += i) {
+                            arr[p] = 1;
+                        }
+                    }
+                }
+                for (let i = 2; i <= max; i++) {
+                    if (!arr[i]) {
+                        primes.push(i);
+                    }
+                }
+                return primes;
+            }
+
+            let low = data[0];
+            let high = data[1];
+            if (low < 2) low = 2;
+            let count = 0;
+            const arr = Array(high - low + 1);
+            const checks = simpleSieve(Math.ceil(Math.sqrt(high)));
+            for (const i of checks) {
+                const lim = Math.max(i, Math.ceil(low / i)) * i;
+                for (let j = lim; j <= high; j += i) {
+                    arr[j - low] = 1;
+                }
+            }
+            for (let a = 0; a <= high - low; a++) {
+                if (!arr[a]) {
+                    ++count;
+                }
+            }
+            return count;
+        },
+    },
+    {
+        name: "Largest Rectangle in a Matrix",
+        solver: function (data) {
+            // Build histograms: for each cell, count consecutive 0s upward (including current row)
+            // Based on https://github.com/bitburner-official/bitburner-src/blob/dev/src/CodingContract/contracts/LargestRectangle.ts
+            const rows = data.length;
+            const cols = data[0].length;
+            const histograms = Array.from({ length: rows }, () => Array(cols).fill(0));
+            for (let c = 0; c < cols; c++) {
+                let count = 0;
+                for (let r = 0; r < rows; r++) {
+                    if (data[r][c] == 0) {
+                        count++;
+                    } else {
+                        count = 0;
+                    }
+                    histograms[r][c] = count;
+                }
+            }
+            let maxArea = 0;
+            let maxL = 0;
+            let maxR = 0;
+            let maxU = 0;
+            let maxD = 0;
+            for (let i = 0; i < histograms.length; i++) {
+                const row = histograms[i];
+                for (let j = 0; j < row.length; j++) {
+                    if (row[j] == 0) continue;
+                    let left = j;
+                    let right = j;
+                    while (row[left - 1] >= row[j]) {
+                        left--;
+                    }
+                    while (row[right + 1] >= row[j]) {
+                        right++;
+                    }
+                    if ((right - left + 1) * row[j] > maxArea) {
+                        maxArea = (right - left + 1) * row[j];
+                        maxL = left;
+                        maxR = right;
+                        maxU = i - row[j] + 1;
+                        maxD = i;
+                    }
+                }
+            }
+            return [[maxU, maxL], [maxD, maxR]];
+        },
+    },
 ];
