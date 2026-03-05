@@ -467,9 +467,7 @@ async function solveYesnt(ns, hostname, serverInfo) {
 
     for (const ch of charset) {
         // Set all unlocked positions to the current character
-        const guess = result
-            .map((c, i) => (locked[i] ? c : ch))
-            .join("");
+        const guess = result.map((c, i) => (locked[i] ? c : ch)).join("");
         const resp = await safeAuthenticate(ns, hostname, guess);
         if (resp.success) return guess;
         if (await isAlreadyCracked(ns, hostname)) return null;
@@ -689,10 +687,14 @@ async function solveGuessNumber(ns, hostname, serverInfo) {
         const resp = await safeAuthenticate(ns, hostname, String(guess));
         if (resp.success) return String(guess);
         if (await isAlreadyCracked(ns, hostname)) return null;
-        const direction = String(resp.data || "").trim().toLowerCase();
+        const direction = String(resp.data || "")
+            .trim()
+            .toLowerCase();
         // On first response, try to extract range from message if we didn't get it from hint
         if (attempt === 0 && !rangeMatch) {
-            const msgRange = String(resp.message || "").match(/between\s+(\d+)\s+and\s+(\d+)/i);
+            const msgRange = String(resp.message || "").match(
+                /between\s+(\d+)\s+and\s+(\d+)/i,
+            );
             if (msgRange) {
                 low = Number(msgRange[1]);
                 high = Math.min(Number(msgRange[2]), maxVal);
@@ -783,8 +785,7 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
                 }
             }
         }
-    } catch (err) {
-    }
+    } catch (err) {}
 
     const candidates = new Set();
     const hint = getHint(serverInfo);
@@ -801,7 +802,8 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
         if (expectedLength && candidate.length !== expectedLength) continue;
         if (format === "numeric" && !/^\d+$/.test(candidate)) continue;
         if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate)) continue;
-        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate)) continue;
+        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate))
+            continue;
         const result = await safeAuthenticate(ns, hostname, candidate);
         if (result.success) return candidate;
         if (await isAlreadyCracked(ns, hostname)) return null;
@@ -1034,7 +1036,9 @@ function getHint(serverInfo) {
 }
 
 function getHintData(serverInfo) {
-    return String(serverInfo?.data ?? serverInfo?.passwordHintData ?? "").trim();
+    return String(
+        serverInfo?.data ?? serverInfo?.passwordHintData ?? "",
+    ).trim();
 }
 
 function getPasswordLength(serverInfo, fallback) {
@@ -1356,7 +1360,7 @@ function parsePepperCount(resp) {
     // Count U+1F336 (hot pepper) code points regardless of variation selector
     let count = 0;
     for (const ch of pepperPart) {
-        if (ch.codePointAt(0) === 0x1F336) count++;
+        if (ch.codePointAt(0) === 0x1f336) count++;
     }
     if (count > 0) return count;
     // Fallback: try parsing as a plain number

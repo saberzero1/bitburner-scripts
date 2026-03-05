@@ -16,12 +16,12 @@
  */
 
 const argsSchema = [
-    ["auto", false],        // Auto-replay infiltrations
-    ["faction", ""],        // Auto-accept reputation for this faction instead of money
-    ["company", ""],        // Auto-navigate to this company and start infiltration
-    ["quiet", false],       // Suppress tprint messages
-    ["stop", false],        // Stop running infiltration automation
-    ["status", false],      // Check if automation is active
+    ["auto", false], // Auto-replay infiltrations
+    ["faction", ""], // Auto-accept reputation for this faction instead of money
+    ["company", ""], // Auto-navigate to this company and start infiltration
+    ["quiet", false], // Suppress tprint messages
+    ["stop", false], // Stop running infiltration automation
+    ["status", false], // Check if automation is active
 ];
 
 export function autocomplete(data, args) {
@@ -56,11 +56,28 @@ let infiltrationStart = 0;
 
 // List of positive adjectives for the "nice guard" game
 const NICE_WORDS = [
-    "affectionate", "agreeable", "bright", "charming", "creative",
-    "determined", "energetic", "friendly", "funny", "generous",
-    "polite", "likable", "diplomatic", "helpful", "giving",
-    "kind", "hardworking", "patient", "dynamic", "loyal",
-    "based", "straightforward",
+    "affectionate",
+    "agreeable",
+    "bright",
+    "charming",
+    "creative",
+    "determined",
+    "energetic",
+    "friendly",
+    "funny",
+    "generous",
+    "polite",
+    "likable",
+    "diplomatic",
+    "helpful",
+    "giving",
+    "kind",
+    "hardworking",
+    "patient",
+    "dynamic",
+    "loyal",
+    "based",
+    "straightforward",
 ];
 
 // =============================================================================
@@ -142,7 +159,10 @@ const infiltrationGames = [
                 state.game.data = "done";
             }
             // Attack in next frame — instant attack sometimes fails
-            if ("wait" === state.game.data && data.indexOf("Distracted!") !== -1) {
+            if (
+                "wait" === state.game.data &&
+                data.indexOf("Distracted!") !== -1
+            ) {
                 state.game.data = "attack";
             }
         },
@@ -242,11 +262,22 @@ const infiltrationGames = [
             if (!target) return;
             let { x, y } = state.game;
             const [toY, toX] = target;
-            if (toY < y) { y--; pressKey("w"); }
-            else if (toY > y) { y++; pressKey("s"); }
-            else if (toX < x) { x--; pressKey("a"); }
-            else if (toX > x) { x++; pressKey("d"); }
-            else { pressKey(" "); state.game.data.shift(); }
+            if (toY < y) {
+                y--;
+                pressKey("w");
+            } else if (toY > y) {
+                y++;
+                pressKey("s");
+            } else if (toX < x) {
+                x--;
+                pressKey("a");
+            } else if (toX > x) {
+                x++;
+                pressKey("d");
+            } else {
+                pressKey(" ");
+                state.game.data.shift();
+            }
             state.game.x = x;
             state.game.y = y;
         },
@@ -256,9 +287,9 @@ const infiltrationGames = [
         init(screen) {
             const numberHack = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
             const colors = {
-                "red": "red",
-                "white": "white",
-                "blue": "blue",
+                red: "red",
+                white: "white",
+                blue: "blue",
                 "rgb(255, 193, 7)": "yellow",
             };
             const wireColor = { red: [], white: [], blue: [], yellow: [] };
@@ -317,13 +348,17 @@ const infiltrationGames = [
 /** @param {NS} ns **/
 export async function main(ns) {
     const args = ns.flags(argsSchema);
-    const print = (msg) => { if (!args.quiet) ns.tprint(`\n${msg}\n`); };
+    const print = (msg) => {
+        if (!args.quiet) ns.tprint(`\n${msg}\n`);
+    };
 
     // --status: check if automation is active
     if (args.status) {
-        print(wnd.tmrAutoInf
-            ? "Automated infiltration is active"
-            : "Automated infiltration is inactive");
+        print(
+            wnd.tmrAutoInf
+                ? "Automated infiltration is active"
+                : "Automated infiltration is inactive",
+        );
         return;
     }
 
@@ -351,9 +386,9 @@ export async function main(ns) {
 
     print(
         "Automated infiltration is enabled...\n" +
-        "When you visit the infiltration screen of any company, all tasks are completed automatically.\n" +
-        `Auto-replay: ${autoMode ? "ON" : "OFF"} | ` +
-        `Reward: ${repFaction || "MONEY"}`
+            "When you visit the infiltration screen of any company, all tasks are completed automatically.\n" +
+            `Auto-replay: ${autoMode ? "ON" : "OFF"} | ` +
+            `Reward: ${repFaction || "MONEY"}`,
     );
 
     // IPC: write PID to port 30
@@ -421,15 +456,18 @@ function getLines(elements) {
  * Find the first button matching text content.
  */
 function findButton(text) {
-    return Array.from(doc.querySelectorAll("button"))
-        .find((x) => x.innerText.indexOf(text) >= 0);
+    return Array.from(doc.querySelectorAll("button")).find(
+        (x) => x.innerText.indexOf(text) >= 0,
+    );
 }
 
 /**
  * Click a button via its React fiber onClick handler (bypasses isTrusted checks).
  */
 function clickButton(btn) {
-    const reactKey = Object.keys(btn).find((k) => k.startsWith("__reactProps$") || k.startsWith("__reactFiber$"));
+    const reactKey = Object.keys(btn).find(
+        (k) => k.startsWith("__reactProps$") || k.startsWith("__reactFiber$"),
+    );
     if (reactKey && btn[reactKey] && btn[reactKey].onClick) {
         btn[reactKey].onClick({ isTrusted: true });
     } else {
@@ -442,8 +480,13 @@ function clickButton(btn) {
  */
 function detectGridSize(count) {
     const sizes = {
-        9: [3, 3], 12: [3, 4], 16: [4, 4],
-        20: [4, 5], 25: [5, 5], 30: [5, 6], 36: [6, 6],
+        9: [3, 3],
+        12: [3, 4],
+        16: [4, 4],
+        20: [4, 5],
+        25: [5, 5],
+        30: [5, 6],
+        36: [6, 6],
     };
     return sizes[count] || null;
 }
@@ -460,7 +503,9 @@ function winGame() {
     try {
         const screen = doc.querySelectorAll(".MuiContainer-root")[0];
         if (!screen) return false;
-        const fiberKey = Object.keys(screen).find((k) => k.startsWith("__reactFiber$"));
+        const fiberKey = Object.keys(screen).find((k) =>
+            k.startsWith("__reactFiber$"),
+        );
         if (!fiberKey) return false;
         const fiber = screen[fiberKey];
         for (const child of fiber.memoizedProps.children) {
@@ -630,7 +675,9 @@ function acceptReward() {
         const btn = findButton("Sell for");
         if (btn) {
             if (infiltrationStart) {
-                console.info(`SUCCESSFUL INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec: ${btn.innerText}`);
+                console.info(
+                    `SUCCESSFUL INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec: ${btn.innerText}`,
+                );
                 infiltrationStart = 0;
             }
             clickButton(btn);
@@ -649,23 +696,30 @@ function acceptReputation() {
         postTimeout = null;
 
         // Open the faction dropdown
-        let combobox = Array.from(doc.querySelectorAll("[role=\"combobox\"]"))
-            .find((x) => x.innerText.indexOf("none") >= 0);
+        let combobox = Array.from(
+            doc.querySelectorAll('[role="combobox"]'),
+        ).find((x) => x.innerText.indexOf("none") >= 0);
         if (!combobox) {
-            combobox = Array.from(doc.querySelectorAll("[role=\"combobox\"]"))
-                .find((x) => x.innerText.indexOf(repFaction) >= 0);
+            combobox = Array.from(
+                doc.querySelectorAll('[role="combobox"]'),
+            ).find((x) => x.innerText.indexOf(repFaction) >= 0);
         }
 
         if (combobox) {
-            const reactKey = Object.keys(combobox).find((k) => k.startsWith("__reactProps$"));
+            const reactKey = Object.keys(combobox).find((k) =>
+                k.startsWith("__reactProps$"),
+            );
             if (reactKey && combobox[reactKey].onKeyDown) {
-                combobox[reactKey].onKeyDown(new KeyboardEvent("keydown", { key: " " }));
+                combobox[reactKey].onKeyDown(
+                    new KeyboardEvent("keydown", { key: " " }),
+                );
             }
 
             postTimeout = setTimeout(() => {
                 // Select the faction from the dropdown
-                const option = Array.from(doc.querySelectorAll("li[role=\"option\"]"))
-                    .find((x) => x.innerText.indexOf(repFaction) >= 0);
+                const option = Array.from(
+                    doc.querySelectorAll('li[role="option"]'),
+                ).find((x) => x.innerText.indexOf(repFaction) >= 0);
                 if (option) option.click();
 
                 postTimeout = setTimeout(() => {
@@ -674,7 +728,10 @@ function acceptReputation() {
                     if (btn) {
                         clickButton(btn);
                         if (infiltrationStart) {
-                            console.info(`SUCCESSFUL INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec - ${btn.innerText}`, repFaction);
+                            console.info(
+                                `SUCCESSFUL INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec - ${btn.innerText}`,
+                                repFaction,
+                            );
                             infiltrationStart = 0;
                         }
                     }
@@ -695,11 +752,13 @@ function selectCompany() {
     postTimeout = setTimeout(() => {
         postTimeout = null;
 
-        const selector = "span[aria-label=\"" + state.lastCompany + "\"]";
+        const selector = 'span[aria-label="' + state.lastCompany + '"]';
         const companyEle = doc.querySelector(selector);
         if (companyEle) {
             if (infiltrationStart) {
-                console.info(`FAILED INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec`);
+                console.info(
+                    `FAILED INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec`,
+                );
                 infiltrationStart = 0;
             }
             companyEle.click();
@@ -752,7 +811,10 @@ function wrapEventListeners() {
                                 hackedEv[key] = args[0][key];
                             }
                         }
-                        Object.setPrototypeOf(hackedEv, KeyboardEvent.prototype);
+                        Object.setPrototypeOf(
+                            hackedEv,
+                            KeyboardEvent.prototype,
+                        );
                         args[0] = hackedEv;
                     }
                     return callback.apply(callback, args);

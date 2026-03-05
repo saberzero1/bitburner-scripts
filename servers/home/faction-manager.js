@@ -1830,7 +1830,9 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
             log(
                 ns,
                 `Cannot buy any NF due to best provider faction ${getFrom} having insufficient rep, and donations are not unlocked.` +
-                    (getFrom === "Shadows of Anarchy" ? ` Run \`infiltration.js --auto --faction "Shadows of Anarchy"\` to earn rep via infiltration.` : ``),
+                    (getFrom === "Shadows of Anarchy"
+                        ? ` Run \`infiltration.js --auto --faction "Shadows of Anarchy"\` to earn rep via infiltration.`
+                        : ``),
             );
         else if (joined)
             outputRows.push(

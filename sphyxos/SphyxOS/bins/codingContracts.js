@@ -1,124 +1,135 @@
-import { getCType, getCData, getServersLight } from "SphyxOS/util.js"
+import { getCType, getCData, getServersLight } from "SphyxOS/util.js";
 
-const workers = []
-const working = []
+const workers = [];
+const working = [];
 /** @param {NS} ns */
 export async function main(ns) {
+    await ns.sleep(100);
+    ns.atExit(() => {
+        workers.forEach((worker) => {
+            worker.terminate();
+            worker.onmessage = null;
+            worker.onerror = null;
+            worker = null;
+        });
+        working.forEach((worker) => {
+            worker.terminate();
+            worker.onmessage = null;
+            worker.onerror = null;
+            worker = null;
+        });
+        ns.writePort(40, true);
+    });
+    //ns.args:  0 is server  1 is script name
+    const servers = ns.args.includes("darknet")
+        ? [ns.args[0]]
+        : await getServersLight(ns);
+    //[server, file, type] entries
+    const contracts = [];
+    workers.length = 0;
+    let inFlight = 0;
+    let count = 0;
+    let failed = 0;
+    let unsolved = 0;
 
-  await ns.sleep(100)
-  ns.atExit(() => {
-    workers.forEach(worker => {
-      worker.terminate()
-      worker.onmessage = null
-      worker.onerror = null
-      worker = null
-    })
-    working.forEach(worker => {
-      worker.terminate()
-      worker.onmessage = null
-      worker.onerror = null
-      worker = null
-    })
-    ns.writePort(40, true)
-  })
-  //ns.args:  0 is server  1 is script name
-  const servers = ns.args.includes("darknet") ? [ns.args[0]] : await getServersLight(ns)
-  //[server, file, type] entries
-  const contracts = []
-  workers.length = 0
-  let inFlight = 0
-  let count = 0
-  let failed = 0
-  let unsolved = 0
-
-  for (const server of servers) {
-    for (const file of ns.ls(server).filter(f => f.includes(".cct"))) {
-      const type = await getCType(ns, file, server)
-      contracts.push([server, file, type])
-      if (contracts.length % 1000 === 0) await ns.sleep(0)
-    }
-  }
-  for (const contract of contracts) {
-    let found = false
-    for (const type of types) {
-      if (contract[2] === type[0]) {
-        found = true
-        const worker = getWorker()
-        inFlight++
-        worker.onmessage = (msg) => {
-          const reward = ns.codingcontract.attempt(msg.data[0], msg.data[1], msg.data[2])
-          if (reward && !ns.args.includes("quiet")) ns.tprintf(reward)
-          else {
-            if (!ns.args.includes("quiet")) ns.tprintf("Failed: %s", msg.data[3])
-            failed++
-          }
-          workers.push(worker)
-          count++
+    for (const server of servers) {
+        for (const file of ns.ls(server).filter((f) => f.includes(".cct"))) {
+            const type = await getCType(ns, file, server);
+            contracts.push([server, file, type]);
+            if (contracts.length % 1000 === 0) await ns.sleep(0);
         }
-        const data = await getCData(ns, contract[1], contract[0])
-        worker.postMessage([type[1], data, contract[1], contract[0]])
-        working.push(worker)
-        if (inFlight - count > 50) await ns.asleep(100)
-        break
-      }
     }
-    if (!found) {
-      if (!ns.args.includes("quiet")) ns.tprintf("Unknown type: %s", contract[2])
-      unsolved++
+    for (const contract of contracts) {
+        let found = false;
+        for (const type of types) {
+            if (contract[2] === type[0]) {
+                found = true;
+                const worker = getWorker();
+                inFlight++;
+                worker.onmessage = (msg) => {
+                    const reward = ns.codingcontract.attempt(
+                        msg.data[0],
+                        msg.data[1],
+                        msg.data[2],
+                    );
+                    if (reward && !ns.args.includes("quiet"))
+                        ns.tprintf(reward);
+                    else {
+                        if (!ns.args.includes("quiet"))
+                            ns.tprintf("Failed: %s", msg.data[3]);
+                        failed++;
+                    }
+                    workers.push(worker);
+                    count++;
+                };
+                const data = await getCData(ns, contract[1], contract[0]);
+                worker.postMessage([type[1], data, contract[1], contract[0]]);
+                working.push(worker);
+                if (inFlight - count > 50) await ns.asleep(100);
+                break;
+            }
+        }
+        if (!found) {
+            if (!ns.args.includes("quiet"))
+                ns.tprintf("Unknown type: %s", contract[2]);
+            unsolved++;
+        }
     }
-  }
-  while (inFlight > count) await ns.asleep(100)
-  if (!ns.args.includes("quiet")) {
-    ns.tprintf("Solved: %s", count - failed)
-    ns.tprintf("Failed: %s", failed)
-    ns.tprintf("Unsolved: %s", unsolved)
-    ns.tprintf("Workers Used: %s", workers.length)
-  }
-  if (ns.args.includes("darkweb")) {
-    const threads = Math.floor(ns.getServerMaxRam(ns.self().server) / ns.getScriptRam(ns.args[1]))
-    if (threads) ns.spawn(ns.self().filename, { spawnDelay: 0, threads: threads })
-    ns.killall(ns.self().server, false)
-    ns.spawn(ns.args[1], { spawnDelay: 0, threads: threads })
-  }
+    while (inFlight > count) await ns.asleep(100);
+    if (!ns.args.includes("quiet")) {
+        ns.tprintf("Solved: %s", count - failed);
+        ns.tprintf("Failed: %s", failed);
+        ns.tprintf("Unsolved: %s", unsolved);
+        ns.tprintf("Workers Used: %s", workers.length);
+    }
+    if (ns.args.includes("darkweb")) {
+        const threads = Math.floor(
+            ns.getServerMaxRam(ns.self().server) / ns.getScriptRam(ns.args[1]),
+        );
+        if (threads)
+            ns.spawn(ns.self().filename, { spawnDelay: 0, threads: threads });
+        ns.killall(ns.self().server, false);
+        ns.spawn(ns.args[1], { spawnDelay: 0, threads: threads });
+    }
 }
 function getWorker() {
-  if (workers.length) return workers.pop()
-  else {
-    const blob = new Blob([workerCode], { type: "application/javascript" })
-    const worker = new Worker(URL.createObjectURL(blob))
-    return worker
-  }
+    if (workers.length) return workers.pop();
+    else {
+        const blob = new Blob([workerCode], { type: "application/javascript" });
+        const worker = new Worker(URL.createObjectURL(blob));
+        return worker;
+    }
 }
 const types = [
-  ["Algorithmic Stock Trader I", "stonks1"],
-  ["Algorithmic Stock Trader II", "stonks2"],
-  ["Algorithmic Stock Trader III", "stonks3"],
-  ["Algorithmic Stock Trader IV", "stonks4"],
-  ["Array Jumping Game", "arrayjumpinggame"],
-  ["Array Jumping Game II", "arrayjumpinggameII"],
-  ["Square Root", "bigIntSquareRoot"],
-  ["Compression I: RLE Compression", "rlecompression"],
-  ["Compression II: LZ Decompression", "lzdecompression"],
-  ["Compression III: LZ Compression", "lzcompression"],
-  ["Encryption I: Caesar Cipher", "caesarcipher"],
-  ["Encryption II: Vigenère Cipher", "vigenere"],
-  ["Find All Valid Math Expressions", "fcnFindAllValidMathExpressions"],
-  ["Find Largest Prime Factor", "largestprimefactor"],
-  ["Generate IP Addresses", "generateips"],
-  ["HammingCodes: Encoded Binary to Integer", "hammingdecode"],
-  ["HammingCodes: Integer to Encoded Binary", "hammingencode"],
-  ["Merge Overlapping Intervals", "mergeoverlappingintervals"],
-  ["Minimum Path Sum in a Triangle", "minpathsum"],
-  ["Proper 2-Coloring of a Graph", "twocolor"],
-  ["Sanitize Parentheses in Expression", "sanitizeparentheses"],
-  ["Shortest Path in a Grid", "shortestpathinagrid"],
-  ["Spiralize Matrix", "spiralizematrix"],
-  ["Subarray with Maximum Sum", "subarraywithmaximumsum"],
-  ["Total Ways to Sum", "totalwaystosum"],
-  ["Total Ways to Sum II", "totalwaystosumII"],
-  ["Unique Paths in a Grid I", "uniquepathsI"],
-  ["Unique Paths in a Grid II", "uniquepathsII"],
-  ["Total Number of Primes", "totalPrimes"]
+    ["Algorithmic Stock Trader I", "stonks1"],
+    ["Algorithmic Stock Trader II", "stonks2"],
+    ["Algorithmic Stock Trader III", "stonks3"],
+    ["Algorithmic Stock Trader IV", "stonks4"],
+    ["Array Jumping Game", "arrayjumpinggame"],
+    ["Array Jumping Game II", "arrayjumpinggameII"],
+    ["Square Root", "bigIntSquareRoot"],
+    ["Compression I: RLE Compression", "rlecompression"],
+    ["Compression II: LZ Decompression", "lzdecompression"],
+    ["Compression III: LZ Compression", "lzcompression"],
+    ["Encryption I: Caesar Cipher", "caesarcipher"],
+    ["Encryption II: Vigenère Cipher", "vigenere"],
+    ["Find All Valid Math Expressions", "fcnFindAllValidMathExpressions"],
+    ["Find Largest Prime Factor", "largestprimefactor"],
+    ["Generate IP Addresses", "generateips"],
+    ["HammingCodes: Encoded Binary to Integer", "hammingdecode"],
+    ["HammingCodes: Integer to Encoded Binary", "hammingencode"],
+    ["Merge Overlapping Intervals", "mergeoverlappingintervals"],
+    ["Minimum Path Sum in a Triangle", "minpathsum"],
+    ["Proper 2-Coloring of a Graph", "twocolor"],
+    ["Sanitize Parentheses in Expression", "sanitizeparentheses"],
+    ["Shortest Path in a Grid", "shortestpathinagrid"],
+    ["Spiralize Matrix", "spiralizematrix"],
+    ["Subarray with Maximum Sum", "subarraywithmaximumsum"],
+    ["Total Ways to Sum", "totalwaystosum"],
+    ["Total Ways to Sum II", "totalwaystosumII"],
+    ["Unique Paths in a Grid I", "uniquepathsI"],
+    ["Unique Paths in a Grid II", "uniquepathsII"],
+    ["Total Number of Primes", "totalPrimes"],
 ];
 
 const workerCode = `

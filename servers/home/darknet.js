@@ -70,7 +70,7 @@ const PROBE_VERSION = 25;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
-    return path.startsWith('/') ? path.substring(1) : path;
+    return path.startsWith("/") ? path.substring(1) : path;
 }
 
 // ─── Entry Point ─────────────────────────────────────────────────────────────
@@ -157,10 +157,16 @@ async function waitForMutation(ns, interval) {
             await ns.sleep(200);
         }
         // Kill helper if it's still running (timeout case)
-        try { ns.kill(pid); } catch {}
+        try {
+            ns.kill(pid);
+        } catch {}
         // Clean up temp files
-        try { ns.rm(MUTATION_HELPER_SCRIPT); } catch {}
-        try { ns.rm(doneFile); } catch {}
+        try {
+            ns.rm(MUTATION_HELPER_SCRIPT);
+        } catch {}
+        try {
+            ns.rm(doneFile);
+        } catch {}
     } catch {
         await ns.sleep(interval);
     }
@@ -255,7 +261,9 @@ class DarknetState {
         for (const [hostname, probeInfo] of this.activeProbes) {
             try {
                 const procs = ns.ps(hostname);
-                const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
+                const probeScript = normalizeFilename(
+                    getFilePath(PROBE_SCRIPT),
+                );
                 const alive = procs.some(
                     (p) =>
                         p.filename === probeScript && p.pid === probeInfo.pid,
@@ -330,7 +338,10 @@ class DarknetState {
         // (server went offline/deleted from network mutations)
         if (this.authenticatedServers.size > 500) {
             for (const hostname of this.authenticatedServers) {
-                if (!this.discoveredServers.has(hostname) && !this.knownPasswords.has(hostname)) {
+                if (
+                    !this.discoveredServers.has(hostname) &&
+                    !this.knownPasswords.has(hostname)
+                ) {
                     this.authenticatedServers.delete(hostname);
                 }
             }
@@ -416,7 +427,7 @@ async function orchestrateDarknet(ns, state, options) {
             // its password file contents to a Netscript port. This avoids overwriting
             // home's password file.
             const STASIS_PWD_PORT = 19;
-            const helperScript = `/Temp/stasis-pwd-helper-${stasisHost.replace(/[^a-zA-Z0-9]/g, '_')}.js`;
+            const helperScript = `/Temp/stasis-pwd-helper-${stasisHost.replace(/[^a-zA-Z0-9]/g, "_")}.js`;
             const helperContent =
                 `/** @param {NS} ns */ export async function main(ns) {` +
                 ` const data = ns.read("${PASSWORD_FILE}");` +
@@ -437,7 +448,8 @@ async function orchestrateDarknet(ns, state, options) {
                     while (waited < 2000) {
                         await ns.sleep(50);
                         waited += 50;
-                        if (!ns.ps(stasisHost).some((p) => p.pid === pid)) break;
+                        if (!ns.ps(stasisHost).some((p) => p.pid === pid))
+                            break;
                     }
                     // Read result from port
                     while (ns.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
@@ -447,32 +459,47 @@ async function orchestrateDarknet(ns, state, options) {
                             if (msg.data) {
                                 const remotePwds = JSON.parse(msg.data);
                                 let newCount = 0;
-                                for (const [host, pwd] of Object.entries(remotePwds)) {
+                                for (const [host, pwd] of Object.entries(
+                                    remotePwds,
+                                )) {
                                     if (!state.knownPasswords.has(host)) {
                                         state.addPassword(ns, host, pwd);
                                         newCount++;
                                     }
                                 }
                                 if (newCount > 0) {
-                                    log(ns, `Collected ${newCount} new password(s) from stasis server ${stasisHost}`);
+                                    log(
+                                        ns,
+                                        `Collected ${newCount} new password(s) from stasis server ${stasisHost}`,
+                                    );
                                 }
                             }
                         } catch {}
                     }
                 }
                 // Cleanup
-                try { ns.rm(helperScript); } catch {}
-                try { ns.rm(helperScript, stasisHost); } catch {}
+                try {
+                    ns.rm(helperScript);
+                } catch {}
+                try {
+                    ns.rm(helperScript, stasisHost);
+                } catch {}
             }
 
             // Now try to establish session and deploy probe with known password
             const pwd = state.getPassword(stasisHost);
             if (pwd !== undefined) {
-                try { ns.dnet.connectToSession(stasisHost, pwd); } catch {}
+                try {
+                    ns.dnet.connectToSession(stasisHost, pwd);
+                } catch {}
             }
             await deployProbe(ns, state, stasisHost, options);
         } catch (err) {
-            if (verbose) log(ns, `Stasis probe deploy to ${stasisHost} failed: ${getErrorInfo(err)}`);
+            if (verbose)
+                log(
+                    ns,
+                    `Stasis probe deploy to ${stasisHost} failed: ${getErrorInfo(err)}`,
+                );
         }
     }
 
@@ -587,8 +614,12 @@ async function discoverFromAuthedServers(ns, state) {
             }
 
             // Cleanup temp script on both home and target
-            try { ns.rm(helperScript); } catch {}
-            try { ns.rm(helperScript, target); } catch {}
+            try {
+                ns.rm(helperScript);
+            } catch {}
+            try {
+                ns.rm(helperScript, target);
+            } catch {}
         } catch {
             // Target server offline or inaccessible
         }
@@ -834,7 +865,6 @@ function logAuthFailure(ns, state, hostname, serverInfo) {
     );
 }
 
-
 /**
  * Free blocked RAM on a target server by running memoryReallocation via temp script.
  * Must be called BEFORE deploying probe so there's enough free RAM.
@@ -854,7 +884,12 @@ async function freeBlockedRamOnServer(ns, state, hostname, options) {
         const helperCost = 2.6; // 1.6 base + 1.0 memoryReallocation
         if (freeRam < helperCost) {
             if (options.verbose) {
-                log(ns, `WARN: ${hostname} lacks RAM for RAM-free helper (needs ${helperCost}GB, has ${formatRam(freeRam)} free)`, false, 'warning');
+                log(
+                    ns,
+                    `WARN: ${hostname} lacks RAM for RAM-free helper (needs ${helperCost}GB, has ${formatRam(freeRam)} free)`,
+                    false,
+                    "warning",
+                );
             }
             return;
         }
@@ -869,24 +904,37 @@ async function freeBlockedRamOnServer(ns, state, hostname, options) {
 
         if (!canExec) {
             if (options.verbose) {
-                log(ns, `INFO: Cannot exec RAM-free helper on ${hostname} from home (not adjacent/stasis). Skipping.`);
+                log(
+                    ns,
+                    `INFO: Cannot exec RAM-free helper on ${hostname} from home (not adjacent/stasis). Skipping.`,
+                );
             }
             return;
         }
 
-        log(ns, `Freeing ${formatRam(blockedRam)} blocked RAM on ${hostname}...`);
+        log(
+            ns,
+            `Freeing ${formatRam(blockedRam)} blocked RAM on ${hostname}...`,
+        );
 
         // Write, SCP, and execute the helper script on the target
-        ns.write(RAMFREE_HELPER_SCRIPT, RAMFREE_HELPER_CONTENT, 'w');
-        ns.scp(RAMFREE_HELPER_SCRIPT, hostname, 'home');
+        ns.write(RAMFREE_HELPER_SCRIPT, RAMFREE_HELPER_CONTENT, "w");
+        ns.scp(RAMFREE_HELPER_SCRIPT, hostname, "home");
 
         // Clear old result file
-        try { ns.rm(RAMFREE_RESULT_FILE); } catch {}
+        try {
+            ns.rm(RAMFREE_RESULT_FILE);
+        } catch {}
 
         const pid = ns.exec(RAMFREE_HELPER_SCRIPT, hostname, 1);
         if (pid <= 0) {
             if (options.verbose) {
-                log(ns, `WARN: Failed to launch RAM-free helper on ${hostname}`, false, 'warning');
+                log(
+                    ns,
+                    `WARN: Failed to launch RAM-free helper on ${hostname}`,
+                    false,
+                    "warning",
+                );
             }
             return;
         }
@@ -900,24 +948,43 @@ async function freeBlockedRamOnServer(ns, state, hostname, options) {
             await ns.sleep(500);
             waited += 500;
             // Check if the script finished
-            if (!ns.ps(hostname).some(p => p.pid === pid)) break;
+            if (!ns.ps(hostname).some((p) => p.pid === pid)) break;
         }
 
         // Verify success
         const remaining = ns.dnet.getBlockedRam(hostname);
         if (remaining <= 0) {
-            log(ns, `Freed all blocked RAM on ${hostname} (was ${formatRam(blockedRam)})`);
+            log(
+                ns,
+                `Freed all blocked RAM on ${hostname} (was ${formatRam(blockedRam)})`,
+            );
         } else {
-            log(ns, `Partially freed RAM on ${hostname}: ${formatRam(blockedRam - remaining)} freed, ${formatRam(remaining)} remaining`, false, 'warning');
+            log(
+                ns,
+                `Partially freed RAM on ${hostname}: ${formatRam(blockedRam - remaining)} freed, ${formatRam(remaining)} remaining`,
+                false,
+                "warning",
+            );
         }
 
         // Cleanup
-        try { ns.rm(RAMFREE_HELPER_SCRIPT, hostname); } catch {}
-        try { ns.rm(RAMFREE_RESULT_FILE); } catch {}
-        try { ns.rm(RAMFREE_RESULT_FILE, hostname); } catch {}
+        try {
+            ns.rm(RAMFREE_HELPER_SCRIPT, hostname);
+        } catch {}
+        try {
+            ns.rm(RAMFREE_RESULT_FILE);
+        } catch {}
+        try {
+            ns.rm(RAMFREE_RESULT_FILE, hostname);
+        } catch {}
     } catch (err) {
         if (options.verbose) {
-            log(ns, `WARN: RAM-free failed on ${hostname}: ${getErrorInfo(err)}`, false, 'warning');
+            log(
+                ns,
+                `WARN: RAM-free failed on ${hostname}: ${getErrorInfo(err)}`,
+                false,
+                "warning",
+            );
         }
     }
 }
@@ -1215,7 +1282,10 @@ async function manageStasisLinks(ns, state, options) {
             );
             if (success) {
                 state.stasisServers.add(candidate.hostname);
-                log(ns, `Applied stasis link to ${candidate.hostname} (score: ${candidate.score})`);
+                log(
+                    ns,
+                    `Applied stasis link to ${candidate.hostname} (score: ${candidate.score})`,
+                );
             }
         }
     } else if (candidates.length > 0 && candidates[0].score > 0) {
@@ -1243,7 +1313,10 @@ async function manageStasisLinks(ns, state, options) {
             );
             if (removed) {
                 state.stasisServers.delete(weakestHost);
-                log(ns, `Removed stasis from ${weakestHost} (score: ${weakestScore})`);
+                log(
+                    ns,
+                    `Removed stasis from ${weakestHost} (score: ${weakestScore})`,
+                );
 
                 // Apply stasis to better candidate
                 const added = await execStasisLink(
@@ -1255,7 +1328,10 @@ async function manageStasisLinks(ns, state, options) {
                 );
                 if (added) {
                     state.stasisServers.add(bestCandidate.hostname);
-                    log(ns, `Applied stasis link to ${bestCandidate.hostname} (score: ${bestCandidate.score}, replacing ${weakestHost})`);
+                    log(
+                        ns,
+                        `Applied stasis link to ${bestCandidate.hostname} (score: ${bestCandidate.score}, replacing ${weakestHost})`,
+                    );
                 }
             }
         }
@@ -1343,8 +1419,12 @@ async function execStasisLink(ns, state, hostname, enable, options) {
             if (!running) break;
         }
         // Clean up stasis helper temp files
-        try { ns.rm(STASIS_HELPER_SCRIPT); } catch {}
-        try { ns.rm(STASIS_HELPER_SCRIPT, hostname); } catch {}
+        try {
+            ns.rm(STASIS_HELPER_SCRIPT);
+        } catch {}
+        try {
+            ns.rm(STASIS_HELPER_SCRIPT, hostname);
+        } catch {}
 
         // Redeploy probe after stasis completes
         await deployProbe(ns, state, hostname, options);
@@ -1409,7 +1489,10 @@ async function chargeMigrations(ns, state, options) {
 
         if (!canExec) {
             if (verbose) {
-                log(ns, `INFO: Cannot exec migration helper on ${hostname} from home (not adjacent/stasis). Skipping.`);
+                log(
+                    ns,
+                    `INFO: Cannot exec migration helper on ${hostname} from home (not adjacent/stasis). Skipping.`,
+                );
             }
             continue;
         }
@@ -1488,8 +1571,12 @@ async function chargeMigrations(ns, state, options) {
         }
         migrationsThisTick++;
         // Clean up migration helper temp files
-        try { ns.rm(MIGRATION_HELPER_SCRIPT); } catch {}
-        try { ns.rm(MIGRATION_HELPER_SCRIPT, hostname); } catch {}
+        try {
+            ns.rm(MIGRATION_HELPER_SCRIPT);
+        } catch {}
+        try {
+            ns.rm(MIGRATION_HELPER_SCRIPT, hostname);
+        } catch {}
     }
 }
 
@@ -1517,12 +1604,20 @@ async function scanAllClueFiles(ns, state, options) {
     const unauthServers = [];
     for (const [nearHost] of state.discoveredServers) {
         if (isServerAuthenticated(state, nearHost)) continue;
-        if (state.knownPasswords.has(nearHost) || state.cluePasswords.has(nearHost)) continue;
+        if (
+            state.knownPasswords.has(nearHost) ||
+            state.cluePasswords.has(nearHost)
+        )
+            continue;
         unauthServers.push(nearHost);
     }
 
     for (const [hostname, info] of state.discoveredServers) {
-        if (serversScanned >= MAX_SERVERS_PER_TICK || cluesProcessed >= MAX_CLUES_PER_TICK) break;
+        if (
+            serversScanned >= MAX_SERVERS_PER_TICK ||
+            cluesProcessed >= MAX_CLUES_PER_TICK
+        )
+            break;
         if (!isServerAuthenticated(state, hostname)) continue;
 
         try {

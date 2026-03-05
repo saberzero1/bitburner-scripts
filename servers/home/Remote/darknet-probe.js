@@ -33,7 +33,11 @@ export async function main(ns) {
                 // Skip servers we've already fully handled (auth + probe deployed)
                 // Re-check periodically in case probe died or server restarted
                 const completed = completedServers.get(hostname);
-                if (completed && completed.probeDeployed && Date.now() < completed.recheckAt) {
+                if (
+                    completed &&
+                    completed.probeDeployed &&
+                    Date.now() < completed.recheckAt
+                ) {
                     continue;
                 }
 
@@ -52,15 +56,24 @@ export async function main(ns) {
                 if (success) {
                     failedServers.delete(hostname);
                     // Mark as completed — re-check every 60s to verify probe is still alive
-                    completedServers.set(hostname, { probeDeployed: true, recheckAt: Date.now() + 60000 });
+                    completedServers.set(hostname, {
+                        probeDeployed: true,
+                        recheckAt: Date.now() + 60000,
+                    });
                     saveCompletedServers(ns, COMPLETED_FILE, completedServers);
                     await ns.sleep(100);
                 } else if (!passwords.has(hostname) && hostname !== "darkweb") {
                     // Track repeated failures for non-cracked servers
-                    const prev = failedServers.get(hostname) || { attempts: 0, nextRetry: 0 };
+                    const prev = failedServers.get(hostname) || {
+                        attempts: 0,
+                        nextRetry: 0,
+                    };
                     prev.attempts++;
                     // Exponential backoff: 10s, 30s, 90s, 270s, capped at 300s
-                    const delay = Math.min(10000 * Math.pow(3, prev.attempts - 1), 300000);
+                    const delay = Math.min(
+                        10000 * Math.pow(3, prev.attempts - 1),
+                        300000,
+                    );
                     prev.nextRetry = Date.now() + delay;
                     failedServers.set(hostname, prev);
                 }
@@ -74,29 +87,56 @@ export async function main(ns) {
             // Re-deploy probes to stasis-linked servers (reachable at any distance)
             try {
                 const stasisList = await runGetStasisList(ns);
-                for (const stasisHost of (stasisList || [])) {
+                for (const stasisHost of stasisList || []) {
                     if (stasisHost === HOST) continue; // skip self
                     const stasisCompleted = completedServers.get(stasisHost);
-                    if (stasisCompleted && stasisCompleted.probeDeployed && Date.now() < stasisCompleted.recheckAt) continue;
+                    if (
+                        stasisCompleted &&
+                        stasisCompleted.probeDeployed &&
+                        Date.now() < stasisCompleted.recheckAt
+                    )
+                        continue;
 
                     // Try to establish session with known password only
                     const pwd = passwords.get(stasisHost);
                     if (pwd !== undefined) {
-                        try { ns.dnet.connectToSession(stasisHost, pwd); } catch {}
+                        try {
+                            ns.dnet.connectToSession(stasisHost, pwd);
+                        } catch {}
                     }
                     // If no password known, still try deploying — stasis makes exec reachable
                     // even without a session (the probe on that server will handle its own auth)
 
                     // Scan clue files on stasis servers (may reveal deeper passwords)
                     try {
-                        await scanClueFiles(ns, stasisHost, passwords, PASSWORD_FILE);
+                        await scanClueFiles(
+                            ns,
+                            stasisHost,
+                            passwords,
+                            PASSWORD_FILE,
+                        );
                     } catch {}
 
-                    const deployed = await deployProbe(ns, stasisHost, pwd, SCRIPT_NAME, true);
+                    const deployed = await deployProbe(
+                        ns,
+                        stasisHost,
+                        pwd,
+                        SCRIPT_NAME,
+                        true,
+                    );
                     if (deployed) {
-                        completedServers.set(stasisHost, { probeDeployed: true, recheckAt: Date.now() + 60000 });
-                        saveCompletedServers(ns, COMPLETED_FILE, completedServers);
-                        ns.print(`Stasis propagation: deployed probe to ${stasisHost}`);
+                        completedServers.set(stasisHost, {
+                            probeDeployed: true,
+                            recheckAt: Date.now() + 60000,
+                        });
+                        saveCompletedServers(
+                            ns,
+                            COMPLETED_FILE,
+                            completedServers,
+                        );
+                        ns.print(
+                            `Stasis propagation: deployed probe to ${stasisHost}`,
+                        );
                     }
                     await ns.sleep(100);
                 }
@@ -106,7 +146,6 @@ export async function main(ns) {
         } catch (err) {
             logError(ns, "Probe loop error", err);
         }
-
 
         // Prune ephemeral state to prevent unbounded Map growth
         // failedServers: remove entries whose backoff has expired (they'll be retried naturally)
@@ -162,7 +201,10 @@ function loadCompletedServers(ns, filePath) {
         if (data) {
             const parsed = JSON.parse(data);
             for (const [host, info] of Object.entries(parsed)) {
-                map.set(host, { probeDeployed: info.probeDeployed, recheckAt: info.recheckAt });
+                map.set(host, {
+                    probeDeployed: info.probeDeployed,
+                    recheckAt: info.recheckAt,
+                });
             }
         }
     } catch {}
@@ -194,7 +236,12 @@ async function processServer(
             } catch {}
         }
         await scanClueFiles(ns, hostname, passwords, passwordFile);
-        return await deployProbe(ns, hostname, passwords.get(hostname), scriptName);
+        return await deployProbe(
+            ns,
+            hostname,
+            passwords.get(hostname),
+            scriptName,
+        );
     }
 
     // If we have a saved password, try to establish a session with it.
@@ -423,7 +470,13 @@ function parseRadarDirections(radarText) {
     return dirs;
 }
 
-async function deployProbe(ns, hostname, password, scriptName, isStasis = false) {
+async function deployProbe(
+    ns,
+    hostname,
+    password,
+    scriptName,
+    isStasis = false,
+) {
     const host = ns.getHostname();
     // Don't deploy to self
     if (hostname === host) return true;
@@ -441,20 +494,30 @@ async function deployProbe(ns, hostname, password, scriptName, isStasis = false)
         }
         // If the target isn't connected/reachable from us, we can't exec on it
         // Exception: stasis-linked servers are exec-reachable at any distance
-        if (!details.isConnectedToCurrentServer && !details.hasSession && !isStasis) {
+        if (
+            !details.isConnectedToCurrentServer &&
+            !details.hasSession &&
+            !isStasis
+        ) {
             return false;
         }
 
         // Step 2: Establish session on target so we have admin rights for exec
         if (password !== undefined) {
-            try { ns.dnet.connectToSession(hostname, password ?? ""); } catch {}
+            try {
+                ns.dnet.connectToSession(hostname, password ?? "");
+            } catch {}
         }
 
         // Step 3: Check for existing probes (kill old versions, skip if current exists)
         const allProcs = await nsPs(ns, hostname);
-        const scriptBaseName = scriptName.startsWith('/') ? scriptName.substring(1) : scriptName;
+        const scriptBaseName = scriptName.startsWith("/")
+            ? scriptName.substring(1)
+            : scriptName;
         const procs = allProcs.filter(
-            (proc) => proc.filename === scriptName || proc.filename === scriptBaseName,
+            (proc) =>
+                proc.filename === scriptName ||
+                proc.filename === scriptBaseName,
         );
         const current = procs.find(
             (proc) => Number(proc.args?.[0]) === PROBE_VERSION,
@@ -494,12 +557,19 @@ async function deployProbe(ns, hostname, password, scriptName, isStasis = false)
         const updatedUsedRam = await nsGetServerUsedRam(ns, hostname);
         const updatedFreeRam = Math.max(0, targetMaxRam - updatedUsedRam);
         if (updatedFreeRam < PROBE_RAM_COST) {
-            ns.print(`WARN: ${hostname} has only ${updatedFreeRam.toFixed(1)}GB free, need ${PROBE_RAM_COST}GB for probe`);
+            ns.print(
+                `WARN: ${hostname} has only ${updatedFreeRam.toFixed(1)}GB free, need ${PROBE_RAM_COST}GB for probe`,
+            );
             return false;
         }
 
         // Step 5: Copy probe script to target (scp works at any distance with session)
-        const scpResult = await nsScpWithSession(ns, scriptName, hostname, password);
+        const scpResult = await nsScpWithSession(
+            ns,
+            scriptName,
+            hostname,
+            password,
+        );
         if (scpResult === null) {
             ns.print(`WARN: Failed to scp ${scriptName} to ${hostname}`);
             return false;
@@ -517,13 +587,19 @@ async function deployProbe(ns, hostname, password, scriptName, isStasis = false)
         const threads = 1;
         const pid = ns.exec(scriptName, hostname, threads, PROBE_VERSION);
         if (pid > 0) {
-            ns.print(`Deployed agent v${PROBE_VERSION} to ${hostname} (pid: ${pid})`);
+            ns.print(
+                `Deployed agent v${PROBE_VERSION} to ${hostname} (pid: ${pid})`,
+            );
             return true;
         } else {
-            ns.print(`WARN: ns.exec failed for ${hostname} (pid=0, connected=${details.isConnectedToCurrentServer}, session=${details.hasSession})`);
+            ns.print(
+                `WARN: ns.exec failed for ${hostname} (pid=0, connected=${details.isConnectedToCurrentServer}, session=${details.hasSession})`,
+            );
         }
     } catch (err) {
-        ns.print(`WARN: deployProbe to ${hostname} failed: ${typeof err === 'string' ? err : err?.message ?? 'unknown'}`);
+        ns.print(
+            `WARN: deployProbe to ${hostname} failed: ${typeof err === "string" ? err : (err?.message ?? "unknown")}`,
+        );
     }
     return false;
 }
@@ -544,7 +620,9 @@ async function handleCacheFiles(ns, hostname) {
     // openCache temp script costs 3.6GB (1.6 base + 2.0 ns.dnet.openCache)
     const openCacheCost = 3.6;
     const host = ns.getHostname();
-    const freeRam = (await nsGetServerMaxRam(ns, host)) - (await nsGetServerUsedRam(ns, host));
+    const freeRam =
+        (await nsGetServerMaxRam(ns, host)) -
+        (await nsGetServerUsedRam(ns, host));
     if (freeRam < openCacheCost) return;
     try {
         const caches = await nsLs(ns, hostname, ".cache");
@@ -562,11 +640,17 @@ async function runOptionalActions(ns, optionsFile, hostname) {
     // phishingAttack and promoteStock temp scripts each cost 3.6GB (1.6 base + 2.0 dnet API)
     const expensiveOpCost = 3.6;
     const host = ns.getHostname();
-    const freeRam = (await nsGetServerMaxRam(ns, host)) - (await nsGetServerUsedRam(ns, host));
+    const freeRam =
+        (await nsGetServerMaxRam(ns, host)) -
+        (await nsGetServerUsedRam(ns, host));
     if (options.enablePhishing && freeRam >= expensiveOpCost) {
         await runPhishing(ns, hostname);
     }
-    if (options.enableStockManipulation && options.targetStock && freeRam >= expensiveOpCost) {
+    if (
+        options.enableStockManipulation &&
+        options.targetStock &&
+        freeRam >= expensiveOpCost
+    ) {
         await runStockBoost(ns, options.targetStock);
     }
 }
@@ -586,7 +670,10 @@ function loadProbeOptions(ns, filePath) {
         return {
             enablePhishing: Boolean(parsed.enablePhishing),
             enableStockManipulation: Boolean(parsed.enableStockManipulation),
-            enableStasis: parsed.enableStasis !== undefined ? Boolean(parsed.enableStasis) : true,
+            enableStasis:
+                parsed.enableStasis !== undefined
+                    ? Boolean(parsed.enableStasis)
+                    : true,
             enableMigration: Boolean(parsed.enableMigration),
             targetStock:
                 typeof parsed.targetStock === "string"
@@ -650,7 +737,9 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
 
         if (currentStasisSet.size < stasisLimit) {
             // Free slot available — set stasis on this server
-            ns.print(`Stasis: slot available (${currentStasisSet.size}/${stasisLimit}), setting stasis on ${hostname} (score: ${myScore})`);
+            ns.print(
+                `Stasis: slot available (${currentStasisSet.size}/${stasisLimit}), setting stasis on ${hostname} (score: ${myScore})`,
+            );
             await execStasisBootstrap(ns, hostname, true);
         } else {
             // All slots full — check if we should replace the weakest
@@ -666,7 +755,9 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
 
             // Only replace if our score beats the weakest by a significant margin (20%+)
             if (weakestHost && myScore > weakestScore * 1.2) {
-                ns.print(`Stasis: replacing ${weakestHost} (score: ${weakestScore}) with ${hostname} (score: ${myScore})`);
+                ns.print(
+                    `Stasis: replacing ${weakestHost} (score: ${weakestScore}) with ${hostname} (score: ${myScore})`,
+                );
                 // We can only remove stasis on servers we're ON — write a request for the
                 // probe on the weak server to handle removal, OR ask orchestrator.
                 // For now: if the weak server is adjacent, we remove it via its probe.
@@ -695,7 +786,7 @@ async function scoreServerForStasis(ns, hostname) {
         );
     } catch {}
 
-    if (depth !== undefined && depth !== null && typeof depth === 'number') {
+    if (depth !== undefined && depth !== null && typeof depth === "number") {
         const posInGap = depth % AIR_GAP_DEPTH;
         // Critical: servers just before air gaps are migration staging points
         if (posInGap === AIR_GAP_DEPTH - 2 || posInGap === AIR_GAP_DEPTH - 1) {
@@ -745,13 +836,13 @@ async function execStasisBootstrap(ns, hostname, enable) {
     const usedRam = await nsGetServerUsedRam(ns, host);
     const freeRam = Math.max(0, maxRam - usedRam);
 
-    const stasisArg = enable ? 'true' : 'false';
-    const scriptName = `/Temp/dnet-stasis-${hostname.replace(/[^a-zA-Z0-9]/g, '_')}.js`;
+    const stasisArg = enable ? "true" : "false";
+    const scriptName = `/Temp/dnet-stasis-${hostname.replace(/[^a-zA-Z0-9]/g, "_")}.js`;
 
     if (freeRam >= STASIS_SCRIPT_RAM) {
         // Enough RAM — run stasis temp script directly alongside probe
         const script = `export async function main(ns){try{await ns.dnet.setStasisLink(${stasisArg});}catch(e){ns.print('ERROR: '+e);}};`;
-        ns.write(scriptName, script, 'w');
+        ns.write(scriptName, script, "w");
         const pid = ns.exec(scriptName, host, 1);
         if (pid > 0) {
             // Wait for completion
@@ -760,7 +851,7 @@ async function execStasisBootstrap(ns, hostname, enable) {
                 const running = await nsPs(ns, host);
                 if (!running.some((p) => p.pid === pid)) break;
             }
-            ns.print(`Stasis ${enable ? 'set' : 'removed'} on ${hostname}`);
+            ns.print(`Stasis ${enable ? "set" : "removed"} on ${hostname}`);
         }
     } else if (maxRam >= STASIS_SCRIPT_RAM + PROBE_RAM_COST) {
         // Not enough free RAM with probe running, but enough if we kill probe first.
@@ -771,9 +862,9 @@ async function execStasisBootstrap(ns, hostname, enable) {
             `try{await ns.dnet.setStasisLink(${stasisArg});}catch(e){ns.print('ERROR: '+e);}`,
             `try{await ns.sleep(100);`,
             `ns.exec('${probeScript}',ns.getHostname(),1,${PROBE_VERSION});}catch(e){}`,
-            `};`
-        ].join('');
-        ns.write(scriptName, script, 'w');
+            `};`,
+        ].join("");
+        ns.write(scriptName, script, "w");
 
         // Kill ourselves, free RAM, launch bootstrap
         // But wait — we can't kill ourselves. We write the script,
@@ -792,16 +883,24 @@ async function execStasisBootstrap(ns, hostname, enable) {
                         const running = await nsPs(ns, host);
                         if (!running.some((p) => p.pid === pid)) break;
                     }
-                    ns.print(`Stasis ${enable ? 'set' : 'removed'} on ${hostname} (after freeing RAM)`);
+                    ns.print(
+                        `Stasis ${enable ? "set" : "removed"} on ${hostname} (after freeing RAM)`,
+                    );
                 }
             } else {
-                ns.print(`WARN: ${hostname} has ${updatedFree.toFixed(1)}GB free after clearing blocked, need ${STASIS_SCRIPT_RAM}GB for stasis`);
+                ns.print(
+                    `WARN: ${hostname} has ${updatedFree.toFixed(1)}GB free after clearing blocked, need ${STASIS_SCRIPT_RAM}GB for stasis`,
+                );
             }
         } else {
-            ns.print(`WARN: ${hostname} too tight for stasis (${freeRam.toFixed(1)}GB free + ${blockedRam.toFixed(1)}GB blocked < ${STASIS_SCRIPT_RAM}GB needed)`);
+            ns.print(
+                `WARN: ${hostname} too tight for stasis (${freeRam.toFixed(1)}GB free + ${blockedRam.toFixed(1)}GB blocked < ${STASIS_SCRIPT_RAM}GB needed)`,
+            );
         }
     } else {
-        ns.print(`WARN: ${hostname} maxRam ${maxRam}GB too small for stasis (need ${STASIS_SCRIPT_RAM + PROBE_RAM_COST}GB)`);
+        ns.print(
+            `WARN: ${hostname} maxRam ${maxRam}GB too small for stasis (need ${STASIS_SCRIPT_RAM + PROBE_RAM_COST}GB)`,
+        );
     }
 }
 
@@ -811,7 +910,7 @@ async function runGetStasisLimit(ns) {
             ns,
             buildDnetCommand(commandNames.stasisLimit),
         );
-        return typeof result === 'number' ? result : 0;
+        return typeof result === "number" ? result : 0;
     } catch {}
     return 0;
 }
@@ -833,7 +932,7 @@ async function runGetBlockedRam(ns, hostname) {
             buildDnetCommand(commandNames.blockedRam, commandArgs.singleArg),
             [hostname],
         );
-        return typeof result === 'number' ? result : 0;
+        return typeof result === "number" ? result : 0;
     } catch {}
     return 0;
 }
@@ -847,10 +946,7 @@ async function runMemoryReallocation(ns, hostname) {
                 [hostname],
             );
         } else {
-            return await runDnetCommand(
-                ns,
-                buildDnetCommand(commandNames.mem),
-            );
+            return await runDnetCommand(ns, buildDnetCommand(commandNames.mem));
         }
     } catch {}
     return null;
@@ -875,7 +971,9 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
     // Migration charging cost: 1.6 base + 4.0 API = 5.6 GB via temp script
     const MIGRATION_COST = 5.6;
     const host = ns.getHostname();
-    const freeRam = (await nsGetServerMaxRam(ns, host)) - (await nsGetServerUsedRam(ns, host));
+    const freeRam =
+        (await nsGetServerMaxRam(ns, host)) -
+        (await nsGetServerUsedRam(ns, host));
     if (freeRam < MIGRATION_COST) return;
 
     try {
@@ -886,7 +984,12 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
 
             // Check if target is online and connected
             const details = await getAuthDetails(ns, target);
-            if (!details || !details.isOnline || !details.isConnectedToCurrentServer) continue;
+            if (
+                !details ||
+                !details.isOnline ||
+                !details.isConnectedToCurrentServer
+            )
+                continue;
 
             // Get target depth — migration is useful for deep servers near air gaps
             let depth;
@@ -898,24 +1001,40 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
                 );
             } catch {}
 
-            if (depth === undefined || depth === null || typeof depth !== 'number') continue;
+            if (
+                depth === undefined ||
+                depth === null ||
+                typeof depth !== "number"
+            )
+                continue;
 
             // Only migrate servers near air gap boundaries (depths 6,7,14,15,22,23,...)
             const posInGap = depth % AIR_GAP_DEPTH;
-            if (posInGap !== AIR_GAP_DEPTH - 2 && posInGap !== AIR_GAP_DEPTH - 1) continue;
+            if (
+                posInGap !== AIR_GAP_DEPTH - 2 &&
+                posInGap !== AIR_GAP_DEPTH - 1
+            )
+                continue;
 
             // Re-check free RAM (operations above used some)
-            const currentFree = (await nsGetServerMaxRam(ns, host)) - (await nsGetServerUsedRam(ns, host));
+            const currentFree =
+                (await nsGetServerMaxRam(ns, host)) -
+                (await nsGetServerUsedRam(ns, host));
             if (currentFree < MIGRATION_COST) break;
 
             try {
                 const result = await runDnetCommand(
                     ns,
-                    buildDnetCommand(commandNames.migrate, commandArgs.singleArg),
+                    buildDnetCommand(
+                        commandNames.migrate,
+                        commandArgs.singleArg,
+                    ),
                     [target],
                 );
                 if (result) {
-                    ns.print(`Migration charged on ${target} (depth: ${depth})`);
+                    ns.print(
+                        `Migration charged on ${target} (depth: ${depth})`,
+                    );
                 }
             } catch {}
         }
@@ -1274,9 +1393,7 @@ async function solveYesnt(ns, hostname, serverInfo) {
 
     for (const ch of charset) {
         // Set all unlocked positions to the current character
-        const guess = result
-            .map((c, i) => (locked[i] ? c : ch))
-            .join("");
+        const guess = result.map((c, i) => (locked[i] ? c : ch)).join("");
         const fb = await authWithFeedback(guess);
         if (fb?.success) return guess;
         if (await isAlreadyCracked(ns, hostname)) return null;
@@ -1435,7 +1552,13 @@ async function solveMastermind(ns, hostname, serverInfo) {
             feedbackMisses++;
             // If heartbleed consistently fails, we can't solve this interactively
             if (feedbackMisses > 5) {
-                return await bruteMastermind(ns, hostname, charset, length, constraints);
+                return await bruteMastermind(
+                    ns,
+                    hostname,
+                    charset,
+                    length,
+                    constraints,
+                );
             }
         }
     }
@@ -1446,7 +1569,13 @@ async function solveMastermind(ns, hostname, serverInfo) {
     }
 
     if (multiset.length !== length || multiset.length === 0) {
-        return await bruteMastermind(ns, hostname, charset, length, constraints);
+        return await bruteMastermind(
+            ns,
+            hostname,
+            charset,
+            length,
+            constraints,
+        );
     }
 
     const tries = { count: 0, limit: 6000 };
@@ -1491,7 +1620,10 @@ async function solveRomanNumeral(ns, hostname, serverInfo) {
             if (resp.success) return { success: true, direction: null };
             const bleed = await runHeartbleedMulti(ns, hostname, 5);
             if (bleed?.logs) {
-                const direction = getRomanNumeralFeedbackFromLogs(bleed.logs, guess);
+                const direction = getRomanNumeralFeedbackFromLogs(
+                    bleed.logs,
+                    guess,
+                );
                 if (direction) return { success: false, direction };
             }
             return null;
@@ -1659,7 +1791,11 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
                 const capturedPassword = match[2];
                 if (!capturedHost || !capturedPassword) continue;
                 if (capturedHost === hostname) {
-                    const result = await runAuth(ns, hostname, capturedPassword);
+                    const result = await runAuth(
+                        ns,
+                        hostname,
+                        capturedPassword,
+                    );
                     if (result.success) return capturedPassword;
                     if (await isAlreadyCracked(ns, hostname)) return null;
                 } else {
@@ -1671,8 +1807,10 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
             if (!candidate) continue;
             if (expectedLength && candidate.length !== expectedLength) continue;
             if (format === "numeric" && !/^\d+$/.test(candidate)) continue;
-            if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate)) continue;
-            if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate)) continue;
+            if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate))
+                continue;
+            if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate))
+                continue;
             const result = await runAuth(ns, hostname, candidate);
             if (result.success) return candidate;
             if (await isAlreadyCracked(ns, hostname)) return null;
@@ -1685,7 +1823,8 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
         if (expectedLength && candidate.length !== expectedLength) continue;
         if (format === "numeric" && !/^\d+$/.test(candidate)) continue;
         if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate)) continue;
-        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate)) continue;
+        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate))
+            continue;
         const result = await runAuth(ns, hostname, candidate);
         if (result.success) return candidate;
         if (await isAlreadyCracked(ns, hostname)) return null;
@@ -1867,7 +2006,10 @@ async function solveTimingAttack(ns, hostname, serverInfo) {
         if (resp.success) return { success: true, mismatchIndex: length };
         const bleed = await runHeartbleedMulti(ns, hostname, 5);
         if (bleed?.logs) {
-            const mismatchIndex = getTimingAttackFeedbackFromLogs(bleed.logs, guess);
+            const mismatchIndex = getTimingAttackFeedbackFromLogs(
+                bleed.logs,
+                guess,
+            );
             if (Number.isFinite(mismatchIndex))
                 return { success: false, mismatchIndex };
         }
@@ -1996,7 +2138,9 @@ function getHint(serverInfo) {
 }
 
 function getHintData(serverInfo) {
-    return String(serverInfo?.data ?? serverInfo?.passwordHintData ?? "").trim();
+    return String(
+        serverInfo?.data ?? serverInfo?.passwordHintData ?? "",
+    ).trim();
 }
 
 function getPasswordLength(serverInfo, fallback) {
@@ -2169,7 +2313,10 @@ async function bruteMastermind(ns, hostname, charset, length, constraints) {
         // Try to get feedback from heartbleed for constraint tightening
         const bleed = await runHeartbleedMulti(ns, hostname, 5);
         if (bleed?.logs) {
-            const feedback = getMastermindFeedbackFromLogs(bleed.logs, candidate);
+            const feedback = getMastermindFeedbackFromLogs(
+                bleed.logs,
+                candidate,
+            );
             if (feedback)
                 constraints.push({
                     guess: candidate,
@@ -2264,7 +2411,7 @@ function parsePepperCount(resp) {
     // Count U+1F336 (hot pepper) code points regardless of variation selector
     let count = 0;
     for (const ch of pepperPart) {
-        if (ch.codePointAt(0) === 0x1F336) count++;
+        if (ch.codePointAt(0) === 0x1f336) count++;
     }
     if (count > 0) return count;
     // Fallback: try parsing as a plain number
@@ -2519,7 +2666,6 @@ function permuteDigits(digits, visit) {
     return backtrack(0);
 }
 
-
 function directionDelta(dir) {
     if (dir === "north") return { dx: 0, dy: -2 };
     if (dir === "south") return { dx: 0, dy: 2 };
@@ -2626,14 +2772,20 @@ function buildNsCommand(name, args = "") {
 
 async function runLabReport(ns) {
     try {
-        return await runDnetCommand(ns, buildDnetCommand(commandNames.labReport));
+        return await runDnetCommand(
+            ns,
+            buildDnetCommand(commandNames.labReport),
+        );
     } catch {}
     return null;
 }
 
 async function runLabRadar(ns) {
     try {
-        return await runDnetCommand(ns, buildDnetCommand(commandNames.labRadar));
+        return await runDnetCommand(
+            ns,
+            buildDnetCommand(commandNames.labRadar),
+        );
     } catch {}
     return null;
 }
@@ -2790,7 +2942,10 @@ async function runAuth(ns, hostname, password) {
 
 async function runScan(ns) {
     try {
-        return await runDnetCommand(ns, buildDnetCommand(commandNames.dnetScan));
+        return await runDnetCommand(
+            ns,
+            buildDnetCommand(commandNames.dnetScan),
+        );
     } catch {}
     return null;
 }
@@ -2955,9 +3110,12 @@ function getGuessNumberFeedbackFromLogs(logs, attemptedPassword) {
         try {
             const parsed = JSON.parse(line);
             if (parsed?.passwordAttempted !== attemptedPassword) continue;
-            const direction = String(parsed?.data ?? "").trim().toLowerCase();
+            const direction = String(parsed?.data ?? "")
+                .trim()
+                .toLowerCase();
             if (!direction) continue;
-            if (!direction.includes("higher") && !direction.includes("lower")) continue;
+            if (!direction.includes("higher") && !direction.includes("lower"))
+                continue;
             const feedback = { direction };
             const message = String(parsed?.message ?? "");
             const rangeMatch = message.match(/between\s+(\d+)\s+and\s+(\d+)/i);

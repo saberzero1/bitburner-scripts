@@ -1020,10 +1020,7 @@ export async function main(ns) {
             getFilePath("work-for-factions.js"),
         );
         // Prevent daemon from starting "infiltration.js" since we now manage that script
-        daemonArgs.push(
-            "--disable-script",
-            getFilePath("infiltration.js"),
-        );
+        daemonArgs.push("--disable-script", getFilePath("infiltration.js"));
         // In BN8, always run in a mode that prioritizes stock market manipulation
         if (resetInfo.currentNode == 8)
             daemonArgs.push("--stock-manipulation-focus");

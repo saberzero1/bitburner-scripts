@@ -55,10 +55,13 @@ const solverTypeMap = {
     "Unique Paths in a Grid I": "solveUniquePathsInAGridI",
     "Unique Paths in a Grid II": "solveUniquePathsInAGridII",
     "Shortest Path in a Grid": "solveShortestPathInAGrid",
-    "Sanitize Parentheses in Expression": "solveSanitizeParenthesesInExpression",
+    "Sanitize Parentheses in Expression":
+        "solveSanitizeParenthesesInExpression",
     "Find All Valid Math Expressions": "solveFindAllValidMathExpressions",
-    "HammingCodes: Integer to Encoded Binary": "solveHammingCodesIntegerToEncodedBinary",
-    "HammingCodes: Encoded Binary to Integer": "solveHammingCodesEncodedBinaryToInteger",
+    "HammingCodes: Integer to Encoded Binary":
+        "solveHammingCodesIntegerToEncodedBinary",
+    "HammingCodes: Encoded Binary to Integer":
+        "solveHammingCodesEncodedBinaryToInteger",
     "Proper 2-Coloring of a Graph": "solveProper2ColoringOfAGraph",
     "Compression I: RLE Compression": "solveCompressionIRLECompression",
     "Compression II: LZ Decompression": "solveCompressionIILZDecompression",
@@ -116,10 +119,7 @@ export async function main(ns) {
             if (solverName == null) {
                 // No solver available - handle immediately (no worker needed)
                 const notice = `WARNING: No solver available for contract type "${contractInfo.type}"`;
-                if (
-                    !notified.includes(contractInfo.contract) &&
-                    !quietSolve
-                ) {
+                if (!notified.includes(contractInfo.contract) && !quietSolve) {
                     ns.tprint(
                         notice +
                             `\nContract Info: ${JSON.stringify(contractInfo)}`,
@@ -128,8 +128,7 @@ export async function main(ns) {
                     notified.push(contractInfo.contract);
                 }
                 ns.print(
-                    notice +
-                        `\nContract Info: ${JSON.stringify(contractInfo)}`,
+                    notice + `\nContract Info: ${JSON.stringify(contractInfo)}`,
                 );
                 continue;
             }
@@ -143,10 +142,7 @@ export async function main(ns) {
                 completed++;
                 failureCount++;
                 const notice = `ERROR: Worker error solving "${contractInfo.type}" (${contractInfo.contract} on ${contractInfo.hostname}):\n"${err.message}"`;
-                if (
-                    !notified.includes(contractInfo.contract) &&
-                    !quietSolve
-                ) {
+                if (!notified.includes(contractInfo.contract) && !quietSolve) {
                     ns.tprint(
                         notice +
                             `\nContract Info: ${JSON.stringify(contractInfo)}`,
@@ -155,8 +151,7 @@ export async function main(ns) {
                     notified.push(contractInfo.contract);
                 }
                 ns.print(
-                    notice +
-                        `\nContract Info: ${JSON.stringify(contractInfo)}`,
+                    notice + `\nContract Info: ${JSON.stringify(contractInfo)}`,
                 );
                 // Return worker to idle pool
                 const idx = activeWorkers.indexOf(worker);
@@ -211,10 +206,7 @@ export async function main(ns) {
                 }
 
                 if (notice) {
-                    if (
-                        !notified.includes(contract) &&
-                        !quietSolve
-                    ) {
+                    if (!notified.includes(contract) && !quietSolve) {
                         ns.tprint(
                             notice +
                                 `\nContract Info: ${JSON.stringify({ contract, hostname, type })}`,
@@ -1360,7 +1352,9 @@ const codingContractTypesMetadata = [
             // Based on https://github.com/bitburner-official/bitburner-src/blob/dev/src/CodingContract/contracts/LargestRectangle.ts
             const rows = data.length;
             const cols = data[0].length;
-            const histograms = Array.from({ length: rows }, () => Array(cols).fill(0));
+            const histograms = Array.from({ length: rows }, () =>
+                Array(cols).fill(0),
+            );
             for (let c = 0; c < cols; c++) {
                 let count = 0;
                 for (let r = 0; r < rows; r++) {
@@ -1398,7 +1392,10 @@ const codingContractTypesMetadata = [
                     }
                 }
             }
-            return [[maxU, maxL], [maxD, maxR]];
+            return [
+                [maxU, maxL],
+                [maxD, maxR],
+            ];
         },
     },
 ];

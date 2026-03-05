@@ -253,7 +253,10 @@ async function runCorpCycle(ns, state) {
     await state.init(ns);
     const corpData = await readCorpFunc(ns, "getCorporation()");
 
-    if (corpData.divisions.includes("Agriculture") && !state.agricultureCreatedAt) {
+    if (
+        corpData.divisions.includes("Agriculture") &&
+        !state.agricultureCreatedAt
+    ) {
         state.agricultureCreatedAt = Date.now();
         log(ns, "Tracking Agriculture creation time for progression gates");
     }
@@ -1594,7 +1597,11 @@ async function setupWaterDivision(ns, corpData) {
                     9 - office.size,
                 );
             }
-            for (let i = office.numEmployees; i < Math.min(9, office.size); i++) {
+            for (
+                let i = office.numEmployees;
+                i < Math.min(9, office.size);
+                i++
+            ) {
                 await execCorpFunc(
                     ns,
                     "hireEmployee(ns.args[0], ns.args[1])",
@@ -1602,7 +1609,13 @@ async function setupWaterDivision(ns, corpData) {
                     city,
                 );
             }
-            await assignEmployeesToProduction(ns, "Water", city, false, "quality");
+            await assignEmployeesToProduction(
+                ns,
+                "Water",
+                city,
+                false,
+                "quality",
+            );
             log(ns, `Water: Set up ${city} with quality-focused employees`);
         }
 
@@ -2358,7 +2371,12 @@ async function checkInvestment(ns, state) {
     const offerSummary = hasOffer
         ? `${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares`
         : "No offer";
-    const decision = shouldAcceptInvestment(offer, state.round, 0, corpData.funds);
+    const decision = shouldAcceptInvestment(
+        offer,
+        state.round,
+        0,
+        corpData.funds,
+    );
     state.lastInvestmentCheck = `Round ${state.round}: ${offerSummary} vs min ${formatMoney(minimumOffer)} => ${decision ? "ACCEPT" : "WAIT"}${isEmergency ? " [EMERGENCY]" : ""}`;
     log(ns, `Investment check: ${state.lastInvestmentCheck}`);
 
