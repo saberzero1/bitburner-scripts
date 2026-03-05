@@ -426,7 +426,6 @@ export function calculateSmartSupplyQuantities(
 
     for (const [material, ratio] of Object.entries(industry.inputMaterials)) {
         const currentStored = materials[material]?.stored || 0;
-        const currentSpace = currentStored * MATERIAL_SIZES[material];
 
         // Target space for this material
         const targetMaterialSpace = (inputBudget * ratio) / totalInputRatio;
@@ -603,8 +602,8 @@ export function getMinimumInvestmentOffer(round) {
     // When in trouble, any investment is better than none
     const minimums = {
         1: 500e6, // $500m - basic Agriculture setup
-        2: 2e9, // $2b - Chemical division
-        3: 5e9, // $5b - lowered to escape death spiral
+        2: 1e9,
+        3: 2e9,
         4: 50e9, // $50b - going public
     };
     return minimums[round] || 0;

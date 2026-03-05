@@ -43,6 +43,7 @@ const argsSchema = [
     ["xp-mode-interval-minutes", 55], // Every time this many minutes has elapsed, toggle daemon.js to runing in --xp-only mode, which prioritizes earning hack-exp rather than money
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["disable-infiltration", false], // Set to true to disable running the infiltration.js script automatically
 ];
 
 export function autocomplete(data, args) {
@@ -1018,6 +1019,11 @@ export async function main(ns) {
             "--disable-script",
             getFilePath("work-for-factions.js"),
         );
+        // Prevent daemon from starting "infiltration.js" since we now manage that script
+        daemonArgs.push(
+            "--disable-script",
+            getFilePath("infiltration.js"),
+        );
         // In BN8, always run in a mode that prioritizes stock market manipulation
         if (resetInfo.currentNode == 8)
             daemonArgs.push("--stock-manipulation-focus");
@@ -1181,6 +1187,18 @@ export async function main(ns) {
                 rushGang ? rushGangsArgs : workForFactionsArgs,
             );
         }
+
+        // Launch infiltration.js if not explicitly disabled and not already running.
+        // Infiltration earns money and faction rep passively via automated mini-game solving.
+        // Note: Unlike work-for-factions, infiltration has no SF requirements (it's DOM-based).
+        if (
+            !options["disable-infiltration"] &&
+            !findScript("infiltration.js") &&
+            homeRam >= 32 && // Don't waste RAM on infiltration when we're still low on home RAM
+            Date.now() - daemonStartTime > 30000 // Wait for daemon to warm up
+        ) {
+            launchScriptHelper(ns, "infiltration.js", ["--auto"]);
+        }
     }
 
     /** Get the source of the player's earnings by category.
@@ -1326,6 +1344,7 @@ export async function main(ns) {
         // Run casino.js (and expect this script to get killed in the process)
         // Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
         await killScript(ns, "work-for-factions.js");
+        await killScript(ns, "infiltration.js"); // Kill infiltration too — it uses the DOM and would interfere with casino
         await killScript(ns, "daemon.js"); // We also have to kill daemon which can make us study.
         // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
         if (4 in unlockedSFs)

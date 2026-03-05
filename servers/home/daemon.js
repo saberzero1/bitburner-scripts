@@ -550,6 +550,12 @@ export async function main(ns) {
                     reqRam(64) && (3 in dictSourceFiles || bitNodeN === 3),
                 minRamReq: 25,
             },
+            {
+                name: "infiltration.js",
+                shouldRun: () => reqRam(64), // DOM-based script with minimal RAM footprint; no SF requirements
+                args: ["--auto"], // Auto-replay infiltrations for passive rep/money income
+                shouldTail: false,
+            },
         ];
         // Add any additional scripts to be run provided by --run-script arguments
         options["run-script"].forEach((s) =>

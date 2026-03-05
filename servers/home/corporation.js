@@ -47,6 +47,12 @@ import {
     determineCityRole,
 } from "./corp-helpers.js";
 
+void getErrorInfo;
+void calculateProductionMultiplier;
+void calculateOptimalEmployeeDistribution;
+void checkExportDilution;
+void calculateQualityThreshold;
+
 const argsSchema = [
     ["self-fund", false],
     ["corp-name", "NoodleCorp"],
@@ -61,6 +67,7 @@ const argsSchema = [
 ];
 
 export function autocomplete(data, args) {
+    void args;
     data.flags(argsSchema);
     return [];
 }
@@ -146,11 +153,14 @@ export async function main(ns) {
 
 class CorpState {
     constructor(ns, options) {
+        void ns;
         this.options = options;
         this.round = options.round || 0;
         this.productVersion = 1;
         this.lastStatusLog = 0;
         this.lastDiagnostic = 0;
+        this.agricultureCreatedAt = 0;
+        this.lastInvestmentCheck = "";
         this.initialized = false;
         this.warehouseTarget = options["warehouse-target"] || 0.7;
     }
@@ -242,6 +252,11 @@ async function initCorporation(ns, state) {
 async function runCorpCycle(ns, state) {
     await state.init(ns);
     const corpData = await readCorpFunc(ns, "getCorporation()");
+
+    if (corpData.divisions.includes("Agriculture") && !state.agricultureCreatedAt) {
+        state.agricultureCreatedAt = Date.now();
+        log(ns, "Tracking Agriculture creation time for progression gates");
+    }
 
     // Periodic status logging
     const now = Date.now();
@@ -1127,7 +1142,7 @@ async function expandAllDivisions(ns) {
                     divName,
                     city,
                 );
-                if (warehouse.level < 5 && corpData.funds > 500e6) {
+                if (warehouse.level < 5 && corpData.funds > 100e6) {
                     // Lowered from 2e9 to 500m
                     await execCorpFunc(
                         ns,
@@ -1154,8 +1169,7 @@ async function expandAllDivisions(ns) {
                     : 9;
 
                 // Upgrade office size if needed and we can afford it
-                // Office upgrades are relatively cheap - $50M threshold
-                if (office.size < targetSize && corpData.funds > 50e6) {
+                if (office.size < targetSize && corpData.funds > 10e6) {
                     const toAdd = Math.min(3, targetSize - office.size);
                     await execCorpFunc(
                         ns,
@@ -1527,80 +1541,89 @@ async function setupWaterDivision(ns, corpData) {
     if (!corpData.divisions.includes("Water")) return;
 
     const waterDiv = await readCorpFunc(ns, "getDivision(ns.args[0])", "Water");
+    const expandToAllCities = corpData.funds > 50e9;
+    const targetCities = expandToAllCities ? CITIES : ["Sector-12"];
 
-    // Only need Water in Sector-12 (single quality hub strategy)
-    const city = "Sector-12";
-
-    // Check if we have a warehouse
-    const hasWarehouse = await readCorpFunc(
-        ns,
-        "hasWarehouse(ns.args[0], ns.args[1])",
-        "Water",
-        city,
-    );
-    if (!hasWarehouse) {
-        if (corpData.funds > 5e9) {
-            log(ns, `Water: Purchasing warehouse in ${city}`);
-            await execCorpFunc(
-                ns,
-                "purchaseWarehouse(ns.args[0], ns.args[1])",
-                "Water",
-                city,
-            );
+    for (const city of targetCities) {
+        if (!waterDiv.cities.includes(city)) {
+            if (city !== "Sector-12" && corpData.funds > 4e9) {
+                log(ns, `Water: Expanding to ${city}`);
+                await execCorpFunc(
+                    ns,
+                    "expandCity(ns.args[0], ns.args[1])",
+                    "Water",
+                    city,
+                );
+                await ns.sleep(200);
+            }
+            continue;
         }
-        return;
-    }
 
-    // Hire employees with quality focus (65% Engineers)
-    const office = await readCorpFunc(
-        ns,
-        "getOffice(ns.args[0], ns.args[1])",
-        "Water",
-        city,
-    );
-    if (office.numEmployees < 9) {
-        // Expand office if needed
-        if (office.size < 9 && corpData.funds > 1e9) {
-            await execCorpFunc(
-                ns,
-                "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
-                "Water",
-                city,
-                9 - office.size,
-            );
-        }
-        // Hire employees
-        for (let i = office.numEmployees; i < Math.min(9, office.size); i++) {
-            await execCorpFunc(
-                ns,
-                "hireEmployee(ns.args[0], ns.args[1])",
-                "Water",
-                city,
-            );
-        }
-        // Quality-focused distribution (65% Engineers)
-        await assignEmployeesToProduction(ns, "Water", city, false, "quality");
-        log(ns, `Water: Set up ${city} with quality-focused employees`);
-    }
-
-    // Set up selling for Water (we export most, sell remainder)
-    const waterMat = await readCorpFunc(
-        ns,
-        "getMaterial(ns.args[0], ns.args[1], ns.args[2])",
-        "Water",
-        city,
-        "Water",
-    );
-    if (!waterMat.desiredSellPrice || waterMat.desiredSellPrice === "0") {
-        await execCorpFunc(
+        const hasWarehouse = await readCorpFunc(
             ns,
-            "sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])",
+            "hasWarehouse(ns.args[0], ns.args[1])",
+            "Water",
+            city,
+        );
+        if (!hasWarehouse) {
+            if (corpData.funds > 5e9) {
+                log(ns, `Water: Purchasing warehouse in ${city}`);
+                await execCorpFunc(
+                    ns,
+                    "purchaseWarehouse(ns.args[0], ns.args[1])",
+                    "Water",
+                    city,
+                );
+            }
+            continue;
+        }
+
+        const office = await readCorpFunc(
+            ns,
+            "getOffice(ns.args[0], ns.args[1])",
+            "Water",
+            city,
+        );
+        if (office.numEmployees < 9) {
+            if (office.size < 9 && corpData.funds > 1e9) {
+                await execCorpFunc(
+                    ns,
+                    "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
+                    "Water",
+                    city,
+                    9 - office.size,
+                );
+            }
+            for (let i = office.numEmployees; i < Math.min(9, office.size); i++) {
+                await execCorpFunc(
+                    ns,
+                    "hireEmployee(ns.args[0], ns.args[1])",
+                    "Water",
+                    city,
+                );
+            }
+            await assignEmployeesToProduction(ns, "Water", city, false, "quality");
+            log(ns, `Water: Set up ${city} with quality-focused employees`);
+        }
+
+        const waterMat = await readCorpFunc(
+            ns,
+            "getMaterial(ns.args[0], ns.args[1], ns.args[2])",
             "Water",
             city,
             "Water",
-            "MAX",
-            "MP",
         );
+        if (!waterMat.desiredSellPrice || waterMat.desiredSellPrice === "0") {
+            await execCorpFunc(
+                ns,
+                "sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])",
+                "Water",
+                city,
+                "Water",
+                "MAX",
+                "MP",
+            );
+        }
     }
 }
 
@@ -1610,7 +1633,6 @@ async function setupWaterDivision(ns, corpData) {
 
 async function runRound2(ns, state) {
     let corpData = await readCorpFunc(ns, "getCorporation()");
-    const verbose = state.options.verbose;
 
     // Verify Agriculture is set up
     if (!corpData.divisions.includes("Agriculture")) {
@@ -1619,11 +1641,6 @@ async function runRound2(ns, state) {
     }
 
     // Verify Agriculture has production employees
-    const agDiv = await readCorpFunc(
-        ns,
-        "getDivision(ns.args[0])",
-        "Agriculture",
-    );
     const agOffice = await readCorpFunc(
         ns,
         "getOffice(ns.args[0], ns.args[1])",
@@ -1818,7 +1835,6 @@ async function runRound2(ns, state) {
 
 async function runRound3Plus(ns, state) {
     let corpData = await readCorpFunc(ns, "getCorporation()");
-    const verbose = state.options.verbose;
 
     // Verify prerequisites - must have both divisions with employees
     if (
@@ -1875,19 +1891,26 @@ async function runRound3Plus(ns, state) {
     const { bestCity: bestPlantsCity, bestQuality: bestPlantsQuality } =
         findBestQualityCity(plantsQualityByCity);
 
-    // Check if we're ready for Tobacco (need quality >= sqrt(50) ≈ 7 for initial products)
-    const readiness = checkProductReadiness(bestPlantsQuality, 50);
+    const readiness = checkProductReadiness(bestPlantsQuality, 25);
+    const now = Date.now();
+    const agricultureAgeMs = state.agricultureCreatedAt
+        ? now - state.agricultureCreatedAt
+        : 0;
+    const bypassByTime = agricultureAgeMs > 300000;
+    const bypassByFunds = corpData.funds >= 20e9;
+    const qualityGateReady = readiness.isReady || bypassByTime || bypassByFunds;
+    log(
+        ns,
+        `Round 3+: Tobacco gate - Plants Q=${bestPlantsQuality.toFixed(1)} threshold=${readiness.threshold.toFixed(1)} (effective ${readiness.effectiveRatingPercent.toFixed(0)}%), Funds=${formatMoney(corpData.funds)}, AgAge=${(agricultureAgeMs / 1000).toFixed(0)}s, Bypass=${bypassByTime ? "time" : bypassByFunds ? "funds" : readiness.isReady ? "quality" : "none"}`,
+    );
 
     // Create Tobacco division - only if quality is sufficient OR we have lots of funds
     if (!corpData.divisions.includes("Tobacco")) {
-        if (!readiness.isReady && corpData.funds < 100e9) {
-            // Quality too low and not enough funds to brute force
-            if (verbose) {
-                log(
-                    ns,
-                    `Round 3+: Delaying Tobacco - Plants quality ${bestPlantsQuality.toFixed(1)} < threshold ${readiness.threshold.toFixed(1)} (${readiness.effectiveRatingPercent.toFixed(0)}% effective)`,
-                );
-            }
+        if (!qualityGateReady) {
+            log(
+                ns,
+                `Round 3+: Delaying Tobacco - Plants quality ${bestPlantsQuality.toFixed(1)} < threshold ${readiness.threshold.toFixed(1)} (${readiness.effectiveRatingPercent.toFixed(0)}% effective), Funds=${formatMoney(corpData.funds)}`,
+            );
             log(
                 ns,
                 `Focusing on Agriculture quality in ${bestPlantsCity} (Q=${bestPlantsQuality.toFixed(1)})`,
@@ -2329,16 +2352,18 @@ async function checkInvestment(ns, state) {
     const corpData = await readCorpFunc(ns, "getCorporation()");
     const offer = await execCorpFunc(ns, "getInvestmentOffer()");
 
-    if (offer && offer.funds > 0) {
-        const isEmergency = corpData.funds < 0;
-        log(
-            ns,
-            `Investment offer: ${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares (Round ${state.round})${isEmergency ? " [EMERGENCY - negative funds]" : ""}`,
-        );
-    }
+    const minimumOffer = getLocalMinimumInvestmentOffer(state.round);
+    const isEmergency = corpData.funds < 0;
+    const hasOffer = offer && offer.funds > 0;
+    const offerSummary = hasOffer
+        ? `${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares`
+        : "No offer";
+    const decision = shouldAcceptInvestment(offer, state.round, 0, corpData.funds);
+    state.lastInvestmentCheck = `Round ${state.round}: ${offerSummary} vs min ${formatMoney(minimumOffer)} => ${decision ? "ACCEPT" : "WAIT"}${isEmergency ? " [EMERGENCY]" : ""}`;
+    log(ns, `Investment check: ${state.lastInvestmentCheck}`);
 
     // Pass current funds to enable emergency acceptance when in death spiral
-    if (shouldAcceptInvestment(offer, state.round, 0, corpData.funds)) {
+    if (decision) {
         await execCorpFunc(ns, "acceptInvestmentOffer()");
         log(
             ns,
@@ -2348,4 +2373,14 @@ async function checkInvestment(ns, state) {
         );
         state.round++;
     }
+}
+
+function getLocalMinimumInvestmentOffer(round) {
+    const minimums = {
+        1: 500e6,
+        2: 1e9,
+        3: 2e9,
+        4: 50e9,
+    };
+    return minimums[round] || 0;
 }
