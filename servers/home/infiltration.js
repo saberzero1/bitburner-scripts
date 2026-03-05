@@ -1,8 +1,10 @@
 /**
- * Infiltration Automation Script
+ * Infiltration Automation Script (Rewritten for new model-based architecture)
  *
- * Automates all infiltration mini-games using a React Fiber exploit as the
- * primary strategy, with full fallback solvers for every mini-game type.
+ * Automates all infiltration mini-games by directly accessing the game's
+ * internal Infiltration model via React Fiber traversal. Primary strategy
+ * calls onSuccess() directly; fallback solvers read model state and solve
+ * each minigame algorithmically.
  *
  * Usage:
  *   run infiltration.js                     -- Enable automation, solve games when you visit infiltration
@@ -40,306 +42,12 @@ const speed = 50;
 const wnd = eval("window");
 const doc = wnd["document"];
 
-// Infiltration state tracking
-const state = {
-    company: "",
-    lastCompany: "",
-    started: false,
-    game: {},
-};
-
 // Module-level settings (set from args in main)
 let autoMode = false;
 let repFaction = "";
+let targetCompany = "";
 let postTimeout = null;
 let infiltrationStart = 0;
-
-// List of positive adjectives for the "nice guard" game
-const NICE_WORDS = [
-    "affectionate",
-    "agreeable",
-    "bright",
-    "charming",
-    "creative",
-    "determined",
-    "energetic",
-    "friendly",
-    "funny",
-    "generous",
-    "polite",
-    "likable",
-    "diplomatic",
-    "helpful",
-    "giving",
-    "kind",
-    "hardworking",
-    "patient",
-    "dynamic",
-    "loyal",
-    "based",
-    "straightforward",
-];
-
-// =============================================================================
-//  Mini-Game Definitions (Fallback Solvers)
-// =============================================================================
-
-const infiltrationGames = [
-    {
-        name: "type it backward",
-        init(screen) {
-            const lines = getLines(getEl(screen, "p"));
-            state.game.data = lines[0].split("").reverse();
-        },
-        play() {
-            if (!state.game.data || !state.game.data.length) {
-                delete state.game.data;
-                return;
-            }
-            pressKey(state.game.data.shift());
-        },
-    },
-    {
-        name: "type it",
-        init(screen) {
-            const lines = getLines(getEl(screen, "p"));
-            state.game.data = lines[0].split("");
-        },
-        play() {
-            if (!state.game.data || !state.game.data.length) {
-                delete state.game.data;
-                return;
-            }
-            pressKey(state.game.data.shift());
-        },
-    },
-    {
-        name: "enter the code",
-        init() {
-            state.game.position = 0;
-        },
-        play(screen) {
-            const h4 = getEl(screen, "h4");
-            const code = h4[1].textContent;
-            const arrowMap = { "↑": "w", "↓": "s", "←": "a", "→": "d" };
-            const key = arrowMap[code[state.game.position]];
-            if (key) pressKey(key);
-            state.game.position++;
-        },
-    },
-    {
-        name: "close the brackets",
-        init(screen) {
-            const data = getLines(getEl(screen, "p"));
-            const brackets = data.join("").split("");
-            const closingMap = { "<": ">", "(": ")", "{": "}", "[": "]" };
-            state.game.data = [];
-            for (let i = brackets.length - 1; i >= 0; i--) {
-                const closing = closingMap[brackets[i]];
-                if (closing) state.game.data.push(closing);
-            }
-        },
-        play() {
-            if (!state.game.data || !state.game.data.length) {
-                delete state.game.data;
-                return;
-            }
-            pressKey(state.game.data.shift());
-        },
-    },
-    {
-        name: "attack after the sentinel drops his guard and is distracted",
-        init() {
-            state.game.data = "wait";
-        },
-        play(screen) {
-            const data = getLines(getEl(screen, "h4"));
-            if ("attack" === state.game.data) {
-                pressKey(" ");
-                state.game.data = "done";
-            }
-            // Attack in next frame — instant attack sometimes fails
-            if (
-                "wait" === state.game.data &&
-                data.indexOf("Distracted!") !== -1
-            ) {
-                state.game.data = "attack";
-            }
-        },
-    },
-    {
-        name: "say something nice about the guard",
-        init() {},
-        play(screen) {
-            const word = getLines(getEl(screen, "h5"))[1];
-            if (NICE_WORDS.indexOf(word) !== -1) {
-                pressKey(" ");
-            } else {
-                pressKey("w");
-            }
-        },
-    },
-    {
-        name: "remember all the mines",
-        init(screen) {
-            const rows = getEl(screen, "p");
-            const gridSize = detectGridSize(rows.length);
-            if (!gridSize) return;
-            state.game.data = [];
-            let index = 0;
-            for (let y = 0; y < gridSize[1]; y++) {
-                state.game.data[y] = [];
-                for (let x = 0; x < gridSize[0]; x++) {
-                    state.game.data[y].push(rows[index].children.length > 0);
-                    index++;
-                }
-            }
-        },
-        play() {},
-    },
-    {
-        name: "mark all the mines",
-        init() {
-            state.game.x = 0;
-            state.game.y = 0;
-            state.game.cols = state.game.data[0].length;
-            state.game.dir = 1;
-        },
-        play() {
-            let { data, x, y, cols, dir } = state.game;
-            if (data[y][x]) {
-                pressKey(" ");
-                data[y][x] = false;
-            }
-            x += dir;
-            if (x < 0 || x >= cols) {
-                x = Math.max(0, Math.min(cols - 1, x));
-                y++;
-                dir *= -1;
-                pressKey("s");
-            } else {
-                pressKey(dir > 0 ? "d" : "a");
-            }
-            state.game.data = data;
-            state.game.x = x;
-            state.game.y = y;
-            state.game.dir = dir;
-        },
-    },
-    {
-        name: "match the symbols",
-        init(screen) {
-            const data = getLines(getEl(screen, "h5 span"));
-            const rows = getLines(getEl(screen, "p"));
-            const gridSize = detectGridSize(rows.length);
-            if (!gridSize) return;
-            const keypad = [];
-            let index = 0;
-            for (let i = 0; i < gridSize[1]; i++) {
-                keypad[i] = [];
-                for (let j = 0; j < gridSize[0]; j++) {
-                    keypad[i].push(rows[index]);
-                    index++;
-                }
-            }
-            const targets = [];
-            for (let i = 0; i < data.length; i++) {
-                const symbol = data[i].trim();
-                for (let j = 0; j < keypad.length; j++) {
-                    const k = keypad[j].indexOf(symbol);
-                    if (k !== -1) {
-                        targets.push([j, k]);
-                        break;
-                    }
-                }
-            }
-            state.game.data = targets;
-            state.game.x = 0;
-            state.game.y = 0;
-        },
-        play() {
-            const target = state.game.data[0];
-            if (!target) return;
-            let { x, y } = state.game;
-            const [toY, toX] = target;
-            if (toY < y) {
-                y--;
-                pressKey("w");
-            } else if (toY > y) {
-                y++;
-                pressKey("s");
-            } else if (toX < x) {
-                x--;
-                pressKey("a");
-            } else if (toX > x) {
-                x++;
-                pressKey("d");
-            } else {
-                pressKey(" ");
-                state.game.data.shift();
-            }
-            state.game.x = x;
-            state.game.y = y;
-        },
-    },
-    {
-        name: "cut the wires with the following properties",
-        init(screen) {
-            const numberHack = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
-            const colors = {
-                red: "red",
-                white: "white",
-                blue: "blue",
-                "rgb(255, 193, 7)": "yellow",
-            };
-            const wireColor = { red: [], white: [], blue: [], yellow: [] };
-            const instructions = [];
-            for (const child of screen.children) instructions.push(child);
-            const wiresData = instructions.pop();
-            instructions.shift();
-            const instructionLines = getLines(instructions);
-            const samples = getEl(wiresData, "p");
-            let wireCount = 0;
-            for (let i = 0; i < samples.length; i++) {
-                if (numberHack.includes(samples[i].innerText)) wireCount++;
-                else break;
-            }
-            let index = 0;
-            for (let i = 0; i < 3; i++) {
-                for (let j = 0; j < wireCount; j++) {
-                    const node = samples[index];
-                    const color = colors[node.style.color];
-                    if (color) wireColor[color].push(j + 1);
-                    index++;
-                }
-            }
-            const wires = [];
-            for (const line of instructionLines) {
-                const lower = line.trim().toLowerCase();
-                if (!lower || lower.length < 10) continue;
-                if (lower.indexOf("cut wires number") !== -1) {
-                    const parts = lower.split(/(number\s*|\.)/);
-                    wires.push(parseInt(parts[2]));
-                }
-                if (lower.indexOf("cut all wires colored") !== -1) {
-                    const parts = lower.split(/(colored\s*|\.)/);
-                    const color = parts[2];
-                    if (wireColor[color]) {
-                        wireColor[color].forEach((num) => wires.push(num));
-                    }
-                }
-            }
-            state.game.data = [...new Set(wires)];
-        },
-        play() {
-            const wire = state.game.data;
-            if (!wire) return;
-            for (let i = 0; i < wire.length; i++) {
-                pressKey(wire[i].toString());
-            }
-        },
-    },
-];
 
 // =============================================================================
 //  Entry Point
@@ -383,74 +91,588 @@ export async function main(ns) {
     // Apply settings
     autoMode = args.auto;
     repFaction = args.faction && args.faction.length ? args.faction : "";
+    targetCompany = args.company && args.company.length ? args.company : "";
 
     print(
         "Automated infiltration is enabled...\n" +
-            "When you visit the infiltration screen of any company, all tasks are completed automatically.\n" +
+            "All infiltration tasks are completed automatically using direct model access.\n" +
             `Auto-replay: ${autoMode ? "ON" : "OFF"} | ` +
-            `Reward: ${repFaction || "MONEY"}`,
+            `Reward: ${repFaction || "MONEY"}` +
+            (targetCompany ? ` | Target: ${targetCompany}` : ""),
     );
 
     // IPC: write PID to port 30
     ns.writePort(30, ns.pid);
-    endInfiltration();
 
-    // Wrap event listeners for trusted synthetic keyboard events
+    // Wrap event listeners for trusted synthetic keyboard events (needed for fallback solvers)
     wrapEventListeners();
+
+    // If --company is set, try navigating to the company via Singularity API first
+    if (targetCompany) {
+        let navigated = false;
+        try {
+            // Try Singularity API navigation (requires SF4)
+            const locations = ns.infiltration.getPossibleLocations();
+            const match = locations.find(
+                (loc) => loc.name.toLowerCase() === targetCompany.toLowerCase(),
+            );
+            if (match) {
+                // Travel to the right city first if needed
+                const player = ns.getPlayer();
+                if (player.city !== match.city) {
+                    if (ns.singularity) {
+                        ns.singularity.travelToCity(match.city);
+                    }
+                }
+                // Navigate to the company location
+                if (ns.singularity) {
+                    ns.singularity.goToLocation(match.name);
+                    navigated = true;
+                }
+            }
+        } catch {
+            // SF4 not available or API call failed — fall through to DOM fallback
+        }
+
+        if (!navigated) {
+            // DOM fallback: click on the company on the city map
+            postTimeout = setTimeout(() => {
+                postTimeout = null;
+                const selector = 'span[aria-label="' + targetCompany + '"]';
+                const companyEle = doc.querySelector(selector);
+                if (companyEle) companyEle.click();
+            }, 500);
+        }
+    }
 
     // Start the main automation loop
     wnd.tmrAutoInf = setInterval(infLoop, speed);
+}
 
-    // If --company is set, navigate to the company and start infiltration
-    if (args.company) {
-        state.lastCompany = args.company;
-        postTimeout = setTimeout(() => {
-            postTimeout = null;
-            const btn = findButton("Infiltrate Company");
-            if (btn) clickButton(btn);
-        }, 1000);
+// =============================================================================
+//  React Fiber Traversal — Access Player.infiltration
+// =============================================================================
+
+/**
+ * Find the Infiltration model instance through React's internal fiber tree.
+ * Uses a multi-strategy approach for reliability:
+ *
+ *   Strategy 1 (Bottom-Up): Find a known infiltration DOM element, get its
+ *                           fiber, walk UP via fiber.return to find props
+ *                           containing the Infiltration instance.
+ *
+ *   Strategy 2 (Top-Down):  Walk the full fiber tree from the root downward
+ *                           searching all fibers' memoizedProps, stateNode,
+ *                           and hook state chains.
+ *
+ * The game's InfiltrationRoot.tsx reads Player.infiltration and passes it
+ * as `state` prop to stage components: <StageComponent state={state} stage={state.stage} />
+ *
+ * Returns the Infiltration instance, or null if not currently infiltrating.
+ */
+function getInfiltrationState() {
+    try {
+        // Strategy 1: Bottom-up from infiltration-specific DOM elements.
+        // This is fast and precise — start from a known UI element and walk up.
+        const infil = findInfiltrationBottomUp();
+        if (infil) return infil;
+
+        // Strategy 2: Top-down full fiber tree walk from root.
+        // Fallback for when no infiltration-specific DOM elements exist yet.
+        return findInfiltrationTopDown();
+    } catch {
+        return null;
     }
+}
+
+/**
+ * Strategy 1: Bottom-up fiber walk.
+ * Find DOM elements unique to the infiltration UI, get their React fiber,
+ * then walk UP through fiber.return to find the Infiltration instance
+ * in a parent fiber's memoizedProps.
+ */
+function findInfiltrationBottomUp() {
+    // Look for DOM elements that only exist during infiltration.
+    // Each of these selectors targets something rendered by InfiltrationRoot.
+    const selectors = [
+        // "Cancel Infiltration" button (present during all active stages)
+        "button",
+        // MUI Paper elements within the infiltration Container
+        'div[class*="MuiPaper"]',
+        // MUI Container
+        'div[class*="MuiContainer"]',
+    ];
+
+    // For each selector, find matching elements and try to walk up their fiber
+    for (const selector of selectors) {
+        const elements = doc.querySelectorAll(selector);
+        for (const el of elements) {
+            const fiber = getReactFiber(el);
+            if (!fiber) continue;
+
+            const infil = walkFiberUp(fiber);
+            if (infil) return infil;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Strategy 2: Top-down fiber tree walk from the React root.
+ * Searches the entire fiber tree using iterative DFS (avoids stack overflow).
+ */
+function findInfiltrationTopDown() {
+    const root = doc.getElementById("root");
+    if (!root) return null;
+
+    const fiberKey = Object.keys(root).find((k) =>
+        k.startsWith("__reactFiber$"),
+    );
+    if (!fiberKey) return null;
+
+    const rootFiber = root[fiberKey];
+    if (!rootFiber) return null;
+
+    // Iterative DFS using an explicit stack (no depth limit, no stack overflow)
+    const stack = [rootFiber];
+    const visited = new WeakSet();
+
+    while (stack.length > 0) {
+        const fiber = stack.pop();
+        if (!fiber || visited.has(fiber)) continue;
+        visited.add(fiber);
+
+        // Check this fiber for the Infiltration instance
+        const infil = extractInfiltrationFromFiber(fiber);
+        if (infil) return infil;
+
+        // Push sibling first (so child is processed first from stack)
+        if (fiber.sibling) stack.push(fiber.sibling);
+        if (fiber.child) stack.push(fiber.child);
+    }
+
+    return null;
+}
+
+/**
+ * Get the React fiber attached to a DOM element.
+ */
+function getReactFiber(element) {
+    if (!element) return null;
+    const key = Object.keys(element).find(
+        (k) =>
+            k.startsWith("__reactFiber$") ||
+            k.startsWith("__reactInternalInstance$"),
+    );
+    return key ? element[key] : null;
+}
+
+/**
+ * Walk UP the fiber tree from a starting fiber, checking each fiber's
+ * memoizedProps for the Infiltration instance. This is the most reliable
+ * path since InfiltrationRoot passes `state={Player.infiltration}` as a
+ * prop to its child stage components.
+ */
+function walkFiberUp(fiber) {
+    let current = fiber;
+    let steps = 0;
+    while (current && steps < 100) {
+        const infil = extractInfiltrationFromFiber(current);
+        if (infil) return infil;
+        current = current.return;
+        steps++;
+    }
+    return null;
+}
+
+/**
+ * Extract the Infiltration instance from a single fiber node.
+ * Checks memoizedProps, stateNode, and the hook state chain.
+ */
+function extractInfiltrationFromFiber(fiber) {
+    if (!fiber) return null;
+
+    // 1. Check memoizedProps — this is where <StageComponent state={infil} /> stores it
+    try {
+        const props = fiber.memoizedProps;
+        if (props && typeof props === "object") {
+            const infil = extractInfiltration(props);
+            if (infil) return infil;
+        }
+    } catch {
+        /* ignore */
+    }
+
+    // 2. Check stateNode (class components)
+    try {
+        const sn = fiber.stateNode;
+        if (
+            sn &&
+            typeof sn === "object" &&
+            sn !== doc &&
+            !(sn instanceof wnd.HTMLElement)
+        ) {
+            const infil = extractInfiltration(sn);
+            if (infil) return infil;
+            // Also check stateNode.state and stateNode.props (React class component pattern)
+            if (sn.state) {
+                const infil2 = extractInfiltration(sn.state);
+                if (infil2) return infil2;
+            }
+            if (sn.props) {
+                const infil3 = extractInfiltration(sn.props);
+                if (infil3) return infil3;
+            }
+        }
+    } catch {
+        /* ignore */
+    }
+
+    // 3. Check memoizedState (hooks state chain for function components)
+    try {
+        let hookState = fiber.memoizedState;
+        let hookCount = 0;
+        while (hookState && hookCount < 20) {
+            // Check lastRenderedState in the hook's update queue
+            if (hookState.queue && hookState.queue.lastRenderedState) {
+                const infil = extractInfiltration(
+                    hookState.queue.lastRenderedState,
+                );
+                if (infil) return infil;
+            }
+            // Check the memoized value directly
+            if (
+                hookState.memoizedState &&
+                typeof hookState.memoizedState === "object"
+            ) {
+                const infil = extractInfiltration(hookState.memoizedState);
+                if (infil) return infil;
+            }
+            hookState = hookState.next;
+            hookCount++;
+        }
+    } catch {
+        /* ignore */
+    }
+
+    return null;
+}
+
+/**
+ * Given an object, determine if it IS or CONTAINS the Infiltration instance.
+ * The Infiltration class has distinctive properties: stage, level, maxLevel,
+ * onSuccess, onFailure, results, location, startingSecurityLevel, gameIds.
+ */
+function extractInfiltration(obj) {
+    if (!obj || typeof obj !== "object") return null;
+
+    // Direct match: is this the Infiltration instance itself?
+    if (isInfiltrationInstance(obj)) return obj;
+
+    // Check common prop/key names where the instance might be nested
+    // InfiltrationRoot passes it as: <StageComponent state={infil} stage={infil.stage} />
+    // So props.state should contain the Infiltration instance.
+    for (const key of ["state", "infiltration", "props", "children"]) {
+        try {
+            const val = obj[key];
+            if (val && typeof val === "object" && isInfiltrationInstance(val)) {
+                return val;
+            }
+        } catch {
+            /* ignore getter errors */
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Duck-type check for the Infiltration class instance.
+ * Matches the signature of the Infiltration class from Infiltration.ts.
+ */
+function isInfiltrationInstance(obj) {
+    return (
+        obj &&
+        typeof obj === "object" &&
+        typeof obj.onSuccess === "function" &&
+        typeof obj.onFailure === "function" &&
+        typeof obj.level === "number" &&
+        typeof obj.maxLevel === "number" &&
+        obj.stage !== undefined &&
+        typeof obj.results === "string"
+    );
+}
+
+// =============================================================================
+//  Primary Strategy: Direct onSuccess() Call
+// =============================================================================
+
+/**
+ * Instantly win the current mini-game by calling onSuccess() on the
+ * Infiltration model. Returns true if successful.
+ */
+function winGame(infiltration) {
+    try {
+        if (!infiltration || !infiltration.stage) return false;
+
+        // Don't call onSuccess during intro, countdown, or victory stages
+        const stageName = infiltration.stage.constructor?.name || "";
+        if (
+            stageName === "IntroModel" ||
+            stageName === "CountdownModel" ||
+            stageName === "VictoryModel"
+        ) {
+            return false;
+        }
+
+        // Direct win — this is the core exploit
+        infiltration.onSuccess();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// =============================================================================
+//  Fallback Solvers — Model-Aware
+// =============================================================================
+
+/**
+ * Solve the current minigame by reading model state and dispatching
+ * the correct keystrokes. Used when direct onSuccess() fails.
+ *
+ * Each solver reads the stage's model properties directly and sends
+ * the appropriate key press(es) to advance the game state.
+ */
+
+const fallbackSolvers = {
+    /**
+     * BackwardModel: Type the answer string character by character.
+     * Model has: answer (string, UPPERCASE), guess (string, typed so far).
+     * The answer is displayed backward in the UI but stored forward in the model.
+     */
+    BackwardModel(stage) {
+        const nextCharIndex = stage.guess.length;
+        if (nextCharIndex < stage.answer.length) {
+            pressKey(stage.answer[nextCharIndex]);
+        }
+    },
+
+    /**
+     * BracketModel: Close brackets in reverse order.
+     * Model has: left (string of opening brackets), right (string of closing typed so far).
+     * Must match: [ → ], < → >, ( → ), { → }
+     */
+    BracketModel(stage) {
+        const closingMap = { "[": "]", "<": ">", "(": ")", "{": "}" };
+        const nextIndex = stage.right.length;
+        // Close brackets from right to left of the opening sequence
+        const openBracket = stage.left[stage.left.length - 1 - nextIndex];
+        if (openBracket && closingMap[openBracket]) {
+            pressKey(closingMap[openBracket]);
+        }
+    },
+
+    /**
+     * BribeModel: Navigate to the positive word and select it.
+     * Model has: choices (string[]), index (current selection), correctIndex.
+     * Navigate with arrows, space to select.
+     */
+    BribeModel(stage) {
+        // Find the correct choice (positive word)
+        if (stage.index === stage.correctIndex) {
+            pressKey(" "); // Space to select
+        } else if (stage.index < stage.correctIndex) {
+            pressKey("ArrowUp"); // Navigate up (increases index)
+        } else {
+            pressKey("ArrowDown"); // Navigate down (decreases index)
+        }
+    },
+
+    /**
+     * CheatCodeModel: Press the matching arrow key for each code symbol.
+     * Model has: code (Arrow[]), index (current position in sequence).
+     * Arrow symbols: ↑ ↓ ← →
+     */
+    CheatCodeModel(stage) {
+        const arrowToKey = {
+            "↑": "ArrowUp",
+            "↓": "ArrowDown",
+            "←": "ArrowLeft",
+            "→": "ArrowRight",
+        };
+        if (stage.index < stage.code.length) {
+            const arrow = stage.code[stage.index];
+            const key = arrowToKey[arrow];
+            if (key) pressKey(key);
+        }
+    },
+
+    /**
+     * Cyberpunk2077Model: Navigate grid and select matching cells.
+     * Model has: grid (string[][]), answers (string[]), currentAnswerIndex, x, y.
+     */
+    Cyberpunk2077Model(stage) {
+        const targetSymbol = stage.answers[stage.currentAnswerIndex];
+        if (!targetSymbol) return;
+
+        // Find the target cell in the grid
+        let targetX = -1;
+        let targetY = -1;
+        for (let y = 0; y < stage.grid.length; y++) {
+            for (let x = 0; x < stage.grid[y].length; x++) {
+                if (stage.grid[y][x] === targetSymbol) {
+                    targetX = x;
+                    targetY = y;
+                    break;
+                }
+            }
+            if (targetX >= 0) break;
+        }
+
+        if (targetX < 0) return;
+
+        // Navigate to the target
+        if (stage.y < targetY) {
+            pressKey("ArrowDown");
+        } else if (stage.y > targetY) {
+            pressKey("ArrowUp");
+        } else if (stage.x < targetX) {
+            pressKey("ArrowRight");
+        } else if (stage.x > targetX) {
+            pressKey("ArrowLeft");
+        } else {
+            pressKey(" "); // Space to select
+        }
+    },
+
+    /**
+     * MinesweeperModel: During memory phase, observe. After, navigate to mines and mark them.
+     * Model has: minefield (boolean[][]), answer (boolean[][]), memoryPhase (bool), x, y.
+     */
+    MinesweeperModel(stage) {
+        // During memory phase, do nothing — just observe
+        if (stage.memoryPhase) return;
+
+        // Find the next mine that hasn't been marked yet
+        let targetX = -1;
+        let targetY = -1;
+        for (let y = 0; y < stage.minefield.length; y++) {
+            for (let x = 0; x < stage.minefield[y].length; x++) {
+                if (stage.minefield[y][x] && !stage.answer[y][x]) {
+                    targetX = x;
+                    targetY = y;
+                    break;
+                }
+            }
+            if (targetX >= 0) break;
+        }
+
+        if (targetX < 0) return; // All mines marked (shouldn't happen — game should have ended)
+
+        // Navigate to the mine
+        if (stage.y < targetY) {
+            pressKey("ArrowDown");
+        } else if (stage.y > targetY) {
+            pressKey("ArrowUp");
+        } else if (stage.x < targetX) {
+            pressKey("ArrowRight");
+        } else if (stage.x > targetX) {
+            pressKey("ArrowLeft");
+        } else {
+            pressKey(" "); // Space to mark
+        }
+    },
+
+    /**
+     * SlashModel: Press space when the guard is distracted (phase === 1).
+     * Model has: phase (0=guarding, 1=distracted, 2=alerted).
+     */
+    SlashModel(stage) {
+        if (stage.phase === 1) {
+            pressKey(" ");
+        }
+    },
+
+    /**
+     * WireCuttingModel: Press number keys for the correct wires.
+     * Model has: wires (Wire[]), questions (Question[]), wiresToCut (Set<number>),
+     *            cutWires (boolean[]).
+     * Wire indices in wiresToCut are 0-based; press keys are 1-based (1-9).
+     */
+    WireCuttingModel(stage) {
+        // Cut all wires that should be cut and haven't been yet
+        for (const wireIndex of stage.wiresToCut) {
+            if (!stage.cutWires[wireIndex]) {
+                pressKey(String(wireIndex + 1));
+                return; // One at a time to avoid race conditions
+            }
+        }
+    },
+};
+
+/**
+ * Attempt to solve the current minigame using the fallback solver.
+ * Returns true if a solver was found and executed.
+ */
+function solveGame(infiltration) {
+    try {
+        if (!infiltration || !infiltration.stage) return false;
+
+        const stageName = infiltration.stage.constructor?.name || "";
+        const solver = fallbackSolvers[stageName];
+
+        if (solver) {
+            solver(infiltration.stage);
+            return true;
+        }
+
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+// =============================================================================
+//  Keyboard Input
+// =============================================================================
+
+/**
+ * Dispatch a synthetic keyboard event on the document.
+ * The wrapEventListeners() shim ensures isTrusted appears true to the game's
+ * anti-automation check in InfiltrationRoot.tsx.
+ */
+function pressKey(keyOrCode) {
+    let key = "";
+    let keyCode = 0;
+
+    if (typeof keyOrCode === "string") {
+        key = keyOrCode;
+        // For single characters, use the lowercase charcode
+        if (key.length === 1) {
+            keyCode = key.toLowerCase().charCodeAt(0);
+        }
+    } else if (typeof keyOrCode === "number") {
+        keyCode = keyOrCode;
+        key = String.fromCharCode(keyCode);
+    }
+
+    if (!key) return;
+
+    doc.dispatchEvent(
+        new KeyboardEvent("keydown", {
+            key,
+            keyCode,
+            code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
+            bubbles: true,
+        }),
+    );
 }
 
 // =============================================================================
 //  DOM Helper Functions
 // =============================================================================
-
-/**
- * Query DOM elements relative to the game container.
- */
-function getEl(parent, selector) {
-    let prefix = ":scope";
-
-    if ("string" === typeof parent) {
-        selector = parent;
-        parent = doc;
-        prefix = ".MuiBox-root>.MuiBox-root>.MuiBox-root";
-        if (!doc.querySelectorAll(prefix).length) {
-            prefix = ".MuiBox-root>.MuiBox-root>.MuiGrid-root";
-        }
-        if (!doc.querySelectorAll(prefix).length) {
-            prefix = ".MuiContainer-root>.MuiPaper-root";
-        }
-        if (!doc.querySelectorAll(prefix).length) {
-            return [];
-        }
-    }
-
-    const parts = selector.split(",").map((item) => `${prefix} ${item}`);
-    return parent.querySelectorAll(parts.join(","));
-}
-
-/**
- * Extract text content from a list of elements.
- */
-function getLines(elements) {
-    const lines = [];
-    for (let i = 0; i < elements.length; i++) {
-        lines.push(elements[i].textContent);
-    }
-    return lines;
-}
 
 /**
  * Find the first button matching text content.
@@ -475,170 +697,83 @@ function clickButton(btn) {
     }
 }
 
-/**
- * Detect grid dimensions from total cell count.
- */
-function detectGridSize(count) {
-    const sizes = {
-        9: [3, 3],
-        12: [3, 4],
-        16: [4, 4],
-        20: [4, 5],
-        25: [5, 5],
-        30: [5, 6],
-        36: [6, 6],
-    };
-    return sizes[count] || null;
-}
-
-// =============================================================================
-//  React Fiber Exploit (Primary Strategy)
-// =============================================================================
-
-/**
- * Instantly win the current mini-game by calling onSuccess via React Fiber.
- * Returns true if successful, false if the exploit fails.
- */
-function winGame() {
-    try {
-        const screen = doc.querySelectorAll(".MuiContainer-root")[0];
-        if (!screen) return false;
-        const fiberKey = Object.keys(screen).find((k) =>
-            k.startsWith("__reactFiber$"),
-        );
-        if (!fiberKey) return false;
-        const fiber = screen[fiberKey];
-        for (const child of fiber.memoizedProps.children) {
-            if (child && child.props && child.props.onSuccess) {
-                child.props.onSuccess();
-                return true;
-            }
-        }
-        return false;
-    } catch {
-        return false;
-    }
-}
-
-// =============================================================================
-//  Keyboard Input
-// =============================================================================
-
-/**
- * Dispatch a synthetic keyboard event on the document.
- */
-function pressKey(keyOrCode) {
-    let keyCode = 0;
-    let key = "";
-
-    if ("string" === typeof keyOrCode && keyOrCode.length > 0) {
-        key = keyOrCode.toLowerCase().slice(0, 1);
-        keyCode = key.charCodeAt(0);
-    } else if ("number" === typeof keyOrCode) {
-        keyCode = keyOrCode;
-        key = String.fromCharCode(keyCode);
-    }
-
-    if (!keyCode || key.length !== 1) return;
-
-    doc.dispatchEvent(new KeyboardEvent("keydown", { key, keyCode }));
-}
-
 // =============================================================================
 //  Main Loop
 // =============================================================================
+
+/** Tracks whether we've detected an active infiltration this session */
+let isInfiltrating = false;
+/** Tracks the last known stage name to detect transitions */
+let lastStageName = "";
 
 /**
  * Called every 50ms. Detects infiltration state and acts accordingly.
  */
 function infLoop() {
-    if (!state.started) {
-        waitForStart();
-    } else {
-        playGame();
-    }
-}
+    const infiltration = getInfiltrationState();
 
-/**
- * Wait for the user to reach the infiltration start screen, then click Start.
- */
-function waitForStart() {
-    if (state.started) return;
-
-    const h4 = getEl("h4");
-    if (!h4.length) return;
-
-    const title = h4[0].textContent;
-    if (title.indexOf("Infiltrating") !== 0) return;
-
-    const btnStart = findButton("Start");
-    if (!btnStart) return;
-
-    state.company = title.substr(13);
-    state.lastCompany = title.substr(13);
-    state.started = true;
-
-    const datetime = new Date().toISOString();
-    console.log(datetime, "Start automatic infiltration of", state.company);
-    btnStart.click();
-}
-
-/**
- * Identify the current mini-game and solve it.
- */
-function playGame() {
-    const screens = doc.querySelectorAll(".MuiContainer-root");
-
-    if (!screens.length) {
-        endInfiltration();
-        selectCompany();
-        return;
-    }
-
-    if (screens[0].children.length < 3) {
-        // Check for successful infiltration — accept reward if auto mode
-        if (!postTimeout) {
-            const successText = screens[0].children[1]?.children[0]?.innerText;
-            if (successText === "Infiltration successful!") {
-                acceptReward();
+    if (!infiltration) {
+        // Not infiltrating — check if we just finished
+        if (isInfiltrating) {
+            isInfiltrating = false;
+            lastStageName = "";
+            if (autoMode) {
+                selectCompany();
             }
         }
         return;
     }
 
-    const screen = screens[0].children[2];
-    const h4 = screen.children;
+    const stage = infiltration.stage;
+    if (!stage) return;
 
-    if (!h4.length) {
-        endInfiltration();
-        return;
+    const stageName = stage.constructor?.name || "";
+
+    // Track stage transitions for logging
+    if (stageName !== lastStageName) {
+        lastStageName = stageName;
     }
 
-    const title = h4[0].textContent.trim().toLowerCase().split(/[!.(]/)[0];
-
-    if ("infiltration successful" === title) {
-        endInfiltration();
-        return;
-    }
-
-    if ("get ready" === title) {
-        if (!infiltrationStart) infiltrationStart = Date.now();
-        return;
-    }
-
-    // Primary strategy: React Fiber exploit
-    if (winGame()) return;
-
-    // Fallback: use manual game solver
-    const game = infiltrationGames.find((g) => g.name === title);
-    if (game) {
-        if (state.game.current !== title) {
-            state.game.current = title;
-            game.init(screen);
+    // Handle Intro screen: click Start
+    if (stageName === "IntroModel") {
+        if (!isInfiltrating) {
+            isInfiltrating = true;
+            infiltrationStart = Date.now();
+            const datetime = new Date().toISOString();
+            console.log(
+                datetime,
+                "Start automatic infiltration of",
+                infiltration.location?.name || "unknown",
+            );
         }
-        game.play(screen);
-    } else {
-        console.error("Unknown infiltration game:", title);
+        // Click the Start button via the model
+        try {
+            infiltration.startInfiltration();
+        } catch {
+            // If direct call fails, try clicking the DOM button
+            const btnStart = findButton("Start");
+            if (btnStart) clickButton(btnStart);
+        }
+        return;
+    }
+
+    // Handle Countdown: just wait
+    if (stageName === "CountdownModel") {
+        if (!infiltrationStart) infiltrationStart = Date.now();
+        isInfiltrating = true;
+        return;
+    }
+
+    // Handle Victory: accept reward
+    if (stageName === "VictoryModel") {
+        acceptReward();
+        return;
+    }
+
+    // Active minigame — try primary exploit first, then fallback solver
+    isInfiltrating = true;
+    if (!winGame(infiltration)) {
+        solveGame(infiltration);
     }
 }
 
@@ -647,12 +782,13 @@ function playGame() {
 // =============================================================================
 
 /**
- * Reset infiltration state.
+ * Cancel any pending timeout.
  */
-function endInfiltration() {
-    state.company = "";
-    state.started = false;
-    state.game = {};
+function cancelMyTimeout() {
+    if (postTimeout) {
+        clearTimeout(postTimeout);
+        postTimeout = null;
+    }
 }
 
 /**
@@ -669,7 +805,7 @@ function acceptReward() {
         return;
     }
 
-    // Accept money
+    // Accept money — click "Sell for" button
     postTimeout = setTimeout(() => {
         cancelMyTimeout();
         const btn = findButton("Sell for");
@@ -744,23 +880,30 @@ function acceptReputation() {
 
 /**
  * Navigate back to the company and start a new infiltration (auto mode only).
+ * Uses Singularity API if available, with DOM fallback.
  */
 function selectCompany() {
     if (!autoMode) return;
     cancelMyTimeout();
 
+    // Determine which company to return to
+    const company = targetCompany;
+    if (!company) return;
+
     postTimeout = setTimeout(() => {
         postTimeout = null;
 
-        const selector = 'span[aria-label="' + state.lastCompany + '"]';
+        if (infiltrationStart) {
+            console.info(
+                `FAILED INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec`,
+            );
+            infiltrationStart = 0;
+        }
+
+        // DOM fallback: click on the company in the city map
+        const selector = 'span[aria-label="' + company + '"]';
         const companyEle = doc.querySelector(selector);
         if (companyEle) {
-            if (infiltrationStart) {
-                console.info(
-                    `FAILED INFILTRATION - ${((Date.now() - infiltrationStart) / 1000).toFixed(1)} sec`,
-                );
-                infiltrationStart = 0;
-            }
             companyEle.click();
 
             postTimeout = setTimeout(() => {
@@ -772,16 +915,6 @@ function selectCompany() {
     }, 1000);
 }
 
-/**
- * Cancel any pending timeout.
- */
-function cancelMyTimeout() {
-    if (postTimeout) {
-        clearTimeout(postTimeout);
-        postTimeout = null;
-    }
-}
-
 // =============================================================================
 //  Event Listener Wrapping (Trusted Keyboard Events)
 // =============================================================================
@@ -789,6 +922,10 @@ function cancelMyTimeout() {
 /**
  * Wrap document event listeners so that synthetic keyboard events appear trusted.
  * This is required for the fallback mini-game solvers that use pressKey().
+ *
+ * The game's InfiltrationRoot.tsx checks event.isTrusted and calls
+ * onFailure({ automated: true }) which deals Player.hp.current damage (instant kill).
+ * This wrapper intercepts keydown listeners and patches isTrusted to true.
  */
 function wrapEventListeners() {
     if (!doc._addEventListener) {

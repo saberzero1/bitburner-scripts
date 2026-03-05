@@ -301,7 +301,8 @@ export async function main(ns) {
                         false,
                         false,
                         true,
-                    ); //Daedalus after Red Pill
+                    );
+                //Daedalus after Red Pill
                 else await farmFaction(ns, "8/8", "Daedalus", false, true);
             }
         case 2:
@@ -2570,7 +2571,8 @@ export async function main(ns) {
                         false,
                         false,
                         true,
-                    ); //Daedalus after Red Pill
+                    );
+                //Daedalus after Red Pill
                 else await farmFaction(ns, "8/8", "Daedalus", false, true);
             }
         case 13:
@@ -2856,7 +2858,8 @@ export async function main(ns) {
                         false,
                         false,
                         true,
-                    ); //Daedalus after Red Pill
+                    );
+                //Daedalus after Red Pill
                 else
                     await farmFaction(
                         ns,
