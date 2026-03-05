@@ -742,7 +742,7 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
         if (!divisible) continue;
         if (await isAlreadyCracked(ns, hostname)) return null;
         let power = primeValue;
-        while (true) {
+        for (let _guard = 0; _guard < 100; _guard++) {
             const nextPower = power * primeValue;
             const divisiblePower = await isDivisibleBy(ns, hostname, nextPower);
             if (divisiblePower === null) return null;

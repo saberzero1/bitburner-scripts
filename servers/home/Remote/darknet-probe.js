@@ -107,6 +107,26 @@ export async function main(ns) {
             logError(ns, "Probe loop error", err);
         }
 
+
+        // Prune ephemeral state to prevent unbounded Map growth
+        // failedServers: remove entries whose backoff has expired (they'll be retried naturally)
+        const now = Date.now();
+        for (const [host, info] of failedServers) {
+            if (now >= info.nextRetry) {
+                failedServers.delete(host);
+            }
+        }
+        // completedServers: remove entries past their recheck time (they'll be re-evaluated)
+        let completedPruned = false;
+        for (const [host, info] of completedServers) {
+            if (now >= info.recheckAt) {
+                completedServers.delete(host);
+                completedPruned = true;
+            }
+        }
+        if (completedPruned) {
+            saveCompletedServers(ns, COMPLETED_FILE, completedServers);
+        }
         await ns.sleep(LOOP_INTERVAL);
     }
 }
@@ -289,7 +309,7 @@ async function solveLabyrinth(ns, hostname) {
     // maze walk within one process, using labreport for directions and
     // authenticate for movement.
     const host = ns.getHostname();
-    const id = commandCounter++ % 100000;
+    const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const resultFile = `/Temp/lab-result-${id}.txt`;
     const scriptFile = `/Temp/lab-solver-${id}.js`;
 
@@ -2592,6 +2612,9 @@ const commandArgs = {
 };
 
 let commandCounter = 0;
+// Reduced wrap limit: fewer temp files on disk at any time (was 100000 -> now 1000)
+// Files are overwritten on reuse via ns.write(..., 'w'), so smaller wrap is safe
+const COMMAND_COUNTER_WRAP = 1000;
 
 function buildDnetCommand(name, args = "") {
     return `${dnetPrefix}${name}(${args})`;
@@ -2615,7 +2638,7 @@ async function runLabRadar(ns) {
     return null;
 }
 async function runDnetCommand(ns, command, args = []) {
-    const id = commandCounter++ % 100000;
+    const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const host = ns.getHostname();
     const resultFile = `/Temp/dnet-task-${id}.txt`;
     const scriptFile = `/Temp/dnet-task-${id}.js`;
@@ -2670,7 +2693,7 @@ async function nsScp(ns, source, destination) {
 // Darknet sessions are per-PID, so the temp script needs its own session.
 // RAM cost: 1.6 (base) + 0.60 (scp) + 0.05 (connectToSession) = 2.25 GB
 async function nsScpWithSession(ns, source, destination, password) {
-    const id = commandCounter++ % 100000;
+    const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const host = ns.getHostname();
     const resultFile = `/Temp/dnet-task-${id}.txt`;
     const scriptFile = `/Temp/dnet-task-${id}.js`;

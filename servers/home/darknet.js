@@ -269,6 +269,9 @@ class DarknetState {
         }
 
         this.lastRefresh = Date.now();
+
+        // Periodic pruning of ephemeral state to prevent unbounded growth
+        this.pruneEphemeralState();
     }
 
     addPassword(ns, hostname, password) {
@@ -285,6 +288,53 @@ class DarknetState {
 
     getPassword(hostname) {
         return this.knownPasswords.get(hostname);
+    }
+
+    /**
+     * Prune ephemeral state Maps to prevent unbounded memory growth.
+     * Knowledge state (discoveredServers, cluePasswords, scannedClueFiles,
+     * knownPasswords) is preserved. Only operational/transient state is pruned.
+     */
+    pruneEphemeralState() {
+        const now = Date.now();
+
+        // lastAuthLog: remove entries older than 5 minutes (only used for log throttling)
+        for (const [hostname, timestamp] of this.lastAuthLog) {
+            if (now - timestamp > 300000) {
+                this.lastAuthLog.delete(hostname);
+            }
+        }
+
+        // pendingMigrations: remove entries with lastAttempt older than 10 minutes
+        for (const [hostname, migration] of this.pendingMigrations) {
+            if (migration.lastAttempt && now - migration.lastAttempt > 600000) {
+                this.pendingMigrations.delete(hostname);
+            }
+        }
+
+        // serverDepths: cap at 500 entries (keep most recently seen)
+        if (this.serverDepths.size > 500) {
+            const excess = this.serverDepths.size - 500;
+            let removed = 0;
+            for (const [hostname] of this.serverDepths) {
+                if (removed >= excess) break;
+                // Only prune depths for servers not currently discovered
+                if (!this.discoveredServers.has(hostname)) {
+                    this.serverDepths.delete(hostname);
+                    removed++;
+                }
+            }
+        }
+
+        // authenticatedServers: prune entries for servers no longer in discoveredServers
+        // (server went offline/deleted from network mutations)
+        if (this.authenticatedServers.size > 500) {
+            for (const hostname of this.authenticatedServers) {
+                if (!this.discoveredServers.has(hostname) && !this.knownPasswords.has(hostname)) {
+                    this.authenticatedServers.delete(hostname);
+                }
+            }
+        }
     }
 }
 
@@ -1102,7 +1152,11 @@ async function manageStasisLinks(ns, state, options) {
     const currentLinks = state.stasisServers.size;
 
     // Build scored candidate list for ALL authenticated servers (including current stasis)
+    // Cache scores to avoid repeated ns.getServerMaxRam() calls per tick
+    const scoreCache = new Map();
     const scoreServer = (hostname) => {
+        const cached = scoreCache.get(hostname);
+        if (cached !== undefined) return cached;
         let score = 0;
         const depth = state.serverDepths.get(hostname);
 
@@ -1133,6 +1187,7 @@ async function manageStasisLinks(ns, state, options) {
             score += Math.min(Math.floor(serverRam / 2), 400);
         } catch {}
 
+        scoreCache.set(hostname, score);
         return score;
     };
 
@@ -1326,8 +1381,12 @@ async function chargeMigrations(ns, state, options) {
     const MIGRATION_HELPER_SCRIPT = "/Temp/darknet-migration-helper.js";
     const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { ns.dnet.induceServerMigration(ns.args[0]); ns.rm('${MIGRATION_HELPER_SCRIPT}'); }`;
 
+    // Performance: cap servers charged per tick to avoid spawning too many helpers
+    const MAX_MIGRATION_SERVERS_PER_TICK = 3;
+    let migrationsThisTick = 0;
     // Find servers near air gaps that could benefit from migration
     for (const [hostname, info] of state.discoveredServers) {
+        if (migrationsThisTick >= MAX_MIGRATION_SERVERS_PER_TICK) break;
         if (!isServerAuthenticated(state, hostname)) continue;
         if (!info.isOnline) continue;
 
@@ -1427,6 +1486,7 @@ async function chargeMigrations(ns, state, options) {
                     `Migration charge failed for ${hostname}: ${getErrorInfo(err)}`,
                 );
         }
+        migrationsThisTick++;
         // Clean up migration helper temp files
         try { ns.rm(MIGRATION_HELPER_SCRIPT); } catch {}
         try { ns.rm(MIGRATION_HELPER_SCRIPT, hostname); } catch {}
@@ -1447,7 +1507,22 @@ async function scanAllClueFiles(ns, state, options) {
     const verbose = options.verbose;
     let newCluesFound = 0;
 
+    // Performance: cap servers scanned per tick to avoid O(n²) blowup
+    const MAX_SERVERS_PER_TICK = 20;
+    const MAX_CLUES_PER_TICK = 50;
+    let serversScanned = 0;
+    let cluesProcessed = 0;
+
+    // Pre-collect unauthenticated servers once (avoids inner O(n) loop per clue)
+    const unauthServers = [];
+    for (const [nearHost] of state.discoveredServers) {
+        if (isServerAuthenticated(state, nearHost)) continue;
+        if (state.knownPasswords.has(nearHost) || state.cluePasswords.has(nearHost)) continue;
+        unauthServers.push(nearHost);
+    }
+
     for (const [hostname, info] of state.discoveredServers) {
+        if (serversScanned >= MAX_SERVERS_PER_TICK || cluesProcessed >= MAX_CLUES_PER_TICK) break;
         if (!isServerAuthenticated(state, hostname)) continue;
 
         try {
@@ -1455,6 +1530,7 @@ async function scanAllClueFiles(ns, state, options) {
             const clueFiles = files.filter((f) => f.endsWith(CLUE_FILE_SUFFIX));
 
             for (const clueFile of clueFiles) {
+                if (cluesProcessed >= MAX_CLUES_PER_TICK) break;
                 const cacheKey = `${hostname}:${clueFile}`;
                 if (state.scannedClueFiles.has(cacheKey)) continue;
 
@@ -1465,6 +1541,7 @@ async function scanAllClueFiles(ns, state, options) {
                 }
 
                 const clues = parseClueFile(content);
+                cluesProcessed++;
 
                 // Process password clues
                 for (const clue of clues.passwords) {
@@ -1483,17 +1560,9 @@ async function scanAllClueFiles(ns, state, options) {
                                 );
                         }
                     } else if (clue.password && !clue.hostname) {
-                        // Password without hostname — try it on nearby unknown servers
-                        for (const [
-                            nearHost,
-                            nearInfo,
-                        ] of state.discoveredServers) {
-                            if (isServerAuthenticated(state, nearHost)) continue;
-                            if (
-                                state.knownPasswords.has(nearHost) ||
-                                state.cluePasswords.has(nearHost)
-                            )
-                                continue;
+                        // Password without hostname — assign to unauthenticated servers
+                        // (pre-collected above, O(1) lookup per server)
+                        for (const nearHost of unauthServers) {
                             state.cluePasswords.set(nearHost, clue.password);
                         }
                     }
@@ -1504,6 +1573,7 @@ async function scanAllClueFiles(ns, state, options) {
         } catch {
             // Server offline or inaccessible
         }
+        serversScanned++;
     }
 
     if (newCluesFound > 0) {
