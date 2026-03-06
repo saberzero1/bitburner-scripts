@@ -1267,6 +1267,7 @@ async function trainCombatStats(ns, reqStats) {
         const isGym =
             currentWork.classType &&
             currentWork.classType.toLowerCase().includes("gym");
+        if (await isValidInterruption(ns, currentWork)) return false;
         if (!isGym || currentWork.focus !== focusArg) {
             await getNsDataThroughFile(
                 ns,
@@ -1481,6 +1482,7 @@ async function study(ns, focus, course, university = null) {
             return;
         }
     }
+    if (await isValidInterruption(ns)) return false;
     if (
         await getNsDataThroughFile(
             ns,
@@ -1770,8 +1772,21 @@ let lastInterruptionNotice = "";
 async function isValidInterruption(ns, currentWork = null) {
     let interruptionNotice = "";
     currentWork ??= await getCurrentWorkInfo(ns); // Retrieve current work (unless it was passed in)
+    // Never interrupt infiltration - infiltrator.js writes its PID to port 30 while active
+    // This check MUST come first (before grafting/bladeburner) so it is never skipped by the else-if chain.
+    if (ns.peek(30) !== "NULL PORT DATA") {
+        // Verify the PID is still running (guards against stale port data if infiltrator crashed)
+        const infiltratorPid = ns.peek(30);
+        if (ns.isRunning(infiltratorPid)) {
+            interruptionNotice =
+                "Infiltrator.js is running. Pausing focus-work to avoid disrupting infiltration...";
+            if (currentWork.type) await stop(ns);
+        } else {
+            ns.clearPort(30); // Stale PID - infiltrator.js is no longer running, clean up
+        }
+    }
     // Never interrupt grafting
-    if (currentWork.type == "GRAFTING") {
+    else if (currentWork.type == "GRAFTING") {
         interruptionNotice =
             "Grafting in progress. Pausing all activity to avoid interrupting...";
         wasGrafting = true;

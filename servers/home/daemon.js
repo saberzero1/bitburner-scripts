@@ -551,9 +551,9 @@ export async function main(ns) {
                 minRamReq: 25,
             },
             {
-                name: "infiltration.js",
+                name: "infiltrator.js",
                 shouldRun: () => reqRam(64), // DOM-based script with minimal RAM footprint; no SF requirements
-                args: ["--auto"], // Auto-replay infiltrations for passive rep/money income
+                // args: ["--auto"], // Auto-replay infiltrations for passive rep/money income
                 shouldTail: false,
             },
         ];
@@ -743,6 +743,22 @@ export async function main(ns) {
                 ns,
                 `Defaulting --initial-max-targets to ${maxTargets} since total ram available is ${formatRam(networkStats.totalMaxRam)}`,
             );
+        }
+
+        // Launch the dashboard if it's not already running (e.g. after augmentation reset)
+        // Skip if casino.js is currently running — its DOM manipulation conflicts with dashboard's React rendering
+        if (
+            !ns
+                .ps("home")
+                .some(
+                    (p) =>
+                        p.filename === "dashboard.js" ||
+                        p.filename === "casino.js",
+                )
+        ) {
+            const dashPid = ns.run("dashboard.js");
+            if (dashPid)
+                log(ns, `INFO: Launched dashboard.js (pid: ${dashPid})`);
         }
 
         // Start the main targetting loop

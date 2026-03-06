@@ -794,6 +794,15 @@ export async function main(ns) {
             ["home"],
         );
 
+        // Launch the dashboard if it's not already running (e.g. after augmentation reset)
+        // Skip if casino hasn't run yet — dashboard's DOM/React usage would interfere with casino.js
+        if (
+            !findScript("dashboard.js") &&
+            homeRam >= 16 &&
+            (ranCasino || options["disable-casino"])
+        )
+            launchScriptHelper(ns, "dashboard.js", [], false);
+
         // Launch stock-master in a way that emphasizes it as our main source of income early-on
         if (
             !findScript("stockmaster.js") &&
@@ -1019,8 +1028,7 @@ export async function main(ns) {
             "--disable-script",
             getFilePath("work-for-factions.js"),
         );
-        // Prevent daemon from starting "infiltration.js" since we now manage that script
-        daemonArgs.push("--disable-script", getFilePath("infiltration.js"));
+        daemonArgs.push("--disable-script", getFilePath("infiltrator.js"));
         // In BN8, always run in a mode that prioritizes stock market manipulation
         if (resetInfo.currentNode == 8)
             daemonArgs.push("--stock-manipulation-focus");
@@ -1091,7 +1099,10 @@ export async function main(ns) {
             let daemonPid = launchScriptHelper(ns, "daemon.js", daemonArgs);
             daemonStartTime = Date.now();
             // Open the tail window if it's the start of a new BN. Especially useful to new players.
-            if (getTimeInBitnode() < 1000 * 60 * 5 || homeRam == 8)
+            if (
+                !options["no-tail-windows"] &&
+                (getTimeInBitnode() < 1000 * 60 * 5 || homeRam == 8)
+            )
                 // First 5 minutes, or BN1.1 where we have 8GB ram
                 tail(ns, daemonPid);
         }
@@ -1185,16 +1196,19 @@ export async function main(ns) {
             );
         }
 
-        // Launch infiltration.js if not explicitly disabled and not already running.
         // Infiltration earns money and faction rep passively via automated mini-game solving.
         // Note: Unlike work-for-factions, infiltration has no SF requirements (it's DOM-based).
         if (
             !options["disable-infiltration"] &&
-            !findScript("infiltration.js") &&
+            !findScript("infiltrator.js") &&
             homeRam >= 32 && // Don't waste RAM on infiltration when we're still low on home RAM
             Date.now() - daemonStartTime > 30000 // Wait for daemon to warm up
         ) {
-            launchScriptHelper(ns, "infiltration.js", ["--auto"]);
+            // launchScriptHelper(ns, "infiltrator.js", ["--auto"]);
+            const infiltratorArgs = options["no-tail-windows"]
+                ? ["--no-tail"]
+                : [];
+            launchScriptHelper(ns, "infiltrator.js", infiltratorArgs);
         }
     }
 
@@ -1341,7 +1355,7 @@ export async function main(ns) {
         // Run casino.js (and expect this script to get killed in the process)
         // Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
         await killScript(ns, "work-for-factions.js");
-        await killScript(ns, "infiltration.js"); // Kill infiltration too — it uses the DOM and would interfere with casino
+        await killScript(ns, "infiltrator.js"); // Kill infiltration too — it uses the DOM and would interfere with casino
         await killScript(ns, "daemon.js"); // We also have to kill daemon which can make us study.
         // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
         if (4 in unlockedSFs)
