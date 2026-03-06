@@ -143,7 +143,22 @@ export async function main(ns) {
             log(ns, `Corp cycle error: ${errMsg}`, false, "warning");
             if (errStack) ns.print(`Stack: ${errStack}`);
         }
-        await ns.sleep(1000);
+        // Sync with corporation game cycle using direct nextUpdate() call
+        // nextUpdate() costs 0 GB RAM, so no need for RAM-dodging file proxy
+        // Using the file proxy for nextUpdate() causes UI freezes because:
+        //   1. The temp script blocks on nextUpdate() for ~2-10s
+        //   2. Meanwhile waitForProcessToComplete_Custom polls in a tight loop
+        //   3. This polling loop starves the game engine of render cycles
+        try {
+            const hasCorp = await readCorpFunc(ns, "hasCorporation()");
+            if (hasCorp) {
+                await ns.corporation.nextUpdate();
+            } else {
+                await ns.sleep(5000);
+            }
+        } catch {
+            await ns.sleep(1000);
+        }
     }
 }
 
@@ -163,6 +178,7 @@ class CorpState {
         this.lastInvestmentCheck = "";
         this.initialized = false;
         this.warehouseTarget = options["warehouse-target"] || 0.7;
+        this.boostBuysPending = false; // Track if boost material purchases are active (need stopping next cycle)
     }
 
     async init(ns) {
@@ -251,7 +267,9 @@ async function initCorporation(ns, state) {
 
 async function runCorpCycle(ns, state) {
     await state.init(ns);
+
     const corpData = await readCorpFunc(ns, "getCorporation()");
+    const corpState = corpData.nextState;
 
     if (
         corpData.divisions.includes("Agriculture") &&
@@ -261,50 +279,75 @@ async function runCorpCycle(ns, state) {
         log(ns, "Tracking Agriculture creation time for progression gates");
     }
 
-    // Periodic status logging
+    // Periodic status logging (lightweight, runs every state)
     const now = Date.now();
     if (now - state.lastStatusLog > 30000) {
         state.lastStatusLog = now;
         await logCorpStatus(ns, corpData, state);
     }
 
-    // CRITICAL: These must run in the correct order
-    // 1. Maintain employees (energy, morale)
-    await maintainEmployees(ns);
-
-    // 2. Ensure selling is set up BEFORE buying anything
-    await ensureSelling(ns);
-
-    // 3. Manage warehouse space (boost materials + inputs)
-    await manageWarehouses(ns, state);
-
-    // 4. Update pricing if Market-TA enabled
-    if (state.options["market-ta"]) {
-        await updatePricing(ns);
-    }
-
-    // 5. Aggressive expansion - expand all divisions to all cities
-    await expandAllDivisions(ns);
-
-    // 6. Run round-specific logic
-    switch (state.round) {
-        case 1:
-            await runRound1(ns, state);
+    // State machine: only run operations relevant to the current corp phase.
+    // The corporation cycles through: START -> PURCHASE -> PRODUCTION -> EXPORT -> SALE
+    // Each nextUpdate() advances to the next phase. By dispatching per-state,
+    // we reduce API calls per tick from 100+ to ~20-30, preventing UI freezes.
+    switch (corpState) {
+        case "SALE":
+            // SALE phase: update sell orders and pricing
+            await ensureSelling(ns);
+            if (state.options["market-ta"]) {
+                await updatePricing(ns);
+            }
             break;
-        case 2:
-            await runRound2(ns, state);
+
+        case "PURCHASE":
+            // PURCHASE phase: manage warehouse materials (boost buys, smart supply)
+            await manageWarehouses(ns, state);
             break;
+
+        case "START":
+            // START phase: employee maintenance, investment checks, round detection
+            await maintainEmployees(ns);
+
+            // Re-detect round each cycle to catch investment changes
+            // Only when round wasn't forced via --round flag
+            if (!state.options.round || state.options.round <= 0) {
+                const detectedRound = await state.detectRound(ns);
+                if (detectedRound > state.round) {
+                    log(ns, `Round advanced: ${state.round} -> ${detectedRound} (detected from shares)`);
+                    state.round = detectedRound;
+                }
+            }
+
+            // Check for investment opportunities
+            if (
+                state.options["auto-invest"] &&
+                state.round < state.options["target-round"]
+            ) {
+                await checkInvestment(ns, state);
+            }
+            break;
+
+        case "EXPORT":
+            // EXPORT phase: expansion and round-specific setup
+            await expandAllDivisions(ns);
+
+            // Run round-specific logic
+            switch (state.round) {
+                case 1:
+                    await runRound1(ns, state);
+                    break;
+                case 2:
+                    await runRound2(ns, state);
+                    break;
+                default:
+                    await runRound3Plus(ns, state);
+                    break;
+            }
+            break;
+
         default:
-            await runRound3Plus(ns, state);
+            // PRODUCTION or unknown state — lightweight yield, no heavy operations
             break;
-    }
-
-    // 6. Check for investment opportunities
-    if (
-        state.options["auto-invest"] &&
-        state.round < state.options["target-round"]
-    ) {
-        await checkInvestment(ns, state);
     }
 }
 
@@ -320,7 +363,7 @@ async function logCorpStatus(ns, corpData, state) {
 
     for (const divName of corpData.divisions) {
         const div = await readCorpFunc(ns, "getDivision(ns.args[0])", divName);
-        const industry = INDUSTRIES[div.type];
+        const industry = INDUSTRIES[div.industry];
 
         // Count cities with warehouses
         let warehouseCities = [];
@@ -476,6 +519,7 @@ async function maintainEmployees(ns) {
     const corpData = await readCorpFunc(ns, "getCorporation()");
 
     for (const divName of corpData.divisions) {
+        await ns.sleep(0); // Yield to game engine between divisions
         const divData = await readCorpFunc(
             ns,
             "getDivision(ns.args[0])",
@@ -606,12 +650,13 @@ async function ensureSelling(ns) {
     const corpData = await readCorpFunc(ns, "getCorporation()");
 
     for (const divName of corpData.divisions) {
+        await ns.sleep(0); // Yield to game engine between divisions
         const divData = await readCorpFunc(
             ns,
             "getDivision(ns.args[0])",
             divName,
         );
-        const industry = INDUSTRIES[divData.type];
+        const industry = INDUSTRIES[divData.industry];
         if (!industry) continue;
 
         for (const city of divData.cities) {
@@ -679,13 +724,30 @@ async function ensureSelling(ns) {
 async function manageWarehouses(ns, state) {
     const corpData = await readCorpFunc(ns, "getCorporation()");
 
+    // If boost buys were issued last cycle, stop them now before doing anything else
+    if (state.boostBuysPending) {
+        for (const divName of corpData.divisions) {
+            const divData = await readCorpFunc(ns, "getDivision(ns.args[0])", divName);
+            for (const city of divData.cities) {
+                try {
+                    if (!(await readCorpFunc(ns, "hasWarehouse(ns.args[0], ns.args[1])", divName, city))) continue;
+                    for (const mat of ["Real Estate", "Hardware", "Robots", "AI Cores"]) {
+                        await execCorpFunc(ns, "buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])", divName, city, mat, 0);
+                    }
+                } catch (e) {}
+            }
+        }
+        state.boostBuysPending = false;
+    }
+
     for (const divName of corpData.divisions) {
+        await ns.sleep(0); // Yield to game engine between divisions
         const divData = await readCorpFunc(
             ns,
             "getDivision(ns.args[0])",
             divName,
         );
-        const industry = INDUSTRIES[divData.type];
+        const industry = INDUSTRIES[divData.industry];
         if (!industry) continue;
 
         for (const city of divData.cities) {
@@ -886,7 +948,7 @@ async function manageWarehouses(ns, state) {
                 }
                 // Calculate space budget
                 const budget = calculateWarehouseSpaceBudget(
-                    divData.type,
+                    divData.industry,
                     warehouse.size,
                 );
                 if (!budget) continue;
@@ -935,7 +997,7 @@ async function manageWarehouses(ns, state) {
                         budget.boostSpace - currentBoostSpace;
                     if (remainingBoostBudget > 100) {
                         const optimal = calculateOptimalBoostMaterials(
-                            divData.type,
+                            divData.industry,
                             remainingBoostBudget * 0.5,
                         );
                         if (optimal) {
@@ -956,6 +1018,7 @@ async function manageWarehouses(ns, state) {
                                     );
                                 }
                             }
+                            state.boostBuysPending = true;
                         }
                     }
                 }
@@ -1021,45 +1084,6 @@ async function manageWarehouses(ns, state) {
         }
     }
 
-    // After buying, wait a bit then stop boost purchases (one-time buy pattern)
-    await ns.sleep(5000);
-
-    for (const divName of corpData.divisions) {
-        const divData = await readCorpFunc(
-            ns,
-            "getDivision(ns.args[0])",
-            divName,
-        );
-        for (const city of divData.cities) {
-            try {
-                if (
-                    !(await readCorpFunc(
-                        ns,
-                        "hasWarehouse(ns.args[0], ns.args[1])",
-                        divName,
-                        city,
-                    ))
-                )
-                    continue;
-                // Stop boost material purchases
-                for (const mat of [
-                    "Real Estate",
-                    "Hardware",
-                    "Robots",
-                    "AI Cores",
-                ]) {
-                    await execCorpFunc(
-                        ns,
-                        "buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])",
-                        divName,
-                        city,
-                        mat,
-                        0,
-                    );
-                }
-            } catch (e) {}
-        }
-    }
 }
 
 // ============================================================================
@@ -1070,12 +1094,13 @@ async function expandAllDivisions(ns) {
     let corpData = await readCorpFunc(ns, "getCorporation()");
 
     for (const divName of corpData.divisions) {
+        await ns.sleep(0); // Yield to game engine between divisions
         const divData = await readCorpFunc(
             ns,
             "getDivision(ns.args[0])",
             divName,
         );
-        const industry = INDUSTRIES[divData.type];
+        const industry = INDUSTRIES[divData.industry];
 
         for (const city of CITIES) {
             // Expand to city if not present
@@ -1246,7 +1271,7 @@ async function updatePricing(ns) {
             "getDivision(ns.args[0])",
             divName,
         );
-        const industry = INDUSTRIES[divData.type];
+        const industry = INDUSTRIES[divData.industry];
         if (!industry) continue;
 
         for (const city of divData.cities) {
@@ -1703,7 +1728,7 @@ async function runRound2(ns, state) {
         await setupWaterDivision(ns, corpData);
     }
 
-    // Create Chemical division
+    // Create Chemical division (if we can afford it)
     if (!corpData.divisions.includes("Chemical")) {
         if (corpData.funds > 70e9) {
             log(ns, "Round 2: Creating Chemical division");
@@ -1715,106 +1740,111 @@ async function runRound2(ns, state) {
             );
             await ns.sleep(500);
         }
-        return;
+        // Don't return - continue to export routes and upgrades below
     }
 
-    const chemDiv = await readCorpFunc(
-        ns,
-        "getDivision(ns.args[0])",
-        "Chemical",
-    );
-
-    // Expand Chemical to all cities
-    for (const city of CITIES) {
-        corpData = await readCorpFunc(ns, "getCorporation()");
-
-        if (!chemDiv.cities.includes(city)) {
-            if (city !== "Sector-12" && corpData.funds > 4e9) {
-                log(ns, `Round 2: Expanding Chemical to ${city}`);
-                await execCorpFunc(
-                    ns,
-                    "expandCity(ns.args[0], ns.args[1])",
-                    "Chemical",
-                    city,
-                );
-                await ns.sleep(200);
-            }
-            continue;
-        }
-
-        const hasWarehouse = await readCorpFunc(
+    // Chemical-specific setup: expand to cities, hire employees
+    if (corpData.divisions.includes("Chemical")) {
+        const chemDiv = await readCorpFunc(
             ns,
-            "hasWarehouse(ns.args[0], ns.args[1])",
+            "getDivision(ns.args[0])",
             "Chemical",
-            city,
         );
-        if (!hasWarehouse) {
-            if (corpData.funds > 5e9) {
-                log(
-                    ns,
-                    `Round 2: Purchasing warehouse for Chemical in ${city}`,
-                );
-                await execCorpFunc(
-                    ns,
-                    "purchaseWarehouse(ns.args[0], ns.args[1])",
-                    "Chemical",
-                    city,
-                );
-                await ns.sleep(200);
-            }
-            continue;
-        }
 
-        const office = await readCorpFunc(
-            ns,
-            "getOffice(ns.args[0], ns.args[1])",
-            "Chemical",
-            city,
-        );
-        const targetEmployees = 9; // Increased from 3
+        // Expand Chemical to all cities
+        for (const city of CITIES) {
+            corpData = await readCorpFunc(ns, "getCorporation()");
 
-        if (office.numEmployees < targetEmployees) {
-            if (corpData.funds > 10e6) {
-                // Lowered threshold
-                if (office.size < targetEmployees) {
-                    const toAdd = Math.min(3, targetEmployees - office.size);
+            if (!chemDiv.cities.includes(city)) {
+                if (city !== "Sector-12" && corpData.funds > 4e9) {
+                    log(ns, `Round 2: Expanding Chemical to ${city}`);
                     await execCorpFunc(
                         ns,
-                        "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
-                        "Chemical",
-                        city,
-                        toAdd,
-                    );
-                }
-                for (
-                    let i = office.numEmployees;
-                    i < Math.min(targetEmployees, office.size);
-                    i++
-                ) {
-                    await execCorpFunc(
-                        ns,
-                        "hireEmployee(ns.args[0], ns.args[1])",
+                        "expandCity(ns.args[0], ns.args[1])",
                         "Chemical",
                         city,
                     );
+                    await ns.sleep(200);
                 }
-                await assignEmployeesToProduction(
-                    ns,
-                    "Chemical",
-                    city,
-                    false,
-                    "quality",
-                );
-                log(ns, `Round 2: Hired employees for Chemical in ${city}`);
+                continue;
+            }
+
+            const hasWarehouse = await readCorpFunc(
+                ns,
+                "hasWarehouse(ns.args[0], ns.args[1])",
+                "Chemical",
+                city,
+            );
+            if (!hasWarehouse) {
+                if (corpData.funds > 5e9) {
+                    log(
+                        ns,
+                        `Round 2: Purchasing warehouse for Chemical in ${city}`,
+                    );
+                    await execCorpFunc(
+                        ns,
+                        "purchaseWarehouse(ns.args[0], ns.args[1])",
+                        "Chemical",
+                        city,
+                    );
+                    await ns.sleep(200);
+                }
+                continue;
+            }
+
+            const office = await readCorpFunc(
+                ns,
+                "getOffice(ns.args[0], ns.args[1])",
+                "Chemical",
+                city,
+            );
+            const targetEmployees = 9; // Increased from 3
+
+            if (office.numEmployees < targetEmployees) {
+                if (corpData.funds > 10e6) {
+                    // Lowered threshold
+                    if (office.size < targetEmployees) {
+                        const toAdd = Math.min(3, targetEmployees - office.size);
+                        await execCorpFunc(
+                            ns,
+                            "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
+                            "Chemical",
+                            city,
+                            toAdd,
+                        );
+                    }
+                    for (
+                        let i = office.numEmployees;
+                        i < Math.min(targetEmployees, office.size);
+                        i++
+                    ) {
+                        await execCorpFunc(
+                            ns,
+                            "hireEmployee(ns.args[0], ns.args[1])",
+                            "Chemical",
+                            city,
+                        );
+                    }
+                    await assignEmployeesToProduction(
+                        ns,
+                        "Chemical",
+                        city,
+                        false,
+                        "quality",
+                    );
+                    log(ns, `Round 2: Hired employees for Chemical in ${city}`);
+                }
             }
         }
+
+        // Set up export routes: Agriculture -> Chemical (Plants)
+        await setupExportRoutes(ns, "Agriculture", "Chemical", "Plants");
+
+        // Set up export routes: Chemical -> Agriculture (Chemicals)
+        await setupExportRoutes(ns, "Chemical", "Agriculture", "Chemicals");
     }
 
-    // Set up export routes: Agriculture -> Chemical (Plants)
-    await setupExportRoutes(ns, "Agriculture", "Chemical", "Plants");
-
-    // Set up export routes: Chemical -> Agriculture (Chemicals)
-    await setupExportRoutes(ns, "Chemical", "Agriculture", "Chemicals");
+    // Set up export routes: Water -> Agriculture/Chemical (if Water exists)
 
     // Set up export routes: Water -> Agriculture (high-quality Water breaks the Q=1 ceiling)
     if (corpData.divisions.includes("Water")) {
@@ -1928,10 +1958,7 @@ async function runRound3Plus(ns, state) {
                 ns,
                 `Focusing on Agriculture quality in ${bestPlantsCity} (Q=${bestPlantsQuality.toFixed(1)})`,
             );
-            return;
-        }
-
-        if (corpData.funds > 20e9) {
+        } else if (corpData.funds > 20e9) {
             log(
                 ns,
                 `Round 3+: Creating Tobacco division (Plants Q=${bestPlantsQuality.toFixed(1)}, threshold=${readiness.threshold.toFixed(1)})`,
@@ -1944,110 +1971,113 @@ async function runRound3Plus(ns, state) {
             );
             await ns.sleep(500);
         }
-        return;
+        // Don't return - fall through to general upgrades below
     }
 
-    const tobaccoDiv = await readCorpFunc(
-        ns,
-        "getDivision(ns.args[0])",
-        "Tobacco",
-    );
-
-    // Expand Tobacco to all cities
-    for (const city of CITIES) {
-        corpData = await readCorpFunc(ns, "getCorporation()");
-
-        if (!tobaccoDiv.cities.includes(city)) {
-            if (city !== "Sector-12" && corpData.funds > 4e9) {
-                log(ns, `Round 3+: Expanding Tobacco to ${city}`);
-                await execCorpFunc(
-                    ns,
-                    "expandCity(ns.args[0], ns.args[1])",
-                    "Tobacco",
-                    city,
-                );
-                await ns.sleep(200);
-            }
-            continue;
-        }
-
-        const hasWarehouse = await readCorpFunc(
+    // Tobacco-specific setup: expand cities, exports, products, research
+    if (corpData.divisions.includes("Tobacco")) {
+        const tobaccoDiv = await readCorpFunc(
             ns,
-            "hasWarehouse(ns.args[0], ns.args[1])",
+            "getDivision(ns.args[0])",
             "Tobacco",
-            city,
         );
-        if (!hasWarehouse) {
-            if (corpData.funds > 5e9) {
-                log(
-                    ns,
-                    `Round 3+: Purchasing warehouse for Tobacco in ${city}`,
-                );
-                await execCorpFunc(
-                    ns,
-                    "purchaseWarehouse(ns.args[0], ns.args[1])",
-                    "Tobacco",
-                    city,
-                );
-                await ns.sleep(200);
+
+        // Expand Tobacco to all cities
+        for (const city of CITIES) {
+            corpData = await readCorpFunc(ns, "getCorporation()");
+
+            if (!tobaccoDiv.cities.includes(city)) {
+                if (city !== "Sector-12" && corpData.funds > 4e9) {
+                    log(ns, `Round 3+: Expanding Tobacco to ${city}`);
+                    await execCorpFunc(
+                        ns,
+                        "expandCity(ns.args[0], ns.args[1])",
+                        "Tobacco",
+                        city,
+                    );
+                    await ns.sleep(200);
+                }
+                continue;
             }
-            continue;
-        }
 
-        const office = await readCorpFunc(
-            ns,
-            "getOffice(ns.args[0], ns.args[1])",
-            "Tobacco",
-            city,
-        );
-        const targetSize = city === "Sector-12" ? 30 : 9;
-
-        if (office.size < targetSize && corpData.funds > 2e9) {
-            await execCorpFunc(
+            const hasWarehouse = await readCorpFunc(
                 ns,
-                "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
+                "hasWarehouse(ns.args[0], ns.args[1])",
                 "Tobacco",
                 city,
-                targetSize - office.size,
             );
-        }
+            if (!hasWarehouse) {
+                if (corpData.funds > 5e9) {
+                    log(
+                        ns,
+                        `Round 3+: Purchasing warehouse for Tobacco in ${city}`,
+                    );
+                    await execCorpFunc(
+                        ns,
+                        "purchaseWarehouse(ns.args[0], ns.args[1])",
+                        "Tobacco",
+                        city,
+                    );
+                    await ns.sleep(200);
+                }
+                continue;
+            }
 
-        if (office.numEmployees < targetSize) {
-            for (
-                let i = office.numEmployees;
-                i < Math.min(targetSize, office.size);
-                i++
-            ) {
+            const office = await readCorpFunc(
+                ns,
+                "getOffice(ns.args[0], ns.args[1])",
+                "Tobacco",
+                city,
+            );
+            const targetSize = city === "Sector-12" ? 30 : 9;
+
+            if (office.size < targetSize && corpData.funds > 2e9) {
                 await execCorpFunc(
                     ns,
-                    "hireEmployee(ns.args[0], ns.args[1])",
+                    "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
                     "Tobacco",
                     city,
+                    targetSize - office.size,
                 );
             }
-            // Products need Engineers prioritized
-            await assignEmployeesToProduction(ns, "Tobacco", city, true);
+
+            if (office.numEmployees < targetSize) {
+                for (
+                    let i = office.numEmployees;
+                    i < Math.min(targetSize, office.size);
+                    i++
+                ) {
+                    await execCorpFunc(
+                        ns,
+                        "hireEmployee(ns.args[0], ns.args[1])",
+                        "Tobacco",
+                        city,
+                    );
+                }
+                // Products need Engineers prioritized
+                await assignEmployeesToProduction(ns, "Tobacco", city, true);
+            }
         }
+
+        // Set up export routes: Agriculture -> Tobacco (Plants)
+        await setupExportRoutes(ns, "Agriculture", "Tobacco", "Plants");
+
+        // Product development
+        if (
+            tobaccoDiv.products.length === 0 ||
+            (await canDevelopNewProduct(ns, "Tobacco"))
+        ) {
+            await developNewProduct(ns, "Tobacco", state);
+        }
+
+        // Buy Wilson Analytics and AdVert
+        await buyWilsonAndAdvert(ns, "Tobacco");
+
+        // Buy research upgrades
+        await buyResearch(ns, "Tobacco");
     }
 
-    // Set up export routes: Agriculture -> Tobacco (Plants)
-    await setupExportRoutes(ns, "Agriculture", "Tobacco", "Plants");
-
-    // Product development
-    if (
-        tobaccoDiv.products.length === 0 ||
-        (await canDevelopNewProduct(ns, "Tobacco"))
-    ) {
-        await developNewProduct(ns, "Tobacco", state);
-    }
-
-    // Buy Wilson Analytics and AdVert
-    await buyWilsonAndAdvert(ns, "Tobacco");
-
-    // Buy research upgrades
-    await buyResearch(ns, "Tobacco");
-
-    // General upgrades
+    // General upgrades (always run regardless of Tobacco status)
     await upgradeProductionCapability(ns);
 }
 
