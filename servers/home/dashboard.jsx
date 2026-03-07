@@ -497,6 +497,7 @@ const ScriptRow = React.memo(function ScriptRow({
 
     const startScript = () => {
         try {
+            if (ns.isRunning(filename, "home")) return;
             const noTailArgs = SUPPORTS_NO_TAIL_WINDOWS.includes(scriptName)
                 ? ["--no-tail-windows"]
                 : SUPPORTS_NO_TAIL.includes(scriptName)
@@ -505,7 +506,7 @@ const ScriptRow = React.memo(function ScriptRow({
             ns.exec(
                 filename,
                 "home",
-                { threads: 1, temporary: false },
+                { threads: 1 },
                 ...noTailArgs,
             );
         } catch (error) {
@@ -537,7 +538,7 @@ const ScriptRow = React.memo(function ScriptRow({
             ns.exec(
                 filename,
                 "home",
-                { threads: 1, temporary: false },
+                { threads: 1 },
                 ...noTailArgs,
             );
         } catch (error) {

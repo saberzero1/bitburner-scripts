@@ -149,7 +149,11 @@ export async function main(ns) {
     /** @param {NS} ns **/
     async function main_start(ns) {
         const runOptions = getConfiguration(ns, argsSchema);
-        if (!runOptions || (await instanceCount(ns)) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
+        if (!runOptions) return;
+        if ((await instanceCount(ns, "home", false, false)) > 1) {
+            await warnDuplicateAutopilot(ns);
+            return; // Prevent multiple instances of this script from being started, even with different args.
+        }
         options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
 
         log(ns, "INFO: Auto-pilot engaged...", true, "info");
@@ -188,6 +192,54 @@ export async function main(ns) {
             }
             await ns.sleep(options["interval"]);
         }
+    }
+
+    async function warnDuplicateAutopilot(ns) {
+        const warningFile = "/Temp/autopilot-duplicate-warning.txt";
+        const now = Date.now();
+        const lastWarning = Number(ns.read(warningFile) || 0);
+        const warningCooldown = 1000 * 60 * 5;
+        if (now - lastWarning < warningCooldown) return;
+
+        const scriptName = ns.getScriptName();
+        let otherInstancePids = [];
+        let potentialLaunchers = [];
+        try {
+            const runningScripts = await getNsDataThroughFile(
+                ns,
+                "ns.ps('home')",
+                "/Temp/ps-home-autopilot.txt",
+            );
+            otherInstancePids = runningScripts
+                .filter((p) => p.filename === scriptName)
+                .map((p) => p.pid);
+            potentialLaunchers = runningScripts
+                .filter(
+                    (p) =>
+                        p.filename !== scriptName &&
+                        Array.isArray(p.args) &&
+                        p.args.includes(scriptName),
+                )
+                .map(
+                    (p) =>
+                        `${p.filename} (pid ${p.pid}) args=${JSON.stringify(p.args)}`,
+                );
+        } catch (error) {
+        }
+
+        const launcherInfo =
+            potentialLaunchers.length > 0
+                ? ` Potential launchers: ${potentialLaunchers.join("; ")}`
+                : "";
+        log(
+            ns,
+            `WARNING: You cannot start multiple versions of this script (${scriptName}). ` +
+                `Please shut down the other instance(s) first: ${otherInstancePids}.` +
+                launcherInfo,
+            true,
+            "warning",
+        );
+        ns.write(warningFile, `${now}`, "w");
     }
 
     /** @param {NS} ns **/
@@ -1357,6 +1409,7 @@ export async function main(ns) {
         await killScript(ns, "work-for-factions.js");
         await killScript(ns, "infiltrator.js"); // Kill infiltration too — it uses the DOM and would interfere with casino
         await killScript(ns, "daemon.js"); // We also have to kill daemon which can make us study.
+        await killScript(ns, "dashboard.js"); // Kill dashboard — its React rendering interferes with casino's DOM manipulation
         // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
         if (4 in unlockedSFs)
             // No big deal if we can't, casino.js has logic to find the stop button and click it.
@@ -1768,10 +1821,12 @@ export async function main(ns) {
                     0,
                     repToFavour(favorToDonate) - repToFavour(currentFavor),
                 );
+                const currentRep = dictReps[fac] ?? 0;
                 if (
                     repRequired > 0 &&
                     repRequired <= 200000 &&
-                    (dictReps[fac] ?? 0) >= repRequired * 0.5
+                    currentRep >= repRequired * 0.5 &&
+                    currentRep < repRequired
                 ) {
                     setStatus(
                         ns,

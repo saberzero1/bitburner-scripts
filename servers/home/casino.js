@@ -113,8 +113,14 @@ export async function main(ns) {
          * @returns {Promise<boolean>} true if we are still at the casino, false we are not and `throwErrorIfNot` is false. */
         async function checkStillAtCasino(throwError = true, silent = false) {
             // Check whether we're still on the casino page
-            let stillAtCasino = await tryfindElement(
-                "//h4[text()='Iker Molina Casino']",
+            const casinoHeaderXpaths = [
+                "//h4[contains(.,'Iker Molina Casino')]",
+                "//h3[contains(.,'Iker Molina Casino')]",
+                "//h2[contains(.,'Iker Molina Casino')]",
+                "//div[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'iker molina casino')]",
+            ];
+            let stillAtCasino = await findAnyElement(
+                casinoHeaderXpaths,
                 silent ? 3 : 10,
             );
             if (stillAtCasino) return true; // All seems good, nothing is stealing focus
@@ -148,14 +154,20 @@ export async function main(ns) {
         async function checkForKickedOut(retries = 10) {
             let closeModal;
             do {
-                const kickedOut = await tryfindElement(
-                    "//span[contains(text(), 'Alright cheater get out of here')]",
+                const kickedOut = await findAnyElement(
+                    [
+                        "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cheater')]",
+                        "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'get out')]",
+                    ],
                     retries,
                 );
                 if (kickedOut !== null) return true; // Success: We've been kicked out
                 // If there are any other modals, they may need to be closed before we can see the kicked out alert.
-                let closeModal = await tryfindElement(
-                    "//button[contains(@class,'closeButton')]",
+                let closeModal = await findAnyElement(
+                    [
+                        "//button[contains(@class,'closeButton')]",
+                        "//button[contains(@class,'close') and contains(@class,'button')]",
+                    ],
                     retries,
                 );
                 if (!closeModal) break; // There appears to be no other modals blocking in the way
@@ -171,11 +183,15 @@ export async function main(ns) {
         await checkForKickedOut(3);
 
         // Step 1: Find the button used to save the game. (Lots of retries because it can take a while after reloading the page)
-        const btnSaveGame = await findRequiredElement(
-            "//button[@aria-label = 'save game']",
+        const btnSaveGame = await findAnyElement(
+            [
+                "//button[@aria-label = 'save game']",
+                "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save')]",
+                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save')]",
+            ],
             100,
             `Sorry, couldn't find the Overview Save (💾) button. Is your \"Overview\" panel collapsed or modded?`,
-            true,
+            false,
         );
         async function saveGame() {
             if (saveSleepTime) await ns.sleep(saveSleepTime);
@@ -293,17 +309,37 @@ export async function main(ns) {
 
                 // Step 2.4: Try to start the blackjack game
                 await click(
-                    await findRequiredElement(
-                        "//button[contains(text(), 'blackjack')]",
+                    await findAnyElement(
+                        [
+                            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'blackjack')]",
+                            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '21')]",
+                        ],
+                        15,
+                        `Couldn't find the "Blackjack" button.`,
+                        false,
                     ),
                 );
 
                 // Step 2.5: Get some buttons we will need to play blackjack
-                inputWager = await findRequiredElement(
-                    "//input[@type='number']",
+                inputWager = await findAnyElement(
+                    [
+                        "//input[@type='number']",
+                        "//input[@inputmode='numeric']",
+                        "//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'bet')]",
+                    ],
+                    15,
+                    `Couldn't find the bet input.`,
+                    false,
                 );
-                btnStartGame = await findRequiredElement(
-                    "//button[text() = 'Start']",
+                btnStartGame = await findAnyElement(
+                    [
+                        "//button[normalize-space()='Start']",
+                        "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'start')]",
+                        "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'deal')]",
+                    ],
+                    15,
+                    `Couldn't find the Start button.`,
+                    false,
                 );
 
                 // Step 2.6: Clean up temp files and kill other running scripts to speed up the reload cycle
@@ -326,14 +362,22 @@ export async function main(ns) {
                     await setText(inputWager, `1`); // Bet just a dollar and quick the game right away, no big deal
                     await click(btnStartGame);
                     if (
-                        await tryfindElement(
-                            "//p[contains(text(), 'Count:')]",
+                        await findAnyElement(
+                            [
+                                "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'count')]",
+                                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'count')]",
+                            ],
                             10,
                         )
                     ) {
                         // If this works, we're still allowed in
-                        const btnStay = await tryfindElement(
-                            "//button[text() = 'Stay']",
+                        const btnStay = await findAnyElement(
+                            [
+                                "//button[normalize-space()='Stay']",
+                                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'stay')]",
+                                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'stand')]",
+                            ],
+                            10,
                         );
                         if (btnStay) await click(btnStay); // Trigger the game to end (optional - game might already be over if dealer got blackjack)
                     } else {
@@ -425,19 +469,30 @@ export async function main(ns) {
                 while (retries++ < 10) {
                     // Quickly distinguish between outcomes #1 and #2. Start retrying only if we can't find any expected buttons
                     if (
-                        await tryfindElement(
-                            "//button[text() = 'Start']",
+                        await findAnyElement(
+                            [
+                                "//button[normalize-space()='Start']",
+                                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'start')]",
+                                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'deal')]",
+                            ],
                             retries,
                         )
                     )
                         break; // If the start button is present, Outcome #2 or #5 has occurred. (typically #2)
                     // Otherwise, expect to find the hit and stay buttons
-                    btnHit = await tryfindElement(
-                        "//button[text() = 'Hit']",
+                    btnHit = await findAnyElement(
+                        [
+                            "//button[normalize-space()='Hit']",
+                            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'hit')]",
+                        ],
                         retries,
                     );
-                    btnStay = await tryfindElement(
-                        "//button[text() = 'Stay']",
+                    btnStay = await findAnyElement(
+                        [
+                            "//button[normalize-space()='Stay']",
+                            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'stay')]",
+                            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'stand')]",
+                        ],
                         retries,
                     );
                     // If we detected both buttons, the game is on.
@@ -488,8 +543,14 @@ export async function main(ns) {
                     let midGameRetries = 0;
                     try {
                         // Step 4.5.1: Get the current card count
-                        const txtCount = await findRequiredElement(
-                            "//p[contains(text(), 'Count:')]",
+                        const txtCount = await findAnyElement(
+                            [
+                                "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'count')]",
+                                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'count')]",
+                            ],
+                            15,
+                            `Couldn't find the count display.`,
+                            false,
                         );
                         const allCounts = txtCount.querySelectorAll("span"); // The text might contain multiple counts (if there is an Ace)
 
@@ -601,19 +662,46 @@ export async function main(ns) {
         // 1+2+3+4+5=15 total retries, but all with small ms wait times (<20ms), so should still only take a second
         let retries = 0;
         while (retries++ < 5) {
-            if (await tryfindElement("//button[text() = 'Hit']", retries))
+            if (
+                await findAnyElement(
+                    [
+                        "//button[normalize-space()='Hit']",
+                        "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'hit')]",
+                    ],
+                    retries,
+                )
+            )
                 return null; // Game is not over yet, we can still hit
-            if (await tryfindElement("//p[contains(text(), 'lost')]", retries))
+            if (
+                await findAnyElement(
+                    [
+                        "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'lost')]",
+                        "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'lose')]",
+                    ],
+                    retries,
+                )
+            )
                 return "lose";
             // Annoyingly, when we win with blackjack, "Won" is Title-Case, but normal wins is just "won".
             if (
-                await tryfindElement(
-                    "//p/text()[contains(.,'won') or contains(.,'Won')]",
+                await findAnyElement(
+                    [
+                        "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'won')]",
+                        "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'win')]",
+                    ],
                     retries,
                 )
             )
                 return "win";
-            if (await tryfindElement("//p[contains(text(), 'Tie')]", retries))
+            if (
+                await findAnyElement(
+                    [
+                        "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'tie')]",
+                        "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'push')]",
+                    ],
+                    retries,
+                )
+            )
                 return "tie";
         }
         return null;
@@ -789,6 +877,33 @@ export async function main(ns) {
         return await internalfindWithRetry(xpath, true, retries);
     }
 
+    async function findAnyElement(
+        xpaths,
+        maxRetries = 4,
+        customErrorMessage = null,
+        expectFailure = true,
+    ) {
+        if (!Array.isArray(xpaths) || xpaths.length === 0) return null;
+        let attempts = 0;
+        let retryDelayMs = 1;
+        while (attempts++ <= maxRetries) {
+            if (attempts > 1) {
+                await ns.sleep(retryDelayMs);
+                retryDelayMs = Math.min(retryDelayMs * 2, 200);
+            }
+            for (const xpath of xpaths) {
+                const found = internalFind(xpath);
+                if (found !== null) return found;
+            }
+        }
+        if (expectFailure) return null;
+        const errMessage =
+            customErrorMessage ??
+            `Could not find any element for the provided selectors.`;
+        log(ns, "ERROR: " + errMessage, true, "error");
+        throw new Error(errMessage, true, "error");
+    }
+
     /* Used to search for an element in the document. This can fail if the dom isn't fully re-rendered yet. */
     function internalFind(xpath) {
         return doc.evaluate(
@@ -937,8 +1052,9 @@ export async function main(ns) {
 
     // Better logic for when to HIT / STAY (Partial credit @drider)
     async function shouldHitAdvanced(playerCountElem) {
-        const txtPlayerCount = playerCountElem.textContent.substring(7);
-        const player = parseInt(txtPlayerCount.match(/\d+/).shift());
+        const txtPlayerCount = playerCountElem.textContent;
+        const playerMatch = txtPlayerCount.match(/\d+/);
+        const player = playerMatch ? parseInt(playerMatch.shift()) : 0;
         const dealer = await getDealerCount();
         if (verbose)
             log(
@@ -959,12 +1075,23 @@ export async function main(ns) {
     }
 
     async function getDealerCount() {
-        const dealerCount = await findRequiredElement(
-            "//p[contains(text(), 'Dealer')]/..",
+        const dealerCount = await findAnyElement(
+            [
+                "//p[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'dealer')]/..",
+                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'dealer')]/..",
+            ],
+            15,
+            `Couldn't find the dealer card display.`,
+            false,
         );
-        const text = dealerCount.innerText.substring(8, 9);
-        let cardValue = parseInt(text);
-        return isNaN(cardValue) ? (text == "A" ? 11 : 10) : cardValue;
+        const text = dealerCount.innerText;
+        const cardMatch = text.match(/\b(10|[2-9]|[ajkq])\b/i);
+        const cardToken = cardMatch ? cardMatch[1].toUpperCase() : "";
+        if (cardToken === "A") return 11;
+        if (cardToken === "K" || cardToken === "Q" || cardToken === "J")
+            return 10;
+        const cardValue = Number(cardToken);
+        return Number.isFinite(cardValue) ? cardValue : 10;
     }
 
     // Run the program
