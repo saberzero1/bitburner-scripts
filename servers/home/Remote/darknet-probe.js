@@ -1,4 +1,4 @@
-const PROBE_VERSION = 32;
+const PROBE_VERSION = 37;
 
 export async function main(ns) {
     // NOTE: ns.getScriptName() via runDnetCommand returns the TEMP script's name,
@@ -93,12 +93,22 @@ export async function main(ns) {
                     prev.nextRetry = Date.now() + delay;
                     failedServers.set(hostname, prev);
                 }
+
+                // Try to free blocked RAM on this neighbor remotely.
+                // Only attempt if we have admin (password known) — memoryReallocation requires it.
+                if (passwords.has(hostname)) {
+                    try {
+                        await freeNeighborBlockedRam(ns, hostname);
+                    } catch {}
+                }
             }
 
             await handleCacheFiles(ns, HOST);
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
             await manageStasis(ns, OPTIONS_FILE, HOST, passwords);
             await attemptMigrationCharging(ns, OPTIONS_FILE, HOST);
+            await checkAndUnleashStormSeed(ns, HOST);
+            await deployHackScript(ns, OPTIONS_FILE);
 
             // Re-deploy probes to stasis-linked servers (reachable at any distance)
             try {
@@ -208,6 +218,19 @@ function savePasswords(ns, filePath, passwords) {
     ns.write(filePath, data, "w");
 }
 
+/**
+ * Report a cracked password to the orchestrator via port 19.
+ * This ensures the orchestrator always has fresh credentials for stasis-linked
+ * servers, preventing 'zombie stasis' when sessions expire.
+ */
+function reportPasswordToOrchestrator(ns, hostname, password) {
+    try {
+        const pwd = password ?? "";
+        const pwdData = JSON.stringify({ [hostname]: pwd });
+        ns.writePort(19, JSON.stringify({ host: hostname, data: pwdData }));
+    } catch {}
+}
+
 function loadCompletedServers(ns, filePath) {
     const map = new Map();
     try {
@@ -284,6 +307,7 @@ async function processServer(
             if (password !== null) {
                 passwords.set(hostname, password ?? "");
                 savePasswords(ns, passwordFile, passwords);
+                reportPasswordToOrchestrator(ns, hostname, password);
                 await scanClueFiles(ns, hostname, passwords, passwordFile);
             } else if (isLabyrinth) {
                 await deployProbe(
@@ -352,6 +376,7 @@ async function processServer(
     if (password !== null) {
         passwords.set(hostname, password ?? "");
         savePasswords(ns, passwordFile, passwords);
+        reportPasswordToOrchestrator(ns, hostname, password);
         await scanClueFiles(ns, hostname, passwords, passwordFile);
         const deployed = await deployProbe(ns, hostname, password, scriptName);
         return {
@@ -757,11 +782,11 @@ async function deployProbe(
         const targetUsedRam = await nsGetServerUsedRam(ns, hostname);
         const targetFreeRam = Math.max(0, targetMaxRam - targetUsedRam);
 
-        // The probe script needs ~3.0 GB base RAM to run
-        const PROBE_RAM_COST = 3.0;
+        // The probe script needs ~13.75 GB RAM to run (13.65 base + 0.1 direct NS calls)
+        const PROBE_RAM_COST = 14.0;
 
         // If target is tight on RAM, try freeing blocked RAM remotely
-        if (targetFreeRam < PROBE_RAM_COST && targetMaxRam >= 4) {
+        if (targetFreeRam < PROBE_RAM_COST && targetMaxRam >= PROBE_RAM_COST) {
             try {
                 const blockedRam = await runGetBlockedRam(ns, hostname);
                 if (blockedRam > 0) {
@@ -847,15 +872,201 @@ async function deployProbe(
     return false;
 }
 
-async function freeBlockedRam(ns) {
-    try {
-        const result = await runDnetCommand(
-            ns,
-            buildDnetCommand(commandNames.mem),
+// ===== RAM BLOCK FREEING =====
+// Combined approach: neighbors free RAM remotely on blocked servers until the
+// script fits locally, then the blocked server takes over. Both run in parallel.
+// memoryReallocation costs 1 GB, requires direct connection + admin rights.
+// Delay: max(8000 * (500 / (500 + charisma)), 200)ms per call.
+
+// Track active RAM-freeing jobs to avoid duplicate spawns.
+// Key: target hostname being freed. Value: { pid, execHost, startedAt }
+const activeRamFreeJobs = new Map();
+const RAM_FREE_SCRIPT_COST = 3; // ramOverride(3) — memoryReallocation costs 1 GB + 1.6 GB base = 2.6 GB
+const RAM_FREE_RECHECK_INTERVAL = 30000; // Don't re-check a target more than every 30s
+const ramFreeLastCheck = new Map(); // target hostname -> last check timestamp
+
+/**
+ * Build the self-contained looping RAM-free script source.
+ * The script calls memoryReallocation in a loop until blockedRam hits 0 or max iterations.
+ * @param {string} targetHost - The darknet server to free RAM on.
+ *   If the script runs ON targetHost, memoryReallocation() targets self (no arg needed).
+ *   If the script runs on a neighbor, pass targetHost as the argument.
+ * @param {string} resultFile - File path to write the result to.
+ * @param {boolean} isRemote - Whether the script runs on a different host than the target.
+ */
+function buildRamFreeScript(targetHost, resultFile, isRemote) {
+    // The script uses ns.dnet.memoryReallocation directly.
+    // For remote: pass targetHost as argument. For local: no argument (defaults to self).
+    const memCall = isRemote
+        ? `ns.dnet.memoryReallocation("${targetHost}")`
+        : `ns.dnet.memoryReallocation()`;
+    const blockedCall = `ns.dnet.getBlockedRam("${targetHost}")`;
+    return [
+        `export async function main(ns) {`,
+        `  ns.ramOverride(${RAM_FREE_SCRIPT_COST});`,
+        `  const rf = "${resultFile}";`,
+        `  let totalFreed = 0;`,
+        `  let iterations = 0;`,
+        `  const maxIter = 200;`,
+        `  for (let i = 0; i < maxIter; i++) {`,
+        `    iterations++;`,
+        `    let blocked = 0;`,
+        `    try { blocked = ${blockedCall}; } catch { break; }`,
+        `    if (blocked <= 0) break;`,
+        `    try {`,
+        `      const r = await (${memCall});`,
+        `      if (r && r.success) {`,
+        `        const freed = parseFloat((r.message || "").match(/([\d.]+)gb/i)?.[1] || "0");`,
+        `        totalFreed += freed;`,
+        `      } else { break; }`,
+        `    } catch { break; }`,
+        `    await ns.sleep(50);`,
+        `  }`,
+        `  ns.write(rf, JSON.stringify({ totalFreed, iterations }), "w");`,
+        `}`,
+    ].join("\n");
+}
+
+/**
+ * Spawn a RAM-freeing job on execHost targeting targetHost.
+ * Returns the PID if successful, 0 otherwise.
+ */
+function spawnRamFreeJob(ns, execHost, targetHost, isRemote) {
+    // Clean up any finished jobs for this target first
+    cleanupRamFreeJob(ns, targetHost);
+
+    // Already have an active job for this target?
+    if (activeRamFreeJobs.has(targetHost)) return 0;
+
+    const id = commandCounter++ % COMMAND_COUNTER_WRAP;
+    const resultFile = `/Temp/ram-free-${id}.txt`;
+    const scriptFile = `/Temp/ram-free-${id}.js`;
+    const script = buildRamFreeScript(targetHost, resultFile, isRemote);
+
+    ns.write(scriptFile, script, "w");
+    ns.write(resultFile, "<pending>", "w");
+
+    const pid = ns.exec(scriptFile, execHost, {
+        threads: 1,
+        ramOverride: RAM_FREE_SCRIPT_COST,
+    });
+    if (!pid) return 0;
+
+    activeRamFreeJobs.set(targetHost, {
+        pid,
+        execHost,
+        resultFile,
+        startedAt: Date.now(),
+        isRemote,
+    });
+    ns.print(
+        `RAM-free: spawned ${isRemote ? "remote" : "local"} job on ${execHost} targeting ${targetHost} (pid: ${pid})`,
+    );
+    return pid;
+}
+
+/**
+ * Check if a RAM-free job for targetHost has finished. If so, log results and clean up.
+ */
+function cleanupRamFreeJob(ns, targetHost) {
+    const job = activeRamFreeJobs.get(targetHost);
+    if (!job) return;
+
+    const data = ns.read(job.resultFile);
+    if (data && data !== "<pending>") {
+        // Job completed
+        try {
+            const result = JSON.parse(data);
+            if (result.totalFreed > 0) {
+                ns.print(
+                    `RAM-free: ${job.isRemote ? "remote" : "local"} job on ${job.execHost} freed ${result.totalFreed.toFixed(2)} GB on ${targetHost} in ${result.iterations} iterations`,
+                );
+            }
+        } catch {}
+        activeRamFreeJobs.delete(targetHost);
+        return;
+    }
+
+    // Check if the process is still running (timeout after 5 minutes)
+    if (Date.now() - job.startedAt > 300000) {
+        ns.print(
+            `RAM-free: job targeting ${targetHost} timed out, cleaning up`,
         );
-        if (result && result.freedRam > 0) {
-            ns.print(`Freed ${result.freedRam}GB RAM`);
+        try {
+            ns.kill(job.pid);
+        } catch {}
+        activeRamFreeJobs.delete(targetHost);
+    }
+}
+
+/**
+ * Free blocked RAM on the local server (where this probe is running).
+ * Spawns a persistent looping script instead of a single-shot call.
+ */
+async function freeBlockedRam(ns) {
+    const host = ns.getHostname();
+
+    // Clean up any finished job first
+    cleanupRamFreeJob(ns, host);
+
+    // Don't re-check too frequently
+    const lastCheck = ramFreeLastCheck.get(host) || 0;
+    if (Date.now() - lastCheck < RAM_FREE_RECHECK_INTERVAL) return;
+    ramFreeLastCheck.set(host, Date.now());
+
+    // Already have an active job?
+    if (activeRamFreeJobs.has(host)) return;
+
+    try {
+        const blockedRam = await runGetBlockedRam(ns, host);
+        if (blockedRam <= 0) return;
+
+        const maxRam = await nsGetServerMaxRam(ns, host);
+        const usedRam = await nsGetServerUsedRam(ns, host);
+        const freeRam = Math.max(0, maxRam - usedRam);
+
+        if (freeRam < RAM_FREE_SCRIPT_COST) {
+            // Not enough free RAM to run the script locally — neighbors will help
+            return;
         }
+
+        spawnRamFreeJob(ns, host, host, false);
+    } catch {}
+}
+
+/**
+ * Free blocked RAM on neighboring servers.
+ * Called from the main loop after processing each neighbor.
+ * This probe (running on HOST) frees RAM remotely on neighbors that have blocked RAM.
+ * Once the neighbor has enough free RAM, the probe on that server (or a newly deployed one)
+ * will take over with local freeing.
+ */
+async function freeNeighborBlockedRam(ns, neighborHost) {
+    // Clean up any finished job first
+    cleanupRamFreeJob(ns, neighborHost);
+
+    // Don't re-check too frequently
+    const lastCheck = ramFreeLastCheck.get(neighborHost) || 0;
+    if (Date.now() - lastCheck < RAM_FREE_RECHECK_INTERVAL) return;
+    ramFreeLastCheck.set(neighborHost, Date.now());
+
+    // Already have an active job for this target?
+    if (activeRamFreeJobs.has(neighborHost)) return;
+
+    try {
+        const blockedRam = await runGetBlockedRam(ns, neighborHost);
+        if (blockedRam <= 0) return;
+
+        // Check if we have enough free RAM on THIS host to run the helper
+        const host = ns.getHostname();
+        const maxRam = await nsGetServerMaxRam(ns, host);
+        const usedRam = await nsGetServerUsedRam(ns, host);
+        const freeRam = Math.max(0, maxRam - usedRam);
+
+        if (freeRam < RAM_FREE_SCRIPT_COST) return;
+
+        // We have enough free RAM on our host — spawn a remote freeing job
+        spawnRamFreeJob(ns, host, neighborHost, true);
     } catch {}
 }
 
@@ -905,6 +1116,7 @@ function loadProbeOptions(ns, filePath) {
         enableStasis: true,
         enableMigration: false,
         targetStock: "",
+        hackTarget: "",
     };
     try {
         const data = ns.read(filePath);
@@ -922,6 +1134,8 @@ function loadProbeOptions(ns, filePath) {
                 typeof parsed.targetStock === "string"
                     ? parsed.targetStock
                     : "",
+            hackTarget:
+                typeof parsed.hackTarget === "string" ? parsed.hackTarget : "",
         };
     } catch {
         return defaults;
@@ -947,9 +1161,108 @@ async function runStockBoost(ns, targetStock) {
     } catch {}
 }
 
+// ===== WEBSTORM / STORM SEED =====
+// STORM_SEED.exe appears on servers after fully clearing blocked RAM (15% chance, >30 min since last storm).
+// unleashStormSeed: deletes 60% of movable servers, moves 60% of remaining, then adds new servers in waves.
+// Very disruptive but resets the network — useful for clearing stale/difficult servers.
+// The temp script costs 1.7 GB (1.6 base + 0.1 API).
+
+async function checkAndUnleashStormSeed(ns, hostname) {
+    const STORM_SEED_FILE = "STORM_SEED.exe";
+    const STORM_SCRIPT_COST = 1.7;
+    try {
+        const hasStorm = await nsFileExists(ns, STORM_SEED_FILE, hostname);
+        if (!hasStorm) return;
+
+        const host = ns.getHostname();
+        const freeRam =
+            (await nsGetServerMaxRam(ns, host)) -
+            (await nsGetServerUsedRam(ns, host));
+        if (freeRam < STORM_SCRIPT_COST) {
+            ns.print(
+                `Found ${STORM_SEED_FILE} on ${hostname} but not enough free RAM to unleash (need ${STORM_SCRIPT_COST} GB, have ${freeRam.toFixed(2)} GB free)`,
+            );
+            return;
+        }
+
+        ns.print(
+            `Found ${STORM_SEED_FILE} on ${hostname} — unleashing webstorm!`,
+        );
+        const result = await runUnleashStormSeed(ns);
+        if (result && result.success) {
+            ns.print(
+                `Webstorm unleashed successfully! Network will restructure over ~30 seconds.`,
+            );
+        } else {
+            ns.print(
+                `Webstorm unleash failed: ${result?.message || "unknown error"}`,
+            );
+        }
+    } catch {}
+}
 // ===== STASIS LINK MANAGEMENT =====
 // Probes manage stasis links locally since the orchestrator on home
 // can only exec on darkweb/stasis-linked servers. Probes ARE on adjacent servers.
+
+// ===== ARBITRARY SCRIPT EXECUTION (HACK/GROW/WEAKEN) =====
+// When freed RAM is available beyond what the probe needs, deploy a simple grow loop
+// script to utilize the spare capacity for hacking infrastructure.
+// The script targets a server specified by the orchestrator via options.hackTarget.
+
+const HACK_SCRIPT_NAME = "/Temp/dnet-grow-loop.js";
+const HACK_SCRIPT_RAM = 1.75; // ns.grow cost per thread
+
+async function deployHackScript(ns, optionsFile) {
+    const options = loadProbeOptions(ns, optionsFile);
+    const target = options.hackTarget;
+    if (!target) return; // No target configured
+
+    const host = ns.getHostname();
+    const maxRam = await nsGetServerMaxRam(ns, host);
+    const usedRam = await nsGetServerUsedRam(ns, host);
+    const freeRam = Math.max(0, maxRam - usedRam);
+
+    // Need at least 1 thread worth of grow RAM
+    if (freeRam < HACK_SCRIPT_RAM) return;
+
+    // Check if our grow script is already running on this host
+    try {
+        const procs = ns.ps(host);
+        if (procs && procs.some((p) => p.filename === HACK_SCRIPT_NAME)) return;
+    } catch {
+        return;
+    }
+
+    const threads = Math.floor(freeRam / HACK_SCRIPT_RAM);
+    if (threads < 1) return;
+
+    // Write a simple grow loop script directly (ns.write already in probe's RAM budget)
+    const scriptContent = [
+        `/** @param {NS} ns */`,
+        `export async function main(ns) {`,
+        `  const target = ns.args[0];`,
+        `  while (true) {`,
+        `    await ns.grow(target);`,
+        `  }`,
+        `}`,
+    ].join("\n");
+
+    try {
+        ns.write(HACK_SCRIPT_NAME, scriptContent, "w");
+        // Exec with ramOverride so dynamic RAM only accounts for ns.grow (1.75 GB)
+        const pid = ns.exec(
+            HACK_SCRIPT_NAME,
+            host,
+            { threads, ramOverride: HACK_SCRIPT_RAM },
+            target,
+        );
+        if (pid > 0) {
+            ns.print(
+                `Deployed grow loop on ${host}: ${threads} threads targeting ${target}`,
+            );
+        }
+    } catch {}
+}
 
 const AIR_GAP_DEPTH = 8;
 const STASIS_RECHECK_INTERVAL = 120000; // Re-evaluate stasis every 2 minutes
@@ -992,19 +1305,13 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
             await execStasisBootstrap(ns, hostname, true);
             // Report password to orchestrator so it always has credentials for stasis servers.
             // This prevents future 'zombie stasis' — stasis servers the orchestrator can't authenticate.
-            try {
-                const pwd = passwords.get(hostname);
-                if (pwd !== undefined) {
-                    const pwdData = JSON.stringify({ [hostname]: pwd });
-                    ns.writePort(
-                        19,
-                        JSON.stringify({ host: hostname, data: pwdData }),
-                    );
-                    ns.print(
-                        `Stasis: reported password for ${hostname} to orchestrator (port 19)`,
-                    );
-                }
-            } catch {}
+            const pwd = passwords.get(hostname);
+            if (pwd !== undefined) {
+                reportPasswordToOrchestrator(ns, hostname, pwd);
+                ns.print(
+                    `Stasis: reported password for ${hostname} to orchestrator (port 19)`,
+                );
+            }
         } else {
             // All slots full — check if we should replace the weakest
             let weakestHost = null;
@@ -1211,14 +1518,10 @@ async function runGetStasisList(ns) {
     return [];
 }
 
-async function runGetBlockedRam(ns, hostname) {
+function runGetBlockedRam(ns, hostname) {
+    // Direct call: 0 GB RAM cost — avoids temp script exec that fails on RAM-starved hosts
     try {
-        const result = await runDnetCommand(
-            ns,
-            buildDnetCommand(commandNames.blockedRam, commandArgs.singleArg),
-            [hostname],
-        );
-        return typeof result === "number" ? result : 0;
+        return ns.dnet.getBlockedRam(hostname);
     } catch {}
     return 0;
 }
@@ -2020,7 +2323,7 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 6);
     const maxValue = Math.pow(10, length) - 1;
-    const primes = generatePrimes(Math.min(997, maxValue));
+    const primes = generatePrimes(Math.min(9999, maxValue));
     let product = 1n;
     for (const prime of primes) {
         const primeValue = BigInt(prime);
@@ -2038,7 +2341,13 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
             product *= primeValue;
             temp /= primeValue;
         }
-        if (await isAlreadyCracked(ns, hostname)) return null;
+        // Early exit: if product already has the expected digit count, try it now
+        if (length && product.toString().length >= length) {
+            const earlyCandidate = product.toString();
+            const earlyResult = await runAuth(ns, hostname, earlyCandidate);
+            if (earlyResult.success) return earlyCandidate;
+            if (await isAlreadyCracked(ns, hostname)) return null;
+        }
     }
     if (product <= 1n) return null;
     const candidate = product.toString();
@@ -3024,6 +3333,7 @@ const commandNames = {
     stasisLimit: ["get", "Stasis", "Link", "Limit"].join(""),
     stasisList: ["get", "Stasis", "Linked", "Servers"].join(""),
     migrate: ["induce", "Server", "Migration"].join(""),
+    storm: ["unleash", "Storm", "Seed"].join(""),
     blockedRam: ["get", "Blocked", "Ram"].join(""),
     procList: ["p", "s"].join(""),
     terminate: ["k", "i", "l", "l"].join(""),
@@ -3209,24 +3519,14 @@ async function nsFileExists(ns, filename, hostname) {
     );
 }
 
-async function nsGetServerMaxRam(ns, hostname) {
-    return (
-        (await runDnetCommand(
-            ns,
-            buildNsCommand(commandNames.getMaxRam, commandArgs.singleArg),
-            [hostname],
-        )) || 0
-    );
+function nsGetServerMaxRam(ns, hostname) {
+    // Direct call: 0.05 GB RAM cost — avoids temp script exec that fails on RAM-starved hosts
+    return ns.getServerMaxRam(hostname);
 }
 
-async function nsGetServerUsedRam(ns, hostname) {
-    return (
-        (await runDnetCommand(
-            ns,
-            buildNsCommand(commandNames.getUsedRam, commandArgs.singleArg),
-            [hostname],
-        )) || 0
-    );
+function nsGetServerUsedRam(ns, hostname) {
+    // Direct call: 0.05 GB RAM cost — avoids temp script exec that fails on RAM-starved hosts
+    return ns.getServerUsedRam(hostname);
 }
 
 // nsGetScriptName removed — hardcoded script name used instead
@@ -3576,6 +3876,16 @@ async function runPromoteStock(ns, symbol) {
             buildDnetCommand(commandNames.promote, commandArgs.singleArg),
             [symbol],
         );
+    } catch {}
+    return null;
+}
+
+async function runUnleashStormSeed(ns) {
+    // unleashStormSeed costs only 0.1 GB but runs on the script's host server.
+    // Use runDnetCommand (temp script) to avoid adding 0.1 GB to probe's dynamic RAM.
+    // Temp script cost: 1.6 base + 0.1 API = 1.7 GB.
+    try {
+        return await runDnetCommand(ns, buildDnetCommand(commandNames.storm));
     } catch {}
     return null;
 }

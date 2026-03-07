@@ -543,6 +543,9 @@ export async function main(ns) {
                     reqRam(64) &&
                     ns.fileExists("DarkscapeNavigator.exe", "home"),
                 minRamReq: 30,
+                args: () => [
+                    ...(stockMode ? ["--enable-stock-manipulation"] : []),
+                ],
             },
             {
                 name: "corporation.js",

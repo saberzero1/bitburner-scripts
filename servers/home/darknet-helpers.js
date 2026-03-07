@@ -735,7 +735,7 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 6);
     const maxValue = Math.pow(10, length) - 1;
-    const primes = generatePrimes(Math.min(997, maxValue));
+    const primes = generatePrimes(Math.min(9999, maxValue));
     let product = 1n;
     for (const prime of primes) {
         const primeValue = BigInt(prime);
@@ -756,6 +756,17 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
         while (temp > 1n) {
             product *= primeValue;
             temp /= primeValue;
+        }
+        // Early exit: if product already has the expected digit count, try it now
+        if (length && product.toString().length >= length) {
+            const earlyCandidate = product.toString();
+            const earlyResult = await safeAuthenticate(
+                ns,
+                hostname,
+                earlyCandidate,
+            );
+            if (earlyResult.success) return earlyCandidate;
+            if (await isAlreadyCracked(ns, hostname)) return null;
         }
     }
     if (product <= 1n) return null;

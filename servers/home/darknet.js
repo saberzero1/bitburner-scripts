@@ -36,6 +36,7 @@ const argsSchema = [
     ["enable-phishing", true], // Enable phishing attacks for money/charisma
     ["enable-stock-manipulation", false], // Enable stock manipulation via promoteStock
     ["target-stock", ""], // Stock symbol to manipulate (if enabled)
+    ["hack-target", ""], // Target server for hack/grow/weaken on freed darknet RAM
     ["stasis-priority", ["high-ram", "high-value"]], // Priority for stasis link allocation
     ["verbose", false], // Extra logging
     ["dry-run", false], // Don't actually execute, just log what would be done
@@ -127,7 +128,7 @@ const LAB_SOLVER_CONTENT = [
     `  ns.writePort(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 32;
+const PROBE_VERSION = 37;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -246,7 +247,7 @@ class DarknetState {
         this.knownPasswords = new Map(); // hostname -> password
         this.activeProbes = new Map(); // hostname -> { pid, version }
         this.stasisServers = new Set(); // hostnames with active stasis links
-        this.zombieStasisServers = new Set(); // stasis servers we can't interact with (no password, no auth)
+        this.zombieStasisServers = new Map(); // hostname -> { failCount, firstFailAt, lastFailAt } — stasis servers with connection issues
         this.scannedClueFiles = new Set(); // set of file paths already scanned
         this.pendingMigrations = new Map(); // hostname -> { charge, lastAttempt }
         this.authenticatedServers = new Set(); // servers confirmed to have admin
@@ -351,6 +352,16 @@ class DarknetState {
     addPassword(ns, hostname, password) {
         this.knownPasswords.set(hostname, password);
         this.savePasswords(ns);
+        // Clear zombie status when we learn a password for a zombie stasis server.
+        // This is the primary recovery path: probes adjacent to the server re-authenticate
+        // it and report the password, which the orchestrator picks up here.
+        if (this.zombieStasisServers.has(hostname)) {
+            this.zombieStasisServers.delete(hostname);
+            log(
+                ns,
+                `Zombie stasis RECOVERED: ${hostname} — new password received, clearing zombie status`,
+            );
+        }
     }
 
     removePassword(ns, hostname) {
@@ -397,6 +408,17 @@ class DarknetState {
                     this.serverDepths.delete(hostname);
                     removed++;
                 }
+            }
+        }
+        // zombieStasisServers: prune entries for servers no longer in stasisServers
+        // (stasis was removed, or server was deleted). Also prune entries that have been
+        // zombie for > 30 minutes — at that point the server is likely gone from the network.
+        for (const [hostname, info] of this.zombieStasisServers) {
+            if (!this.stasisServers.has(hostname)) {
+                this.zombieStasisServers.delete(hostname);
+            } else if (now - info.lastFailAt > 1800000) {
+                // 30+ min since last failure check — stale entry
+                this.zombieStasisServers.delete(hostname);
             }
         }
 
@@ -600,14 +622,41 @@ async function orchestrateDarknet(ns, state, options) {
             pwd === undefined &&
             (!zombieCheck || zombieCheck.hasAdminRights === undefined)
         ) {
-            if (!state.zombieStasisServers.has(stasisHost)) {
-                state.zombieStasisServers.add(stasisHost);
+            const existing = state.zombieStasisServers.get(stasisHost);
+            const now = Date.now();
+            if (!existing) {
+                state.zombieStasisServers.set(stasisHost, {
+                    failCount: 1,
+                    firstFailAt: now,
+                    lastFailAt: now,
+                });
                 log(
                     ns,
-                    `Zombie stasis detected: ${stasisHost} has stasis but no password and no auth details — marking as unreachable`,
+                    `Stale stasis detected: ${stasisHost} has stasis but no password and no auth details — tracking (1st failure)`,
                 );
+            } else {
+                existing.failCount++;
+                existing.lastFailAt = now;
+                // Only log periodically (every 5 failures)
+                if (existing.failCount % 5 === 0) {
+                    log(
+                        ns,
+                        `Stale stasis: ${stasisHost} still unreachable (${existing.failCount} consecutive failures over ${Math.round((now - existing.firstFailAt) / 1000)}s)`,
+                    );
+                }
             }
-            continue;
+            // Grace period: only skip if failed for > 5 minutes AND > 10 consecutive failures.
+            // Before that, keep trying — probes may re-authenticate the server and report a password.
+            const zombie = state.zombieStasisServers.get(stasisHost);
+            if (
+                zombie &&
+                zombie.failCount >= 10 &&
+                now - zombie.firstFailAt > 300000
+            ) {
+                continue; // Truly zombie — skip this server
+            }
+            // Still in grace period: fall through to try password helper anyway (it might work
+            // if the server just hasn't had its exec session re-established yet)
         }
         try {
             // Alternative approach: exec a tiny helper on the stasis server that writes
@@ -683,7 +732,14 @@ async function orchestrateDarknet(ns, state, options) {
             const pwd = state.getPassword(stasisHost);
             if (pwd !== undefined) {
                 try {
-                    ns.dnet.connectToSession(stasisHost, pwd);
+                    const result = ns.dnet.connectToSession(stasisHost, pwd);
+                    if (!result.success && result.code === 401) {
+                        state.removePassword(ns, stasisHost);
+                        log(
+                            ns,
+                            `Stale password for stasis server ${stasisHost} — invalidated (401 on probe deploy)`,
+                        );
+                    }
                 } catch {}
             }
             await deployProbe(ns, state, stasisHost, options);
@@ -717,9 +773,15 @@ async function orchestrateDarknet(ns, state, options) {
             } catch {}
         }
         if (swapRequests.length > 0) {
-            // If ALL stasis slots are occupied by zombies, swap is impossible — just drain the requests
+            // If ALL stasis slots are occupied by confirmed zombies (past grace period),
+            // swap is impossible — just drain the requests
+            const now = Date.now();
+            const isConfirmedZombie = (h) => {
+                const z = state.zombieStasisServers.get(h);
+                return z && z.failCount >= 10 && now - z.firstFailAt > 300000;
+            };
             const allZombie = [...state.stasisServers].every((h) =>
-                state.zombieStasisServers.has(h),
+                isConfirmedZombie(h),
             );
             if (allZombie) {
                 if (verbose)
@@ -733,8 +795,8 @@ async function orchestrateDarknet(ns, state, options) {
                     (a, b) => (b.myScore || 0) - (a.myScore || 0),
                 );
                 const best = swapRequests[0];
-                if (state.zombieStasisServers.has(best.removeHost)) {
-                    // Target is a zombie — can't remove stasis, skip
+                if (isConfirmedZombie(best.removeHost)) {
+                    // Target is a confirmed zombie — can't remove stasis, skip
                     if (verbose)
                         log(
                             ns,
@@ -1827,8 +1889,11 @@ async function manageStasisLinks(ns, state, options) {
         let weakestHost = null;
         let weakestScore = Infinity;
         for (const stasisHost of state.stasisServers) {
-            // Skip zombie stasis servers — we can't remove them, so they're not swap candidates
-            if (state.zombieStasisServers.has(stasisHost)) continue;
+            // Skip confirmed zombie stasis servers — we can't remove them, so they're not swap candidates.
+            // Servers in grace period ARE still considered (exec might work if the server restarts).
+            const z = state.zombieStasisServers.get(stasisHost);
+            if (z && z.failCount >= 10 && Date.now() - z.firstFailAt > 300000)
+                continue;
             const score = scoreServer(stasisHost);
             if (score < weakestScore) {
                 weakestScore = score;
@@ -1887,11 +1952,19 @@ async function execStasisLink(ns, state, hostname, enable, options) {
         return false;
     }
 
-    // Early exit for zombie stasis servers — servers we've already determined are unreachable.
-    // No point attempting exec/scp/connectToSession that will always fail.
-    if (state.zombieStasisServers.has(hostname)) {
+    // Early exit for confirmed zombie stasis servers (past grace period).
+    // Servers in grace period are still attempted — they may recover.
+    const zombieInfo = state.zombieStasisServers.get(hostname);
+    if (
+        zombieInfo &&
+        zombieInfo.failCount >= 10 &&
+        Date.now() - zombieInfo.firstFailAt > 300000
+    ) {
         if (options.verbose)
-            log(ns, `INFO: Skipping stasis exec on zombie server ${hostname}`);
+            log(
+                ns,
+                `INFO: Skipping stasis exec on confirmed zombie server ${hostname} (${zombieInfo.failCount} failures over ${Math.round((Date.now() - zombieInfo.firstFailAt) / 1000)}s)`,
+            );
         return false;
     }
     // Guard: ns.exec requires adjacency, backdoor, or stasis link from the calling server.
@@ -1965,16 +2038,34 @@ async function execStasisLink(ns, state, hostname, enable, options) {
                     `password=${pwd !== undefined ? "known" : "UNKNOWN"}`,
             );
         }
-        // Detect zombie at runtime: no password + no auth details = permanently unreachable
+        // Track zombie status at runtime: no password + no auth details = unreachable.
+        // Uses grace period: only give up after sustained failures.
         if (
             pwd === undefined &&
             (!authDetails || authDetails.hasAdminRights === undefined)
         ) {
-            if (!state.zombieStasisServers.has(hostname)) {
-                state.zombieStasisServers.add(hostname);
+            const now = Date.now();
+            const existing = state.zombieStasisServers.get(hostname);
+            if (!existing) {
+                state.zombieStasisServers.set(hostname, {
+                    failCount: 1,
+                    firstFailAt: now,
+                    lastFailAt: now,
+                });
+            } else {
+                existing.failCount++;
+                existing.lastFailAt = now;
+            }
+            const zombie = state.zombieStasisServers.get(hostname);
+            if (zombie.failCount >= 10 && now - zombie.firstFailAt > 300000) {
                 log(
                     ns,
-                    `Zombie stasis detected at exec time: ${hostname} — marking as unreachable, will not retry`,
+                    `Zombie stasis confirmed at exec time: ${hostname} — unreachable for ${Math.round((now - zombie.firstFailAt) / 1000)}s (${zombie.failCount} failures)`,
+                );
+            } else {
+                log(
+                    ns,
+                    `Stale stasis at exec time: ${hostname} — failure ${zombie.failCount}, still in grace period`,
                 );
             }
             return false;
@@ -1987,20 +2078,34 @@ async function execStasisLink(ns, state, hostname, enable, options) {
                         ns,
                         `WARN: connectToSession failed for ${hostname}: code=${sessionResult.code}, msg=${sessionResult.message}`,
                     );
+                    // If auth failure (401), our stored password is wrong/stale.
+                    // Remove it so the server gets re-authenticated by probes naturally.
+                    if (sessionResult.code === 401) {
+                        state.removePassword(ns, hostname);
+                        log(
+                            ns,
+                            `Invalidated stale password for ${hostname} — probes will re-authenticate`,
+                        );
+                    }
+                    return false;
                 } else {
                     log(ns, `Session established with ${hostname}`);
+                    // Successful session — clear any zombie tracking
+                    state.zombieStasisServers.delete(hostname);
                 }
             } catch (err) {
                 log(
                     ns,
                     `WARN: connectToSession threw for ${hostname}: ${getErrorInfo(err)}`,
                 );
+                return false;
             }
         } else {
             log(
                 ns,
                 `WARN: No password known for stasis server ${hostname} — cannot establish session`,
             );
+            return false;
         }
         ns.write(STASIS_HELPER_SCRIPT, STASIS_HELPER_CONTENT, "w");
         const scpResult = ns.scp(STASIS_HELPER_SCRIPT, hostname, "home");
@@ -2387,6 +2492,9 @@ function writeProbeOptions(ns, options) {
         enablePhishing: Boolean(options["enable-phishing"]),
         enableStockManipulation: Boolean(options["enable-stock-manipulation"]),
         targetStock: options["target-stock"] ?? "",
+        hackTarget: options["hack-target"] ?? "",
+        enableStasis: true,
+        enableMigration: Boolean(options["enable-migration"]),
         probeVersion: PROBE_VERSION,
     };
     try {
