@@ -503,12 +503,7 @@ const ScriptRow = React.memo(function ScriptRow({
                 : SUPPORTS_NO_TAIL.includes(scriptName)
                   ? ["--no-tail"]
                   : [];
-            ns.exec(
-                filename,
-                "home",
-                { threads: 1 },
-                ...noTailArgs,
-            );
+            ns.exec(filename, "home", { threads: 1 }, ...noTailArgs);
         } catch (error) {
             onError(scriptName, error);
         }
@@ -535,12 +530,7 @@ const ScriptRow = React.memo(function ScriptRow({
                 : SUPPORTS_NO_TAIL.includes(scriptName)
                   ? ["--no-tail"]
                   : [];
-            ns.exec(
-                filename,
-                "home",
-                { threads: 1 },
-                ...noTailArgs,
-            );
+            ns.exec(filename, "home", { threads: 1 }, ...noTailArgs);
         } catch (error) {
             onError(scriptName, error);
         }

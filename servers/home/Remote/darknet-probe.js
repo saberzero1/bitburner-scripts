@@ -1,4 +1,4 @@
-const PROBE_VERSION = 25;
+const PROBE_VERSION = 32;
 
 export async function main(ns) {
     // NOTE: ns.getScriptName() via runDnetCommand returns the TEMP script's name,
@@ -41,9 +41,9 @@ export async function main(ns) {
                     continue;
                 }
 
-                let success = false;
+                let result = { status: "failed", recheckAtMs: undefined };
                 try {
-                    success = await processServer(
+                    result = await processServer(
                         ns,
                         hostname,
                         passwords,
@@ -53,12 +53,28 @@ export async function main(ns) {
                 } catch (err) {
                     logError(ns, `Probe error processing ${hostname}`, err);
                 }
-                if (success) {
+                if (result.status === "completed") {
                     failedServers.delete(hostname);
                     // Mark as completed — re-check every 60s to verify probe is still alive
                     completedServers.set(hostname, {
                         probeDeployed: true,
-                        recheckAt: Date.now() + 60000,
+                        recheckAt:
+                            Date.now() +
+                            (result.recheckAtMs === undefined
+                                ? 60000
+                                : result.recheckAtMs),
+                    });
+                    saveCompletedServers(ns, COMPLETED_FILE, completedServers);
+                    await ns.sleep(100);
+                } else if (result.status === "retry") {
+                    failedServers.delete(hostname);
+                    completedServers.set(hostname, {
+                        probeDeployed: true,
+                        recheckAt:
+                            Date.now() +
+                            (result.recheckAtMs === undefined
+                                ? 5000
+                                : result.recheckAtMs),
                     });
                     saveCompletedServers(ns, COMPLETED_FILE, completedServers);
                     await ns.sleep(100);
@@ -100,9 +116,7 @@ export async function main(ns) {
                     // Try to establish session with known password only
                     const pwd = passwords.get(stasisHost);
                     if (pwd !== undefined) {
-                        try {
-                            ns.dnet.connectToSession(stasisHost, pwd);
-                        } catch {}
+                        await dnetCall(ns, commandNames.link, stasisHost, pwd);
                     }
                     // If no password known, still try deploying — stasis makes exec reachable
                     // even without a session (the probe on that server will handle its own auth)
@@ -223,40 +237,97 @@ async function processServer(
     passwordFile,
     scriptName,
 ) {
-    const details = await getAuthDetails(ns, hostname);
+    const localDetails = await getAuthDetailsLocal(ns, hostname);
+    const details = localDetails || (await getAuthDetails(ns, hostname));
     if (!details || !details.isOnline) {
-        return false;
+        return { status: "failed", recheckAtMs: undefined };
+    }
+    const effectiveDetails = details;
+    const modelId = effectiveDetails?.modelId ?? "";
+    const isLabyrinth = String(modelId).toLowerCase().includes("labyrinth");
+
+    // Report labyrinth neighbors to orchestrator via port 17.
+    // The probe runs on HOST — if it sees a labyrinth in its scan results,
+    // then HOST is a direct neighbor of that labyrinth server.
+    if (isLabyrinth) {
+        try {
+            const probeHost = ns.getHostname();
+            const reportData = JSON.stringify({
+                labHost: hostname,
+                neighbor: probeHost,
+                neighborPwd: passwords.get(probeHost) ?? null,
+            });
+            ns.writePort(17, reportData);
+        } catch {}
+        // Signal that THIS probe host is adjacent to a labyrinth
+        foundLabyrinthNeighbor = true;
     }
 
-    // If we already have a session on this server, just deploy/propagate
-    if (details.hasSession || hostname === "darkweb") {
-        if (details.depth === undefined || details.depth === null) {
+    if (effectiveDetails.hasSession || hostname === "darkweb") {
+        if (
+            effectiveDetails.depth === undefined ||
+            effectiveDetails.depth === null
+        ) {
             try {
                 await runDepth(ns, hostname);
             } catch {}
         }
         await scanClueFiles(ns, hostname, passwords, passwordFile);
-        return await deployProbe(
+
+        if (!effectiveDetails.hasAdminRights) {
+            const password = await tryAccessServer(
+                ns,
+                hostname,
+                effectiveDetails,
+                passwords,
+            );
+            if (password !== null) {
+                passwords.set(hostname, password ?? "");
+                savePasswords(ns, passwordFile, passwords);
+                await scanClueFiles(ns, hostname, passwords, passwordFile);
+            } else if (isLabyrinth) {
+                await deployProbe(
+                    ns,
+                    hostname,
+                    passwords.get(hostname),
+                    scriptName,
+                );
+                return { status: "retry", recheckAtMs: 5000 };
+            }
+        }
+
+        const deployed = await deployProbe(
             ns,
             hostname,
             passwords.get(hostname),
             scriptName,
         );
+        return {
+            status: deployed ? "completed" : "failed",
+            recheckAtMs: undefined,
+        };
     }
 
     // If we have a saved password, try to establish a session with it.
     // connectToSession works at any distance and is instant.
     if (passwords.has(hostname)) {
         const knownPassword = passwords.get(hostname);
-        try {
-            ns.dnet.connectToSession(hostname, knownPassword ?? "");
-        } catch {}
+        await dnetCall(ns, commandNames.link, hostname, knownPassword ?? "");
 
         // Re-check if session was established
         const refreshed = await getAuthDetails(ns, hostname);
         if (refreshed?.hasSession) {
             await scanClueFiles(ns, hostname, passwords, passwordFile);
-            return await deployProbe(ns, hostname, knownPassword, scriptName);
+            const deployed = await deployProbe(
+                ns,
+                hostname,
+                knownPassword,
+                scriptName,
+            );
+            return {
+                status: deployed ? "completed" : "failed",
+                recheckAtMs: undefined,
+            };
         }
 
         // Session failed — server may have restarted with a new password.
@@ -267,24 +338,38 @@ async function processServer(
 
     // Per darknet docs: authenticate can ONLY target nearby CONNECTED servers.
     // If the server isn't connected to us, we can't authenticate — skip it.
-    if (!details.isConnectedToCurrentServer) {
-        return false;
+    if (!effectiveDetails.isConnectedToCurrentServer) {
+        return { status: "failed", recheckAtMs: undefined };
     }
 
     // Try to authenticate (crack password)
-    const password = await tryAccessServer(ns, hostname, details, passwords);
+    const password = await tryAccessServer(
+        ns,
+        hostname,
+        effectiveDetails,
+        passwords,
+    );
     if (password !== null) {
         passwords.set(hostname, password ?? "");
         savePasswords(ns, passwordFile, passwords);
         await scanClueFiles(ns, hostname, passwords, passwordFile);
-        return await deployProbe(ns, hostname, password, scriptName);
+        const deployed = await deployProbe(ns, hostname, password, scriptName);
+        return {
+            status: deployed ? "completed" : "failed",
+            recheckAtMs: undefined,
+        };
     }
 
-    return false;
+    if (isLabyrinth) {
+        return { status: "retry", recheckAtMs: 5000 };
+    }
+
+    return { status: "failed", recheckAtMs: undefined };
 }
 
 async function tryAccessServer(ns, hostname, details, passwords) {
     if ((details.modelId || "").toLowerCase().includes("labyrinth")) {
+        ns.print(`Labyrinth attempt on ${hostname}`);
         const solved = await solveLabyrinth(ns, hostname);
         if (solved) return "";
     }
@@ -360,27 +445,38 @@ async function solveLabyrinth(ns, hostname) {
     const resultFile = `/Temp/lab-result-${id}.txt`;
     const scriptFile = `/Temp/lab-solver-${id}.js`;
 
-    // Build the method name dynamically to RAM-dodge 'authenticate' (0.4 GB)
-    // labreport is 0 GB so it's safe to use literally
-    const authMethod = ["auth", "enticate"].join("");
+    // The exec'd solver declares its own RAM via ramOverride (both in RunOptions
+    // and as the first statement in main) so authenticate's 0.4 GB is covered.
 
     // The self-contained DFS solver script.
     // It calls ns.dnet.labreport() for position + open directions,
-    // and ns.dnet[authMethod](hostname, "go <dir>") for movement.
+    // and ns.dnet.authenticate(hostname, "go <dir>") for movement.
     // Position tracking comes from response messages, not from labreport,
     // because we need to know if a move succeeded.
     const solverScript = [
         `export async function main(ns) {`,
+        `  ns.ramOverride(2);`,
         `  const host = "${hostname}";`,
         `  const rf = "${resultFile}";`,
-        `  const am = ["auth", "enticate"].join("");`,
         `  const visited = new Set();`,
         `  const stack = [];`,
         `  let px = 1, py = 1;`,
-        `  try {`,
-        `    const rpt0 = ns.dnet.labreport();`,
-        `    if (rpt0 && rpt0.success && rpt0.coords) { px = rpt0.coords[0]; py = rpt0.coords[1]; }`,
-        `  } catch {}`,
+        `  const parseCoords = (text) => {`,
+        `    const match = String(text || "").match(/(\\d+)\\s*,\\s*(\\d+)/);`,
+        `    if (!match) return null;`,
+        `    return [parseInt(match[1], 10), parseInt(match[2], 10)];`,
+        `  };`,
+        `  const refreshCoords = async () => {`,
+        `    try {`,
+        `      const rpt = await ns.dnet.labreport();`,
+        `      if (rpt && rpt.success && rpt.coords) {`,
+        `        px = rpt.coords[0]; py = rpt.coords[1];`,
+        `        return true;`,
+        `      }`,
+        `    } catch {}`,
+        `    return false;`,
+        `  };`,
+        `  await refreshCoords();`,
         `  const deltas = { north: [0,-2], south: [0,2], west: [-2,0], east: [2,0] };`,
         `  const rev = { north:"south", south:"north", west:"east", east:"west" };`,
         `  for (let i = 0; i < 5000; i++) {`,
@@ -388,7 +484,7 @@ async function solveLabyrinth(ns, hostname) {
         `    visited.add(key);`,
         `    let dirs = null;`,
         `    try {`,
-        `      const rpt = ns.dnet.labreport();`,
+        `      const rpt = await ns.dnet.labreport();`,
         `      if (rpt && rpt.success) {`,
         `        dirs = [];`,
         `        if (rpt.north) dirs.push("north");`,
@@ -405,24 +501,30 @@ async function solveLabyrinth(ns, hostname) {
         `    });`,
         `    if (nd) {`,
         `      stack.push({ px, py, dir: nd });`,
-        `      const mr = await ns.dnet[am](host, "go "+nd);`,
+        `      const beforeX = px, beforeY = py;`,
+        `      const mr = await ns.dnet.authenticate(host, "go "+nd);`,
         `      if (mr && mr.success) { ns.write(rf,"SUCCESS","w"); return; }`,
-        `      const msg = (mr && mr.message) || "";`,
-        `      const mm = msg.match(/moved to (\\d+),(\\d+)/);`,
-        `      if (mm) { px = parseInt(mm[1],10); py = parseInt(mm[2],10); }`,
-        `      else { stack.pop(); }`,
+        `      const msg = (mr && (mr.message ?? mr.data)) || "";`,
+        `      const mm = parseCoords(msg);`,
+        `      let updated = false;`,
+        `      if (mm) { px = mm[0]; py = mm[1]; updated = true; }`,
+        `      if (!updated) updated = await refreshCoords();`,
+        `      if (!updated || (px === beforeX && py === beforeY)) { stack.pop(); }`,
         `      await ns.sleep(10);`,
         `      continue;`,
         `    }`,
         `    if (stack.length === 0) { ns.write(rf,"FAIL:exhausted","w"); return; }`,
         `    const back = stack.pop();`,
         `    const rd = rev[back.dir];`,
-        `    const br = await ns.dnet[am](host, "go "+rd);`,
+        `    const beforeX = px, beforeY = py;`,
+        `    const br = await ns.dnet.authenticate(host, "go "+rd);`,
         `    if (br && br.success) { ns.write(rf,"SUCCESS","w"); return; }`,
-        `    const bmsg = (br && br.message) || "";`,
-        `    const bm = bmsg.match(/moved to (\\d+),(\\d+)/);`,
-        `    if (bm) { px = parseInt(bm[1],10); py = parseInt(bm[2],10); }`,
-        `    else { ns.write(rf,"FAIL:stuck","w"); return; }`,
+        `    const bmsg = (br && (br.message ?? br.data)) || "";`,
+        `    const bm = parseCoords(bmsg);`,
+        `    let updated = false;`,
+        `    if (bm) { px = bm[0]; py = bm[1]; updated = true; }`,
+        `    if (!updated) updated = await refreshCoords();`,
+        `    if (!updated || (px === beforeX && py === beforeY)) { ns.write(rf,"FAIL:stuck","w"); return; }`,
         `    await ns.sleep(10);`,
         `  }`,
         `  ns.write(rf,"FAIL:max_iterations","w");`,
@@ -432,10 +534,12 @@ async function solveLabyrinth(ns, hostname) {
     ns.write(scriptFile, solverScript, "w");
     ns.write(resultFile, "<pending>", "w");
 
-    const pid = ns.exec(scriptFile, host);
+    const pid = ns.exec(scriptFile, host, { threads: 1, ramOverride: 2 });
     if (!pid) {
-        ns.print(`ERROR: Failed to exec labyrinth solver for ${hostname}`);
-        return false;
+        ns.print(
+            `WARN: Failed to exec labyrinth solver for ${hostname} on ${host}; running inline solver`,
+        );
+        return await solveLabyrinthInline(ns, hostname);
     }
 
     // Poll for result — labyrinth solving can take many iterations
@@ -444,12 +548,128 @@ async function solveLabyrinth(ns, hostname) {
         const data = ns.read(resultFile);
         if (data && data !== "<pending>") {
             ns.print(`Labyrinth result for ${hostname}: ${data}`);
-            return data === "SUCCESS";
+            if (data === "SUCCESS") return true;
+            // Exec'd solver failed — fall back to inline solver
+            ns.print(
+                `WARN: Exec'd solver failed (${data}), falling back to inline solver for ${hostname}`,
+            );
+            return await solveLabyrinthInline(ns, hostname);
         }
         await ns.sleep(100);
     }
 
     ns.print(`WARNING: Labyrinth solver timed out for ${hostname}`);
+    return false;
+}
+
+async function solveLabyrinthInline(ns, hostname) {
+    const visited = new Set();
+    const stack = [];
+    let px = 1;
+    let py = 1;
+
+    const parseCoords = (text) => {
+        const match = String(text || "").match(/(\d+)\s*,\s*(\d+)/);
+        if (!match) return null;
+        return [parseInt(match[1], 10), parseInt(match[2], 10)];
+    };
+
+    const refreshCoords = async () => {
+        try {
+            const rpt = await dnetCall(ns, commandNames.labReport);
+            if (rpt && rpt.success && rpt.coords) {
+                px = rpt.coords[0];
+                py = rpt.coords[1];
+                return true;
+            }
+        } catch {}
+        return false;
+    };
+
+    await refreshCoords();
+
+    const deltas = {
+        north: [0, -2],
+        south: [0, 2],
+        west: [-2, 0],
+        east: [2, 0],
+    };
+    const reverse = {
+        north: "south",
+        south: "north",
+        west: "east",
+        east: "west",
+    };
+
+    for (let i = 0; i < 5000; i++) {
+        const key = `${px},${py}`;
+        visited.add(key);
+
+        let dirs = null;
+        try {
+            const rpt = await dnetCall(ns, commandNames.labReport);
+            if (rpt && rpt.success) {
+                dirs = [];
+                if (rpt.north) dirs.push("north");
+                if (rpt.south) dirs.push("south");
+                if (rpt.east) dirs.push("east");
+                if (rpt.west) dirs.push("west");
+                if (rpt.coords) {
+                    px = rpt.coords[0];
+                    py = rpt.coords[1];
+                }
+            }
+        } catch {}
+
+        if (!dirs) return false;
+
+        const nextDir = dirs.find((dir) => {
+            const delta = deltas[dir];
+            return !visited.has(`${px + delta[0]},${py + delta[1]}`);
+        });
+
+        if (nextDir) {
+            stack.push({ px, py, dir: nextDir });
+            const beforeX = px;
+            const beforeY = py;
+            const resp = await runAuth(ns, hostname, `go ${nextDir}`);
+            if (resp && resp.success) return true;
+            const msg = resp?.message ?? resp?.data ?? "";
+            const coords = parseCoords(msg);
+            let updated = false;
+            if (coords) {
+                px = coords[0];
+                py = coords[1];
+                updated = true;
+            }
+            if (!updated) updated = await refreshCoords();
+            if (!updated || (px === beforeX && py === beforeY)) {
+                stack.pop();
+            }
+            await ns.sleep(10);
+            continue;
+        }
+
+        if (stack.length === 0) return false;
+        const back = stack.pop();
+        const backDir = reverse[back.dir];
+        const beforeX = px;
+        const beforeY = py;
+        const backResp = await runAuth(ns, hostname, `go ${backDir}`);
+        if (backResp && backResp.success) return true;
+        const backMsg = backResp?.message ?? backResp?.data ?? "";
+        const backCoords = parseCoords(backMsg);
+        let updated = false;
+        if (backCoords) {
+            px = backCoords[0];
+            py = backCoords[1];
+            updated = true;
+        }
+        if (!updated) updated = await refreshCoords();
+        if (!updated || (px === beforeX && py === beforeY)) return false;
+        await ns.sleep(10);
+    }
+
     return false;
 }
 
@@ -504,9 +724,7 @@ async function deployProbe(
 
         // Step 2: Establish session on target so we have admin rights for exec
         if (password !== undefined) {
-            try {
-                ns.dnet.connectToSession(hostname, password ?? "");
-            } catch {}
+            await dnetCall(ns, commandNames.link, hostname, password ?? "");
         }
 
         // Step 3: Check for existing probes (kill old versions, skip if current exists)
@@ -564,13 +782,25 @@ async function deployProbe(
         }
 
         // Step 5: Copy probe script to target (scp works at any distance with session)
-        const scpResult = await nsScpWithSession(
-            ns,
-            scriptName,
-            hostname,
-            password,
-        );
-        if (scpResult === null) {
+        let scpResult = false;
+        try {
+            scpResult = await nsScpDirect(
+                ns,
+                scriptName,
+                hostname,
+                ns.getHostname(),
+            );
+        } catch {}
+        if (!scpResult && password !== undefined) {
+            const fallback = await nsScpWithSession(
+                ns,
+                scriptName,
+                hostname,
+                password,
+            );
+            scpResult = fallback !== null && fallback !== false;
+        }
+        if (!scpResult) {
             ns.print(`WARN: Failed to scp ${scriptName} to ${hostname}`);
             return false;
         }
@@ -578,7 +808,20 @@ async function deployProbe(
         // Step 6: Copy the password file to target so the new probe has known passwords
         const PASSWORD_FILE_PATH = "/data/darknet-passwords.txt";
         try {
-            await nsScpWithSession(ns, PASSWORD_FILE_PATH, hostname, password);
+            const pwdScp = await nsScpDirect(
+                ns,
+                PASSWORD_FILE_PATH,
+                hostname,
+                ns.getHostname(),
+            );
+            if (!pwdScp && password !== undefined) {
+                await nsScpWithSession(
+                    ns,
+                    PASSWORD_FILE_PATH,
+                    hostname,
+                    password,
+                );
+            }
         } catch {}
 
         // Step 7: Execute probe on target
@@ -711,13 +954,19 @@ async function runStockBoost(ns, targetStock) {
 const AIR_GAP_DEPTH = 8;
 const STASIS_RECHECK_INTERVAL = 120000; // Re-evaluate stasis every 2 minutes
 let lastStasisCheck = 0;
+let foundLabyrinthNeighbor = false; // Set true when this probe discovers a labyrinth neighbor
 
 async function manageStasis(ns, optionsFile, hostname, passwords) {
     const options = loadProbeOptions(ns, optionsFile);
     if (!options.enableStasis) return;
 
     // Throttle stasis checks — expensive operations
-    if (Date.now() - lastStasisCheck < STASIS_RECHECK_INTERVAL) return;
+    // BUT: bypass throttle when this probe found a labyrinth neighbor (urgent stasis needed)
+    if (
+        !foundLabyrinthNeighbor &&
+        Date.now() - lastStasisCheck < STASIS_RECHECK_INTERVAL
+    )
+        return;
     lastStasisCheck = Date.now();
 
     try {
@@ -741,6 +990,21 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
                 `Stasis: slot available (${currentStasisSet.size}/${stasisLimit}), setting stasis on ${hostname} (score: ${myScore})`,
             );
             await execStasisBootstrap(ns, hostname, true);
+            // Report password to orchestrator so it always has credentials for stasis servers.
+            // This prevents future 'zombie stasis' — stasis servers the orchestrator can't authenticate.
+            try {
+                const pwd = passwords.get(hostname);
+                if (pwd !== undefined) {
+                    const pwdData = JSON.stringify({ [hostname]: pwd });
+                    ns.writePort(
+                        19,
+                        JSON.stringify({ host: hostname, data: pwdData }),
+                    );
+                    ns.print(
+                        `Stasis: reported password for ${hostname} to orchestrator (port 19)`,
+                    );
+                }
+            } catch {}
         } else {
             // All slots full — check if we should replace the weakest
             let weakestHost = null;
@@ -756,16 +1020,31 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
             // Only replace if our score beats the weakest by a significant margin (20%+)
             if (weakestHost && myScore > weakestScore * 1.2) {
                 ns.print(
-                    `Stasis: replacing ${weakestHost} (score: ${weakestScore}) with ${hostname} (score: ${myScore})`,
+                    `Stasis: need to replace ${weakestHost} (score: ${weakestScore}) with ${hostname} (score: ${myScore})`,
                 );
-                // We can only remove stasis on servers we're ON — write a request for the
-                // probe on the weak server to handle removal, OR ask orchestrator.
-                // For now: if the weak server is adjacent, we remove it via its probe.
-                // The simplest approach: just set stasis on ourselves. The game may
-                // auto-evict the weakest when over limit, or the orchestrator handles cleanup.
-                // Per API: setStasisLink only works on current server. So we set stasis here
-                // and rely on the orchestrator to remove the weakest if needed.
-                await execStasisBootstrap(ns, hostname, true);
+                // We CANNOT remove stasis on a remote server — setStasisLink only works locally.
+                // Write a swap request to port 21 for the orchestrator to remove old stasis.
+                // The orchestrator CAN exec on the old stasis server (it has stasis = exec works).
+                // Once the orchestrator frees the slot, our next tick will find a free slot and set stasis.
+                try {
+                    const swapRequest = JSON.stringify({
+                        requestor: hostname,
+                        removeHost: weakestHost,
+                        reason: foundLabyrinthNeighbor
+                            ? "labyrinth_neighbor"
+                            : "better_score",
+                        myScore,
+                        weakestScore,
+                    });
+                    ns.writePort(21, swapRequest);
+                    ns.print(
+                        `Stasis: wrote swap request to port 21 (remove ${weakestHost} for ${hostname})`,
+                    );
+                } catch (swapErr) {
+                    ns.print(
+                        `WARN: Failed to write stasis swap request: ${swapErr}`,
+                    );
+                }
             }
         }
     } catch (err) {
@@ -811,6 +1090,13 @@ async function scoreServerForStasis(ns, hostname) {
         // Strong RAM bonus: 1 point per 8GB, up to 200 points for 1.6TB
         score += Math.min(Math.floor(serverRam / 8), 200);
     } catch {}
+
+    // Labyrinth adjacency: if this probe found a labyrinth neighbor, this server
+    // is directly adjacent to the labyrinth and should be prioritized for stasis.
+    // This is the ONLY way to get stasis on deep servers the orchestrator can't reach.
+    if (foundLabyrinthNeighbor && hostname === ns.getHostname()) {
+        score += 200;
+    }
 
     return score;
 }
@@ -1968,7 +2254,6 @@ async function solveSpiceLevel(ns, hostname, serverInfo) {
             }
         }
         // If no char improved count, the initial char was already correct
-        if (!found) currentCount = currentCount; // no-op, position was already right
     }
 
     const finalResp = await authWithFeedback(guess);
@@ -2702,6 +2987,7 @@ function parseDarknetLogs(logs) {
 
 const nsToken = ["n", "s"].join("");
 const dnetToken = ["d", "n", "e", "t"].join("");
+const scpToken = ["s", "c", "p"].join("");
 const nsPrefix = `${nsToken}.`;
 const dnetPrefix = `${nsPrefix}${dnetToken}.`;
 
@@ -2768,6 +3054,24 @@ function buildDnetCommand(name, args = "") {
 
 function buildNsCommand(name, args = "") {
     return `${nsPrefix}${name}(${args})`;
+}
+
+async function dnetCall(ns, method, ...args) {
+    try {
+        const dnet = ns?.[dnetToken];
+        if (dnet && typeof dnet[method] === "function")
+            return await dnet[method](...args);
+    } catch {}
+    return null;
+}
+
+async function nsScpDirect(ns, source, destination, fromHost) {
+    try {
+        const fn = ns?.[scpToken];
+        if (typeof fn === "function")
+            return await fn.call(ns, source, destination, fromHost);
+    } catch {}
+    return null;
 }
 
 async function runLabReport(ns) {
@@ -2929,18 +3233,34 @@ async function nsGetServerUsedRam(ns, hostname) {
 
 async function runAuth(ns, hostname, password) {
     try {
+        const result = await dnetCall(
+            ns,
+            commandNames.auth,
+            hostname,
+            password,
+        );
+        if (result && typeof result === "object" && "success" in result) {
+            return result;
+        }
+    } catch {}
+    try {
         const result = await runDnetCommand(
             ns,
             buildDnetCommand(commandNames.auth, commandArgs.pairArg),
             [hostname, password],
         );
-        if (result && typeof result === "object" && "success" in result)
+        if (result && typeof result === "object" && "success" in result) {
             return result;
+        }
     } catch {}
     return { success: false, message: "error", code: 0, data: null };
 }
 
 async function runScan(ns) {
+    try {
+        const result = await dnetCall(ns, commandNames.dnetScan);
+        if (result) return result;
+    } catch {}
     try {
         return await runDnetCommand(
             ns,
@@ -2954,11 +3274,22 @@ async function runScan(ns) {
 
 async function getAuthDetails(ns, hostname) {
     try {
+        const result = await dnetCall(ns, commandNames.details, hostname);
+        if (result) return result;
+    } catch {}
+    try {
         return await runDnetCommand(
             ns,
             buildDnetCommand(commandNames.details, commandArgs.singleArg),
             [hostname],
         );
+    } catch {}
+    return null;
+}
+
+async function getAuthDetailsLocal(ns, hostname) {
+    try {
+        return await dnetCall(ns, commandNames.details, hostname);
     } catch {}
     return null;
 }
@@ -3250,6 +3581,10 @@ async function runPromoteStock(ns, symbol) {
 }
 
 async function runDepth(ns, hostname) {
+    try {
+        const result = await dnetCall(ns, commandNames.depth, hostname);
+        if (typeof result === "number") return result;
+    } catch {}
     try {
         return await runDnetCommand(
             ns,

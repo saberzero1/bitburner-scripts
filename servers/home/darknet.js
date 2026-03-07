@@ -60,13 +60,74 @@ const PASSWORD_FILE = "/data/darknet-passwords.txt";
 const OPTIONS_FILE = "/data/darknet-options.txt";
 const CLUE_CACHE_FILE = "/data/darknet-clues-scanned.txt";
 const STASIS_HELPER_SCRIPT = "/Temp/darknet-stasis-helper.js";
-const STASIS_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const enable = ns.args[0] === 'true'; ns.dnet.setStasisLink(enable); }`;
+const STASIS_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const enable = ns.args[0] === 'true'; await ns.dnet.setStasisLink(enable); }`;
 const MUTATION_HELPER_SCRIPT = "/Temp/darknet-mutation-wait.js";
 const MUTATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { await ns.dnet.nextMutation(); ns.write('/Temp/mutation-done.txt', 'done', 'w'); ns.rm('${MUTATION_HELPER_SCRIPT}'); }`;
 const RAMFREE_HELPER_SCRIPT = "/Temp/darknet-ramfree.js";
 const RAMFREE_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { while (ns.dnet.getBlockedRam() > 0) { await ns.dnet.memoryReallocation(); await ns.sleep(50); } ns.write('/Temp/ramfree-done.txt', 'done', 'w'); }`;
 const RAMFREE_RESULT_FILE = "/Temp/ramfree-done.txt";
-const PROBE_VERSION = 25;
+const LAB_SOLVER_SCRIPT = "/Temp/darknet-lab-solver.js";
+const LAB_SOLVER_RESULT_PORT = 18; // Netscript port for labyrinth solver results
+const LAB_NEIGHBOR_REPORT_PORT = 17; // Netscript port for probe-reported labyrinth neighbors
+const STASIS_SWAP_REQUEST_PORT = 21; // Netscript port for probe stasis swap requests
+const STASIS_PWD_PORT = 19; // Netscript port for probe-reported stasis server passwords
+
+// Self-contained labyrinth solver script. Deployed to a stasis-linked neighbor of a
+// labyrinth server. Uses DFS with backtracking. Position is per-PID so we must solve
+// entirely within one exec. Args: [labHostname, resultPort]
+const LAB_SOLVER_CONTENT = [
+    `/** @param {NS} ns */ export async function main(ns) {`,
+    `  const hostname = ns.args[0];`,
+    `  const port = ns.args[1];`,
+    `  const visited = new Set();`,
+    `  const stack = [];`,
+    `  const dirs = ["north", "south", "east", "west"];`,
+    `  const delta = { north: [0,-2], south: [0,2], west: [-2,0], east: [2,0] };`,
+    `  const rev = { north: "south", south: "north", west: "east", east: "west" };`,
+    `  let pos = [1,1];`,
+    `  for (let i = 0; i < 5000; i++) {`,
+    `    let report;`,
+    `    try { report = ns.dnet.labreport(); } catch { await ns.sleep(200); continue; }`,
+    `    if (!report || !report.success) { await ns.sleep(200); continue; }`,
+    `    pos = [report.coords[0], report.coords[1]];`,
+    `    const key = pos[0] + "," + pos[1];`,
+    `    visited.add(key);`,
+    `    let moved = false;`,
+    `    for (const d of dirs) {`,
+    `      if (!report[d]) continue;`,
+    `      const nk = (pos[0]+delta[d][0]) + "," + (pos[1]+delta[d][1]);`,
+    `      if (visited.has(nk)) continue;`,
+    `      const r = await ns.dnet.authenticate(hostname, "go " + d);`,
+    `      if (r.success) {`,
+    `        ns.writePort(port, JSON.stringify({ host: hostname, password: r.data ?? r.message }));`,
+    `        return;`,
+    `      }`,
+    `      const mm = (r.message || "").match(/moved to (\\d+),(\\d+)/);`,
+    `      if (mm) {`,
+    `        stack.push({ pos: [...pos], dir: d });`,
+    `        pos = [parseInt(mm[1],10), parseInt(mm[2],10)];`,
+    `        moved = true;`,
+    `        break;`,
+    `      }`,
+    `    }`,
+    `    if (!moved) {`,
+    `      if (stack.length === 0) { ns.writePort(port, JSON.stringify({ host: hostname, error: "stuck" })); return; }`,
+    `      const back = stack.pop();`,
+    `      const br = await ns.dnet.authenticate(hostname, "go " + rev[back.dir]);`,
+    `      if (br.success) {`,
+    `        ns.writePort(port, JSON.stringify({ host: hostname, password: br.data ?? br.message }));`,
+    `        return;`,
+    `      }`,
+    `      const bm = (br.message || "").match(/moved to (\\d+),(\\d+)/);`,
+    `      if (bm) { pos = [parseInt(bm[1],10), parseInt(bm[2],10)]; }`,
+    `      else { ns.writePort(port, JSON.stringify({ host: hostname, error: "backtrack failed" })); return; }`,
+    `    }`,
+    `    await ns.sleep(50);`,
+    `  }`,
+    `  ns.writePort(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
+    `}`,
+].join("\n");
+const PROBE_VERSION = 32;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -185,9 +246,14 @@ class DarknetState {
         this.knownPasswords = new Map(); // hostname -> password
         this.activeProbes = new Map(); // hostname -> { pid, version }
         this.stasisServers = new Set(); // hostnames with active stasis links
+        this.zombieStasisServers = new Set(); // stasis servers we can't interact with (no password, no auth)
         this.scannedClueFiles = new Set(); // set of file paths already scanned
         this.pendingMigrations = new Map(); // hostname -> { charge, lastAttempt }
         this.authenticatedServers = new Set(); // servers confirmed to have admin
+        this.labyrinthServers = new Set(); // hostnames with modelId === "(The Labyrinth)"
+        this.labyrinthNeighbors = new Map(); // labHostname -> Set of authenticated neighbor hostnames
+        this.activeLabSolvers = new Map(); // labHostname -> { pid, solverHost, deployedAt }
+        this.probeAdjacency = new Map(); // discoveredHostname -> Set of probing source hostnames (rebuilt each tick)
         this.lastRefresh = 0;
         this.lastStatusLog = 0;
         this.lastStats = {
@@ -398,6 +464,92 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 1: Ensure home has a probe running
     await ensureHomeProbe(ns, state, options);
 
+    // Step 1b: Collect labyrinth neighbor reports from probes (port 17).
+    // Probes at any depth write { labHost, neighbor } whenever they discover a labyrinth.
+    // Clear previous neighbors each tick and rebuild from fresh reports to prune stale entries
+    // (darknet servers move, so old neighbors may no longer be adjacent).
+    // Prune stale neighbors: clear all neighbor sets, then rebuild from fresh port data.
+    // We keep the outer Map keys (labyrinth hostnames) since labyrinthServers is the source of truth.
+    for (const [, neighbors] of state.labyrinthNeighbors) {
+        neighbors.clear();
+    }
+
+    while (ns.peek(LAB_NEIGHBOR_REPORT_PORT) !== "NULL PORT DATA") {
+        const raw = ns.readPort(LAB_NEIGHBOR_REPORT_PORT);
+        try {
+            const msg = JSON.parse(String(raw));
+            if (msg.labHost && msg.neighbor) {
+                state.labyrinthServers.add(msg.labHost);
+                if (!state.labyrinthNeighbors.has(msg.labHost)) {
+                    state.labyrinthNeighbors.set(msg.labHost, new Set());
+                }
+                state.labyrinthNeighbors.get(msg.labHost).add(msg.neighbor);
+                // Ingest the neighbor's password so the orchestrator knows it's authenticated
+                // (required for stasis swap scoring and solver deployment)
+                if (
+                    msg.neighborPwd != null &&
+                    !state.knownPasswords.has(msg.neighbor)
+                ) {
+                    state.addPassword(ns, msg.neighbor, msg.neighborPwd);
+                    if (verbose)
+                        log(
+                            ns,
+                            `INFO Learned password for labyrinth neighbor ${msg.neighbor} from probe report`,
+                        );
+                }
+                // Ensure the neighbor is in discoveredServers so stasis swap considers it
+                if (!state.discoveredServers.has(msg.neighbor)) {
+                    state.discoveredServers.set(
+                        msg.neighbor,
+                        new DarknetServerInfo(msg.neighbor, {
+                            modelId: "unknown",
+                            passwordHint: null,
+                            staticPasswordHint: null,
+                            passwordHintData: null,
+                            isOnline: true,
+                            isConnectedToCurrentServer: false,
+                            hasSession: false,
+                            passwordFormat: null,
+                            passwordLength: null,
+                            depth: null,
+                        }),
+                    );
+                }
+                if (verbose)
+                    log(
+                        ns,
+                        `INFO Probe reported labyrinth ${msg.labHost} neighbor: ${msg.neighbor}`,
+                    );
+            }
+        } catch {}
+    }
+
+    // Step 1c: Collect stasis server passwords reported by probes (port 19).
+    // When a probe sets stasis on itself, it writes its password here so the orchestrator
+    // always has credentials for stasis servers — preventing future 'zombie stasis' situations.
+    while (ns.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
+        const raw = ns.readPort(STASIS_PWD_PORT);
+        try {
+            const msg = JSON.parse(String(raw));
+            if (msg.data) {
+                const remotePwds = JSON.parse(msg.data);
+                let newCount = 0;
+                for (const [host, pwd] of Object.entries(remotePwds)) {
+                    if (!state.knownPasswords.has(host)) {
+                        state.addPassword(ns, host, pwd);
+                        newCount++;
+                    }
+                }
+                if (newCount > 0) {
+                    log(
+                        ns,
+                        `Collected ${newCount} new password(s) from probe stasis report (${msg.host})`,
+                    );
+                }
+            }
+        } catch {}
+    }
+
     // Step 2: Discover servers via probe from home (sees only darkweb)
     let nearbyServers = safeProbe(ns);
 
@@ -411,6 +563,22 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 3: Build a prioritized work queue
     const workQueue = buildWorkQueue(ns, state, nearbyServers, options);
 
+    // Step 3b: Update labyrinth neighbors from probeAdjacency for ALL known labyrinths
+    // buildWorkQueue only updates neighbors for labyrinths appearing in this tick's nearbyServers.
+    // If a labyrinth was discovered previously but its neighbor's probe didn't run this tick,
+    // we still need to keep labyrinthNeighbors populated from probeAdjacency.
+    for (const labHost of state.labyrinthServers) {
+        const sources = state.probeAdjacency.get(labHost);
+        if (sources && sources.size > 0) {
+            if (!state.labyrinthNeighbors.has(labHost)) {
+                state.labyrinthNeighbors.set(labHost, new Set());
+            }
+            for (const src of sources) {
+                state.labyrinthNeighbors.get(labHost).add(src);
+            }
+        }
+    }
+
     // Step 4: Process each server
     for (const hostname of workQueue) {
         await processServer(ns, state, hostname, options);
@@ -422,11 +590,29 @@ async function orchestrateDarknet(ns, state, options) {
     // saved passwords to their local /data/darknet-passwords.txt — pull those back.
     for (const stasisHost of state.stasisServers) {
         if (stasisHost === "home") continue;
+        // Detect zombie stasis servers: no password known AND auth details are all undefined.
+        // These servers have active stasis links in the game registry but we've completely
+        // lost access — no password, no admin rights, no session. Skip them to avoid
+        // wasting time on exec/scp that will always fail.
+        const zombieCheck = safeGetAuthDetails(ns, stasisHost);
+        const pwd = state.getPassword(stasisHost);
+        if (
+            pwd === undefined &&
+            (!zombieCheck || zombieCheck.hasAdminRights === undefined)
+        ) {
+            if (!state.zombieStasisServers.has(stasisHost)) {
+                state.zombieStasisServers.add(stasisHost);
+                log(
+                    ns,
+                    `Zombie stasis detected: ${stasisHost} has stasis but no password and no auth details — marking as unreachable`,
+                );
+            }
+            continue;
+        }
         try {
             // Alternative approach: exec a tiny helper on the stasis server that writes
             // its password file contents to a Netscript port. This avoids overwriting
             // home's password file.
-            const STASIS_PWD_PORT = 19;
             const helperScript = `/Temp/stasis-pwd-helper-${stasisHost.replace(/[^a-zA-Z0-9]/g, "_")}.js`;
             const helperContent =
                 `/** @param {NS} ns */ export async function main(ns) {` +
@@ -439,6 +625,13 @@ async function orchestrateDarknet(ns, state, options) {
             const usedRam = ns.getServerUsedRam(stasisHost);
             const freeRam = Math.max(0, maxRam - usedRam);
             if (freeRam >= 1.7) {
+                // Establish session if we already know the password (may have been saved from a previous run)
+                const pwd = state.getPassword(stasisHost);
+                if (pwd !== undefined) {
+                    try {
+                        ns.dnet.connectToSession(stasisHost, pwd);
+                    } catch {}
+                }
                 ns.write(helperScript, helperContent, "w");
                 ns.scp(helperScript, stasisHost, "home");
                 const pid = ns.exec(helperScript, stasisHost, 1);
@@ -508,6 +701,79 @@ async function orchestrateDarknet(ns, state, options) {
         await scanAllClueFiles(ns, state, options);
     }
 
+    // Step 5b: Process stasis swap requests from probes (port 21).
+    // Probes on deep servers can't remove stasis on OTHER servers (setStasisLink is local-only).
+    // When a probe wants stasis but all slots are full, it writes a swap request here.
+    // The orchestrator CAN exec on existing stasis servers, so it removes the weakest.
+    // On the probe's next tick, it will find a free slot and set stasis on itself.
+    {
+        // Collect all swap requests, then process the best one
+        const swapRequests = [];
+        while (ns.peek(STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") {
+            const raw = ns.readPort(STASIS_SWAP_REQUEST_PORT);
+            try {
+                const req = JSON.parse(String(raw));
+                if (req.removeHost && req.requestor) swapRequests.push(req);
+            } catch {}
+        }
+        if (swapRequests.length > 0) {
+            // If ALL stasis slots are occupied by zombies, swap is impossible — just drain the requests
+            const allZombie = [...state.stasisServers].every((h) =>
+                state.zombieStasisServers.has(h),
+            );
+            if (allZombie) {
+                if (verbose)
+                    log(
+                        ns,
+                        `INFO: All ${state.stasisServers.size} stasis slot(s) are zombies — ignoring ${swapRequests.length} swap request(s). Probes solve labyrinths directly.`,
+                    );
+            } else {
+                // Pick the request with the highest score (best candidate to receive stasis)
+                swapRequests.sort(
+                    (a, b) => (b.myScore || 0) - (a.myScore || 0),
+                );
+                const best = swapRequests[0];
+                if (state.zombieStasisServers.has(best.removeHost)) {
+                    // Target is a zombie — can't remove stasis, skip
+                    if (verbose)
+                        log(
+                            ns,
+                            `INFO: Swap target ${best.removeHost} is a zombie stasis server — cannot remove. Ignoring ${swapRequests.length} requests.`,
+                        );
+                } else if (state.stasisServers.has(best.removeHost)) {
+                    log(
+                        ns,
+                        `Stasis swap: processing best of ${swapRequests.length} requests — ${best.requestor} (score: ${best.myScore}) wants to replace ${best.removeHost} (score: ${best.weakestScore})`,
+                    );
+                    const removed = await execStasisLink(
+                        ns,
+                        state,
+                        best.removeHost,
+                        false,
+                        options,
+                    );
+                    if (removed) {
+                        state.stasisServers.delete(best.removeHost);
+                        state.zombieStasisServers.delete(best.removeHost);
+                        log(
+                            ns,
+                            `Stasis swap: removed stasis from ${best.removeHost} — slot now free for ${best.requestor}`,
+                        );
+                    } else {
+                        log(
+                            ns,
+                            `WARN: Stasis swap: failed to remove stasis from ${best.removeHost} (will retry next tick)`,
+                        );
+                    }
+                } else if (verbose) {
+                    log(
+                        ns,
+                        `INFO: Stasis swap target ${best.removeHost} no longer stasis-linked, ignoring ${swapRequests.length} requests`,
+                    );
+                }
+            }
+        }
+    }
     // Step 6: Manage stasis links (exec from target server)
     await manageStasisLinks(ns, state, options);
 
@@ -518,6 +784,70 @@ async function orchestrateDarknet(ns, state, options) {
 
     // Step 8: Clean up orphaned probes
     cleanupOrphanedProbes(ns, state);
+
+    // Step 8b: Collect labyrinth solver results from port
+    while (ns.peek(LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
+        const raw = ns.readPort(LAB_SOLVER_RESULT_PORT);
+        try {
+            const msg = JSON.parse(String(raw));
+            if (msg.password && msg.host) {
+                log(ns, `SUCCESS: Labyrinth solver cracked ${msg.host}!`);
+                // The solver got the password from authenticate's success response
+                state.addPassword(ns, msg.host, msg.password);
+                state.authenticatedServers.add(msg.host);
+                // Clean up solver script on the solver host
+                const solverInfo = state.activeLabSolvers.get(msg.host);
+                state.activeLabSolvers.delete(msg.host);
+                if (solverInfo) {
+                    try {
+                        ns.rm(LAB_SOLVER_SCRIPT, solverInfo.solverHost);
+                    } catch {}
+                }
+            } else if (msg.error) {
+                log(
+                    ns,
+                    `WARN: Labyrinth solver failed for ${msg.host}: ${msg.error}`,
+                );
+                state.activeLabSolvers.delete(msg.host);
+            }
+        } catch {}
+    }
+
+    // Step 8c: Clean up finished/timed-out labyrinth solvers
+    for (const [labHost, info] of state.activeLabSolvers) {
+        try {
+            const running = ns
+                .ps(info.solverHost)
+                .some((p) => p.pid === info.pid);
+            if (!running) {
+                // Solver finished without writing to port (crash or killed)
+                if (verbose)
+                    log(
+                        ns,
+                        `Labyrinth solver for ${labHost} on ${info.solverHost} is no longer running`,
+                    );
+                state.activeLabSolvers.delete(labHost);
+                try {
+                    ns.rm(LAB_SOLVER_SCRIPT, info.solverHost);
+                } catch {}
+            } else if (Date.now() - info.deployedAt > 300000) {
+                // Solver running >5 min — likely stuck, kill it
+                log(
+                    ns,
+                    `WARN: Killing stuck labyrinth solver for ${labHost} (PID ${info.pid})`,
+                );
+                try {
+                    ns.kill(info.pid);
+                } catch {}
+                state.activeLabSolvers.delete(labHost);
+                try {
+                    ns.rm(LAB_SOLVER_SCRIPT, info.solverHost);
+                } catch {}
+            }
+        } catch {
+            state.activeLabSolvers.delete(labHost);
+        }
+    }
 
     // Step 9: Log status
     logStatus(ns, state, verbose);
@@ -545,6 +875,9 @@ function safeProbe(ns) {
  */
 async function discoverFromAuthedServers(ns, state) {
     const discovered = [];
+
+    // Reset probe adjacency map each tick (rebuilt from fresh probe data)
+    state.probeAdjacency = new Map();
 
     // Always try darkweb first — it sees all depth-0 servers
     const probeTargets = [DARKWEB_HOSTNAME];
@@ -582,7 +915,7 @@ async function discoverFromAuthedServers(ns, state) {
             const helperContent =
                 `/** @param {NS} ns */ export async function main(ns) {` +
                 ` const result = ns.dnet.probe();` +
-                ` const data = JSON.stringify(result ?? []);` +
+                ` const data = JSON.stringify({ source: ns.getHostname(), servers: result ?? [] });` +
                 ` ns.writePort(${DISCOVERY_PORT}, data);` +
                 `}`;
 
@@ -600,14 +933,23 @@ async function discoverFromAuthedServers(ns, state) {
                 if (!ns.ps(target).some((p) => p.pid === pid)) break;
             }
 
-            // Read all results from the port (the script wrote one JSON array)
+            // Read all results from the port (the script wrote one JSON object with source + servers)
             while (ns.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
                 const raw = ns.readPort(DISCOVERY_PORT);
                 try {
-                    const servers = JSON.parse(String(raw));
+                    const parsed = JSON.parse(String(raw));
+                    const source = parsed?.source;
+                    const servers = parsed?.servers;
                     if (Array.isArray(servers)) {
                         for (const s of servers) {
                             if (!discovered.includes(s)) discovered.push(s);
+                            // Record adjacency: source can reach s
+                            if (source) {
+                                if (!state.probeAdjacency.has(s)) {
+                                    state.probeAdjacency.set(s, new Set());
+                                }
+                                state.probeAdjacency.get(s).add(source);
+                            }
                         }
                     }
                 } catch {}
@@ -655,6 +997,21 @@ function buildWorkQueue(ns, state, nearbyServers, options) {
         // Track depth
         if (serverInfo.depth !== null) {
             state.serverDepths.set(hostname, serverInfo.depth);
+        }
+
+        // Detect labyrinth servers and track their neighbors (from probe adjacency data)
+        if (serverInfo.modelId === "(The Labyrinth)") {
+            state.labyrinthServers.add(hostname);
+            // Populate labyrinthNeighbors from probeAdjacency
+            const sources = state.probeAdjacency.get(hostname);
+            if (sources && sources.size > 0) {
+                if (!state.labyrinthNeighbors.has(hostname)) {
+                    state.labyrinthNeighbors.set(hostname, new Set());
+                }
+                for (const src of sources) {
+                    state.labyrinthNeighbors.get(hostname).add(src);
+                }
+            }
         }
 
         // Skip already-authenticated servers for auth (but still add to discovered)
@@ -785,14 +1142,28 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
         state.cluePasswords.delete(hostname);
     }
 
-    // Labyrinth — must be solved by a probe running on an adjacent darknet server.
-    // labreport/labradar/authenticate all require direct connection or running on a
-    // darknet server, which the orchestrator on home cannot satisfy.
-    // Probes detect labyrinth modelId and solve it using a persistent-PID temp script.
+    // Labyrinth — deploy a dedicated solver to a stasis-linked neighbor.
+    // The solver runs as a single PID (position is per-PID) and walks the maze.
+    // labreport/authenticate require running on a darknet server or direct connection,
+    // so we deploy from home to a reachable neighbor that can reach the labyrinth.
     if (serverInfo.modelId === "(The Labyrinth)") {
-        if (verbose)
-            log(ns, `Labyrinth detected on ${hostname} — delegating to probes`);
-        return false;
+        const deployed = await deployLabyrinthSolver(
+            ns,
+            state,
+            hostname,
+            verbose,
+        );
+        if (deployed) {
+            if (verbose)
+                log(ns, `Labyrinth ${hostname}: solver deployed/running`);
+        } else {
+            if (verbose)
+                log(
+                    ns,
+                    `Labyrinth ${hostname}: no solver deployed yet (need stasis neighbor)`,
+                );
+        }
+        return false; // Don't try normal auth on labyrinth servers
     }
 
     // Re-check: another agent (probe) may have cracked this while we waited
@@ -848,6 +1219,140 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
 
     logAuthFailure(ns, state, hostname, serverInfo);
     return false;
+}
+
+/**
+ * Deploy a labyrinth solver script to a stasis-linked neighbor of the labyrinth.
+ * The solver runs as a single PID on the neighbor server (position is per-PID),
+ * walks the maze with DFS, and writes the password to a Netscript port on success.
+ * Returns true if a solver is already running or was just deployed.
+ */
+async function deployLabyrinthSolver(ns, state, hostname, verbose) {
+    // Check if a solver is already active for this labyrinth
+    const existing = state.activeLabSolvers.get(hostname);
+    if (existing) {
+        // Check if it's still running
+        try {
+            const running = ns
+                .ps(existing.solverHost)
+                .some((p) => p.pid === existing.pid);
+            if (running) {
+                if (verbose)
+                    log(
+                        ns,
+                        `Labyrinth solver already running on ${existing.solverHost} for ${hostname} (PID ${existing.pid})`,
+                    );
+                return true; // solver in flight
+            }
+        } catch {}
+        // Solver finished or crashed — clean up and allow re-deploy
+        state.activeLabSolvers.delete(hostname);
+    }
+
+    // Find a stasis-linked neighbor that can run the solver
+    const neighbors = state.labyrinthNeighbors.get(hostname);
+    if (!neighbors || neighbors.size === 0) {
+        if (verbose)
+            log(
+                ns,
+                `Labyrinth ${hostname}: no known neighbors yet (waiting for probe adjacency data). ` +
+                    `Known labyrinths: [${[...state.labyrinthServers].join(", ")}], ` +
+                    `probeAdjacency keys: [${[...state.probeAdjacency.keys()].join(", ")}]`,
+            );
+        return false;
+    }
+
+    let solverHost = null;
+    const rejectionReasons = [];
+    for (const neighbor of neighbors) {
+        // Must be reachable via exec from home: stasis-linked, darkweb, or connected
+        const isStasis = state.stasisServers.has(neighbor);
+        const isDarkweb = neighbor === "darkweb";
+        let isConnected = false;
+        try {
+            isConnected =
+                !!ns.dnet.getServerAuthDetails(neighbor)
+                    ?.isConnectedToCurrentServer;
+        } catch {}
+        if (isDarkweb || isStasis || isConnected) {
+            // Check RAM availability (~3 GB needed: 1.6 base + labreport + authenticate)
+            try {
+                const maxRam = ns.getServerMaxRam(neighbor);
+                const usedRam = ns.getServerUsedRam(neighbor);
+                if (maxRam - usedRam >= 4) {
+                    solverHost = neighbor;
+                    break;
+                } else {
+                    rejectionReasons.push(
+                        `${neighbor}: reachable but low RAM (${(maxRam - usedRam).toFixed(1)}/${maxRam}GB free, need 4GB)`,
+                    );
+                }
+            } catch {
+                rejectionReasons.push(
+                    `${neighbor}: reachable but RAM check failed`,
+                );
+            }
+        } else {
+            rejectionReasons.push(
+                `${neighbor}: not reachable (stasis=${isStasis}, connected=${isConnected})`,
+            );
+        }
+    }
+
+    if (!solverHost) {
+        if (verbose)
+            log(
+                ns,
+                `Labyrinth ${hostname}: no reachable neighbor with enough RAM. ` +
+                    `Neighbors: [${[...neighbors].join(", ")}], ` +
+                    `Stasis servers: [${[...state.stasisServers].join(", ")}]. ` +
+                    `Rejections: ${rejectionReasons.join("; ")}`,
+            );
+        return false;
+    }
+
+    // Deploy the solver
+    try {
+        // Establish session for this PID — exec/scp require per-PID session on darknet
+        const solverPwd = state.getPassword(solverHost);
+        if (solverPwd !== undefined) {
+            try {
+                ns.dnet.connectToSession(solverHost, solverPwd);
+            } catch {}
+        }
+        ns.write(LAB_SOLVER_SCRIPT, LAB_SOLVER_CONTENT, "w");
+        ns.scp(LAB_SOLVER_SCRIPT, solverHost, "home");
+        const pid = ns.exec(
+            LAB_SOLVER_SCRIPT,
+            solverHost,
+            1,
+            hostname,
+            LAB_SOLVER_RESULT_PORT,
+        );
+        if (pid <= 0) {
+            log(
+                ns,
+                `WARN: Failed to exec labyrinth solver on ${solverHost} for ${hostname}`,
+            );
+            return false;
+        }
+        state.activeLabSolvers.set(hostname, {
+            pid,
+            solverHost,
+            deployedAt: Date.now(),
+        });
+        log(
+            ns,
+            `Deployed labyrinth solver on ${solverHost} for ${hostname} (PID ${pid})`,
+        );
+        return true;
+    } catch (err) {
+        log(
+            ns,
+            `WARN: Labyrinth solver deploy failed for ${hostname}: ${getErrorInfo(err)}`,
+        );
+        return false;
+    }
 }
 
 function logAuthFailure(ns, state, hostname, serverInfo) {
@@ -1254,9 +1759,38 @@ async function manageStasisLinks(ns, state, options) {
             score += Math.min(Math.floor(serverRam / 2), 400);
         } catch {}
 
+        // Labyrinth adjacency: servers adjacent to unsolved labyrinths get a massive bonus
+        // to prioritize getting stasis links for labyrinth solving
+        for (const [labHost, neighbors] of state.labyrinthNeighbors) {
+            if (neighbors.has(hostname)) {
+                // Only boost if the labyrinth is not yet authenticated (unsolved)
+                if (!isServerAuthenticated(state, labHost)) {
+                    score += 200;
+                    break; // One bonus is enough
+                }
+            }
+        }
+
         scoreCache.set(hostname, score);
         return score;
     };
+
+    // Diagnostic: log labyrinth neighbor status in stasis management
+    if (state.labyrinthNeighbors.size > 0 && options.verbose) {
+        for (const [labHost, neighbors] of state.labyrinthNeighbors) {
+            const labSolved = isServerAuthenticated(state, labHost);
+            const neighborDetails = [...neighbors].map((n) => {
+                const isStasis = state.stasisServers.has(n);
+                const isAuthed = isServerAuthenticated(state, n);
+                const score = isAuthed ? scoreServer(n) : "N/A (unauthed)";
+                return `${n}(stasis=${isStasis}, authed=${isAuthed}, score=${score})`;
+            });
+            log(
+                ns,
+                `Labyrinth stasis info: ${labHost} (solved=${labSolved}), neighbors: ${neighborDetails.join(", ")}`,
+            );
+        }
+    }
 
     // Find candidates not yet stasis-linked
     const candidates = [];
@@ -1293,6 +1827,8 @@ async function manageStasisLinks(ns, state, options) {
         let weakestHost = null;
         let weakestScore = Infinity;
         for (const stasisHost of state.stasisServers) {
+            // Skip zombie stasis servers — we can't remove them, so they're not swap candidates
+            if (state.zombieStasisServers.has(stasisHost)) continue;
             const score = scoreServer(stasisHost);
             if (score < weakestScore) {
                 weakestScore = score;
@@ -1351,6 +1887,13 @@ async function execStasisLink(ns, state, hostname, enable, options) {
         return false;
     }
 
+    // Early exit for zombie stasis servers — servers we've already determined are unreachable.
+    // No point attempting exec/scp/connectToSession that will always fail.
+    if (state.zombieStasisServers.has(hostname)) {
+        if (options.verbose)
+            log(ns, `INFO: Skipping stasis exec on zombie server ${hostname}`);
+        return false;
+    }
     // Guard: ns.exec requires adjacency, backdoor, or stasis link from the calling server.
     // The orchestrator runs on home. From home, only 'darkweb' is adjacent.
     // We can also exec on servers that already have stasis links.
@@ -1392,19 +1935,103 @@ async function execStasisLink(ns, state, hostname, enable, options) {
             } catch {}
         }
 
-        ns.write(STASIS_HELPER_SCRIPT, STASIS_HELPER_CONTENT, "w");
-        ns.scp(STASIS_HELPER_SCRIPT, hostname, "home");
+        // Wait for RAM to be freed after killing processes — game needs an async tick
+        await ns.sleep(200);
 
-        const pid = ns.exec(STASIS_HELPER_SCRIPT, hostname, 1, String(enable));
-        if (pid <= 0) {
-            if (options.verbose) {
+        // Kill any remaining processes on the server that might block RAM
+        // (e.g. other temp scripts left behind)
+        const remainingProcs = ns
+            .ps(hostname)
+            .filter((p) => p.filename !== STASIS_HELPER_SCRIPT);
+        for (const proc of remainingProcs) {
+            try {
+                ns.kill(proc.pid);
+            } catch {}
+        }
+        if (remainingProcs.length > 0) await ns.sleep(100);
+
+        // Establish session for this PID — exec/scp on darknet requires a per-PID session
+        // (stasis link sets backdoorInstalled which bypasses direct connection, but session is separate)
+        const pwd = state.getPassword(hostname);
+        const authDetails = safeGetAuthDetails(ns, hostname);
+        if (options.verbose) {
+            log(
+                ns,
+                `Stasis exec diagnostics for ${hostname}: ` +
+                    `hasAdmin=${authDetails?.hasAdminRights}, ` +
+                    `backdoor=${authDetails?.backdoorInstalled}, ` +
+                    `stasis=${authDetails?.hasStasisLink}, ` +
+                    `connected=${authDetails?.isConnectedToCurrentServer}, ` +
+                    `password=${pwd !== undefined ? "known" : "UNKNOWN"}`,
+            );
+        }
+        // Detect zombie at runtime: no password + no auth details = permanently unreachable
+        if (
+            pwd === undefined &&
+            (!authDetails || authDetails.hasAdminRights === undefined)
+        ) {
+            if (!state.zombieStasisServers.has(hostname)) {
+                state.zombieStasisServers.add(hostname);
                 log(
                     ns,
-                    `WARN: Failed to exec stasis helper on ${hostname}`,
-                    false,
-                    "warning",
+                    `Zombie stasis detected at exec time: ${hostname} — marking as unreachable, will not retry`,
                 );
             }
+            return false;
+        }
+        if (pwd !== undefined) {
+            try {
+                const sessionResult = ns.dnet.connectToSession(hostname, pwd);
+                if (!sessionResult.success) {
+                    log(
+                        ns,
+                        `WARN: connectToSession failed for ${hostname}: code=${sessionResult.code}, msg=${sessionResult.message}`,
+                    );
+                } else {
+                    log(ns, `Session established with ${hostname}`);
+                }
+            } catch (err) {
+                log(
+                    ns,
+                    `WARN: connectToSession threw for ${hostname}: ${getErrorInfo(err)}`,
+                );
+            }
+        } else {
+            log(
+                ns,
+                `WARN: No password known for stasis server ${hostname} — cannot establish session`,
+            );
+        }
+        ns.write(STASIS_HELPER_SCRIPT, STASIS_HELPER_CONTENT, "w");
+        const scpResult = ns.scp(STASIS_HELPER_SCRIPT, hostname, "home");
+        if (!scpResult) {
+            log(
+                ns,
+                `WARN: SCP failed for ${hostname} — cannot deploy stasis helper`,
+            );
+        }
+        // Attempt exec with retry — RAM may still be freeing up
+        let pid = ns.exec(STASIS_HELPER_SCRIPT, hostname, 1, String(enable));
+        if (pid <= 0) {
+            // Retry after waiting for RAM reclamation
+            const maxRam = ns.getServerMaxRam(hostname);
+            const usedRam = ns.getServerUsedRam(hostname);
+            log(
+                ns,
+                `WARN: Stasis exec failed on ${hostname} (${usedRam.toFixed(1)}/${maxRam.toFixed(1)} GB used), retrying after sleep...`,
+            );
+            await ns.sleep(500);
+            pid = ns.exec(STASIS_HELPER_SCRIPT, hostname, 1, String(enable));
+        }
+        if (pid <= 0) {
+            const maxRam = ns.getServerMaxRam(hostname);
+            const usedRam = ns.getServerUsedRam(hostname);
+            log(
+                ns,
+                `WARN: Failed to exec stasis helper on ${hostname} even after retry (${usedRam.toFixed(1)}/${maxRam.toFixed(1)} GB used, need ~13.6GB free)`,
+                false,
+                "warning",
+            );
             // Redeploy probe even on stasis failure
             await deployProbe(ns, state, hostname, options);
             return false;
@@ -1808,6 +2435,21 @@ function logStatus(ns, state, verbose) {
             state.lastStats = stats;
             state.lastStatusLog = now;
         }
+    }
+
+    // Log labyrinth status whenever labyrinths are known
+    if (state.labyrinthServers.size > 0) {
+        const labInfo = [...state.labyrinthServers].map((labHost) => {
+            const solved = isServerAuthenticated(state, labHost);
+            const neighbors = state.labyrinthNeighbors.get(labHost);
+            const neighborList = neighbors ? [...neighbors].join(",") : "none";
+            const solver = state.activeLabSolvers.get(labHost);
+            const solverInfo = solver
+                ? `solver=${solver.solverHost}:PID${solver.pid}`
+                : "no-solver";
+            return `${labHost}(solved=${solved}, neighbors=[${neighborList}], ${solverInfo})`;
+        });
+        log(ns, `Labyrinth: ${labInfo.join("; ")}`);
     }
 }
 

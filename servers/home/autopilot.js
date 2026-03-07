@@ -224,8 +224,7 @@ export async function main(ns) {
                     (p) =>
                         `${p.filename} (pid ${p.pid}) args=${JSON.stringify(p.args)}`,
                 );
-        } catch (error) {
-        }
+        } catch (error) {}
 
         const launcherInfo =
             potentialLaunchers.length > 0

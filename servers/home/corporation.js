@@ -313,7 +313,10 @@ async function runCorpCycle(ns, state) {
             if (!state.options.round || state.options.round <= 0) {
                 const detectedRound = await state.detectRound(ns);
                 if (detectedRound > state.round) {
-                    log(ns, `Round advanced: ${state.round} -> ${detectedRound} (detected from shares)`);
+                    log(
+                        ns,
+                        `Round advanced: ${state.round} -> ${detectedRound} (detected from shares)`,
+                    );
                     state.round = detectedRound;
                 }
             }
@@ -727,12 +730,36 @@ async function manageWarehouses(ns, state) {
     // If boost buys were issued last cycle, stop them now before doing anything else
     if (state.boostBuysPending) {
         for (const divName of corpData.divisions) {
-            const divData = await readCorpFunc(ns, "getDivision(ns.args[0])", divName);
+            const divData = await readCorpFunc(
+                ns,
+                "getDivision(ns.args[0])",
+                divName,
+            );
             for (const city of divData.cities) {
                 try {
-                    if (!(await readCorpFunc(ns, "hasWarehouse(ns.args[0], ns.args[1])", divName, city))) continue;
-                    for (const mat of ["Real Estate", "Hardware", "Robots", "AI Cores"]) {
-                        await execCorpFunc(ns, "buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])", divName, city, mat, 0);
+                    if (
+                        !(await readCorpFunc(
+                            ns,
+                            "hasWarehouse(ns.args[0], ns.args[1])",
+                            divName,
+                            city,
+                        ))
+                    )
+                        continue;
+                    for (const mat of [
+                        "Real Estate",
+                        "Hardware",
+                        "Robots",
+                        "AI Cores",
+                    ]) {
+                        await execCorpFunc(
+                            ns,
+                            "buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])",
+                            divName,
+                            city,
+                            mat,
+                            0,
+                        );
                     }
                 } catch (e) {}
             }
@@ -1083,7 +1110,6 @@ async function manageWarehouses(ns, state) {
             } catch (e) {}
         }
     }
-
 }
 
 // ============================================================================
@@ -1804,7 +1830,10 @@ async function runRound2(ns, state) {
                 if (corpData.funds > 10e6) {
                     // Lowered threshold
                     if (office.size < targetEmployees) {
-                        const toAdd = Math.min(3, targetEmployees - office.size);
+                        const toAdd = Math.min(
+                            3,
+                            targetEmployees - office.size,
+                        );
                         await execCorpFunc(
                             ns,
                             "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
