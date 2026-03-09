@@ -1781,7 +1781,11 @@ export async function main(ns) {
             return true;
         }
 
-        if (7 in unlockedSFs && !options["disable-bladeburner"]) {
+        if (
+            7 in unlockedSFs &&
+            !options["disable-bladeburner"] &&
+            playerInBladeburner
+        ) {
             const currentAction = await getNsDataThroughFile(
                 ns,
                 "ns.bladeburner.getCurrentAction()",

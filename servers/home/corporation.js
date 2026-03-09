@@ -52,6 +52,7 @@ void calculateProductionMultiplier;
 void calculateOptimalEmployeeDistribution;
 void checkExportDilution;
 void calculateQualityThreshold;
+void shouldAcceptInvestment;
 
 const argsSchema = [
     ["self-fund", false],
@@ -174,11 +175,13 @@ class CorpState {
         this.productVersion = 1;
         this.lastStatusLog = 0;
         this.lastDiagnostic = 0;
-        this.agricultureCreatedAt = 0;
         this.lastInvestmentCheck = "";
         this.initialized = false;
         this.warehouseTarget = options["warehouse-target"] || 0.7;
         this.boostBuysPending = false; // Track if boost material purchases are active (need stopping next cycle)
+        this.roundTrigger = false;
+        this.oldRound = 0;
+        this.bnMults = null;
     }
 
     async init(ns) {
@@ -188,26 +191,17 @@ class CorpState {
         } else {
             this.round = await this.detectRound(ns);
         }
+        this.bnMults = await getNsDataThroughFile(
+            ns,
+            "ns.getBitNodeMultipliers()",
+        );
         this.initialized = true;
     }
 
     async detectRound(ns) {
         if (!(await readCorpFunc(ns, "hasCorporation()"))) return 0;
-
-        const corpData = await readCorpFunc(ns, "getCorporation()");
-        // Detect round based on shares sold
-        const numInvestments =
-            corpData.numShares > 1e9
-                ? 0
-                : corpData.numShares > 900e6
-                  ? 1
-                  : corpData.numShares > 800e6
-                    ? 2
-                    : corpData.numShares > 700e6
-                      ? 3
-                      : 4;
-
-        return numInvestments + 1;
+        const offer = await readCorpFunc(ns, "getInvestmentOffer()");
+        return offer?.round || 5;
     }
 }
 
@@ -265,19 +259,117 @@ async function initCorporation(ns, state) {
 // MAIN CYCLE
 // ============================================================================
 
+async function prepDivisions(ns, state, corpData) {
+    const round = state.round;
+    const divisions = corpData.divisions;
+
+    // Prep-specific helpers: single attempt, silent (no retry storm)
+    const tryExec = async (strFunction, ...args) =>
+        await getNsDataThroughFile(
+            ns,
+            `ns.corporation.${strFunction} ?? 'OK'`,
+            null,
+            args,
+            false,
+            1,
+            50,
+            true,
+        );
+    const tryRead = async (strFunction, ...args) =>
+        await getNsDataThroughFile(
+            ns,
+            `ns.corporation.${strFunction}`,
+            null,
+            args,
+            false,
+            1,
+            50,
+            true,
+        );
+
+    // Helper: attempt to expand a division to all cities + buy warehouses
+    // Only runs if the division actually exists in divisions list
+    async function expandDivision(divName) {
+        if (!divisions.includes(divName)) return;
+        for (const city of CITIES) {
+            try {
+                await tryExec(
+                    "expandCity(ns.args[0], ns.args[1])",
+                    divName,
+                    city,
+                );
+            } catch {}
+            try {
+                await tryExec(
+                    "purchaseWarehouse(ns.args[0], ns.args[1])",
+                    divName,
+                    city,
+                );
+            } catch {}
+        }
+    }
+
+    // Helper: try to purchase an unlock if not already unlocked
+    async function tryUnlock(unlockName) {
+        try {
+            const hasIt = await tryRead("hasUnlock(ns.args[0])", unlockName);
+            if (hasIt) return true;
+            await tryExec("purchaseUnlock(ns.args[0])", unlockName);
+            return await tryRead("hasUnlock(ns.args[0])", unlockName);
+        } catch {
+            return false;
+        }
+    }
+
+    // Helper: try to create a division if it doesn't already exist
+    async function tryCreateDivision(industryName, divName) {
+        if (divisions.includes(divName)) return true;
+        try {
+            await tryExec(
+                "expandIndustry(ns.args[0], ns.args[1])",
+                industryName,
+                divName,
+            );
+            // Verify it was actually created
+            await tryRead("getDivision(ns.args[0])", divName);
+            divisions.push(divName); // Update local cache
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    // Round 1+: Agriculture
+    if (round >= 1) {
+        await tryCreateDivision("Agriculture", "Agriculture");
+        await expandDivision("Agriculture");
+    }
+
+    // Round 2+: Export unlock, then Chemical (only if Export succeeded)
+    if (round >= 2) {
+        const hasExport = await tryUnlock("Export");
+        if (hasExport) {
+            await tryCreateDivision("Chemical", "Chemical");
+            await expandDivision("Chemical");
+        }
+    }
+
+    // Round 3+: Market unlocks, then Tobacco
+    if (round >= 3) {
+        await tryUnlock("Market Research - Demand");
+        await tryUnlock("Market Data - Competition");
+        await tryCreateDivision("Tobacco", "Tobacco");
+        await expandDivision("Tobacco");
+    }
+}
+
 async function runCorpCycle(ns, state) {
     await state.init(ns);
 
     const corpData = await readCorpFunc(ns, "getCorporation()");
     const corpState = corpData.nextState;
 
-    if (
-        corpData.divisions.includes("Agriculture") &&
-        !state.agricultureCreatedAt
-    ) {
-        state.agricultureCreatedAt = Date.now();
-        log(ns, "Tracking Agriculture creation time for progression gates");
-    }
+    await prepDivisions(ns, state, corpData);
 
     // Periodic status logging (lightweight, runs every state)
     const now = Date.now();
@@ -315,7 +407,7 @@ async function runCorpCycle(ns, state) {
                 if (detectedRound > state.round) {
                     log(
                         ns,
-                        `Round advanced: ${state.round} -> ${detectedRound} (detected from shares)`,
+                        `Round advanced: ${state.round} -> ${detectedRound} (detected from offer)`,
                     );
                     state.round = detectedRound;
                 }
@@ -332,7 +424,8 @@ async function runCorpCycle(ns, state) {
 
         case "EXPORT":
             // EXPORT phase: expansion and round-specific setup
-            await expandAllDivisions(ns);
+            await expandAllDivisions(ns, state);
+            await buyResearchForAllDivisions(ns);
 
             // Run round-specific logic
             switch (state.round) {
@@ -585,6 +678,8 @@ async function assignEmployeesToProduction(
     city,
     forProducts = false,
     qualityFocus = "quality",
+    round = 0,
+    divisionRP = 0,
 ) {
     const office = await readCorpFunc(
         ns,
@@ -603,11 +698,29 @@ async function assignEmployeesToProduction(
             "product",
         );
     } else {
-        // Material divisions: use quality focus for export cities
-        distribution = calculateQualityFocusedDistribution(
-            office.numEmployees,
-            qualityFocus,
-        );
+        if (round <= 1 && divisionRP < 60) {
+            distribution = {
+                Operations: 0,
+                Engineer: 0,
+                Business: 0,
+                Management: 0,
+                "Research & Development": office.numEmployees,
+            };
+        } else if (round <= 2 && divisionRP < 700) {
+            distribution = {
+                Operations: 0,
+                Engineer: 0,
+                Business: 0,
+                Management: 0,
+                "Research & Development": office.numEmployees,
+            };
+        } else {
+            // Material divisions: use quality focus for export cities
+            distribution = calculateQualityFocusedDistribution(
+                office.numEmployees,
+                qualityFocus,
+            );
+        }
     }
 
     // Clear all assignments first
@@ -1116,7 +1229,7 @@ async function manageWarehouses(ns, state) {
 // AGGRESSIVE EXPANSION - Expand all divisions to all cities
 // ============================================================================
 
-async function expandAllDivisions(ns) {
+async function expandAllDivisions(ns, state) {
     let corpData = await readCorpFunc(ns, "getCorporation()");
 
     for (const divName of corpData.divisions) {
@@ -1133,28 +1246,15 @@ async function expandAllDivisions(ns) {
             if (!divData.cities.includes(city)) {
                 if (city !== "Sector-12") {
                     try {
-                        // Check actual expansion cost using getConstants() (API changed in 2.2.0)
-                        const constants = await readCorpFunc(
+                        await execCorpFunc(
                             ns,
-                            "getConstants()",
+                            "expandCity(ns.args[0], ns.args[1])",
+                            divName,
+                            city,
                         );
-                        const expansionCost = constants.officeInitialCost;
-                        if (corpData.funds > expansionCost * 1.1) {
-                            // Need 10% buffer
-                            await execCorpFunc(
-                                ns,
-                                "expandCity(ns.args[0], ns.args[1])",
-                                divName,
-                                city,
-                            );
-                            log(ns, `Expanded ${divName} to ${city}`);
-                            // Refresh corp data after spending
-                            corpData = await readCorpFunc(
-                                ns,
-                                "getCorporation()",
-                            );
-                            await ns.sleep(100);
-                        }
+                        log(ns, `Expanded ${divName} to ${city}`);
+                        corpData = await readCorpFunc(ns, "getCorporation()");
+                        await ns.sleep(100);
                     } catch (e) {}
                 }
                 continue;
@@ -1169,21 +1269,15 @@ async function expandAllDivisions(ns) {
             );
             if (!hasWarehouse) {
                 try {
-                    // Warehouse costs ~$5B, check we have enough
-                    if (corpData.funds > 5e9) {
-                        await execCorpFunc(
-                            ns,
-                            "purchaseWarehouse(ns.args[0], ns.args[1])",
-                            divName,
-                            city,
-                        );
-                        log(
-                            ns,
-                            `Purchased warehouse for ${divName} in ${city}`,
-                        );
-                        corpData = await readCorpFunc(ns, "getCorporation()");
-                        await ns.sleep(100);
-                    }
+                    await execCorpFunc(
+                        ns,
+                        "purchaseWarehouse(ns.args[0], ns.args[1])",
+                        divName,
+                        city,
+                    );
+                    log(ns, `Purchased warehouse for ${divName} in ${city}`);
+                    corpData = await readCorpFunc(ns, "getCorporation()");
+                    await ns.sleep(100);
                 } catch (e) {}
                 continue;
             }
@@ -1196,8 +1290,7 @@ async function expandAllDivisions(ns) {
                     divName,
                     city,
                 );
-                if (warehouse.level < 5 && corpData.funds > 100e6) {
-                    // Lowered from 2e9 to 500m
+                if (warehouse.level < 5) {
                     await execCorpFunc(
                         ns,
                         "upgradeWarehouse(ns.args[0], ns.args[1])",
@@ -1223,7 +1316,7 @@ async function expandAllDivisions(ns) {
                     : 9;
 
                 // Upgrade office size if needed and we can afford it
-                if (office.size < targetSize && corpData.funds > 10e6) {
+                if (office.size < targetSize) {
                     const toAdd = Math.min(3, targetSize - office.size);
                     await execCorpFunc(
                         ns,
@@ -1240,7 +1333,7 @@ async function expandAllDivisions(ns) {
                 }
 
                 // Hire employees up to office size - employees are very cheap (~$50K)
-                if (office.numEmployees < office.size && corpData.funds > 1e6) {
+                if (office.numEmployees < office.size) {
                     for (let i = office.numEmployees; i < office.size; i++) {
                         await execCorpFunc(
                             ns,
@@ -1259,6 +1352,8 @@ async function expandAllDivisions(ns) {
                         city,
                         industry?.makesProducts || false,
                         focus,
+                        state.round,
+                        divData.researchPoints || 0,
                     );
                     log(
                         ns,
@@ -1508,6 +1603,8 @@ async function runRound1(ns, state) {
                     city,
                     false,
                     "quality",
+                    state.round,
+                    agDiv.researchPoints || 0,
                 );
                 log(
                     ns,
@@ -1528,6 +1625,8 @@ async function runRound1(ns, state) {
                 city,
                 false,
                 "quality",
+                state.round,
+                agDiv.researchPoints || 0,
             );
             log(ns, `Round 1: Reassigned ${city} employees to quality focus`);
             allCitiesReady = false;
@@ -1588,110 +1687,6 @@ async function runRound1(ns, state) {
 }
 
 // ============================================================================
-// WATER UTILITIES SETUP - Breaks the quality ceiling
-// ============================================================================
-
-async function setupWaterDivision(ns, corpData) {
-    if (!corpData.divisions.includes("Water")) return;
-
-    const waterDiv = await readCorpFunc(ns, "getDivision(ns.args[0])", "Water");
-    const expandToAllCities = corpData.funds > 50e9;
-    const targetCities = expandToAllCities ? CITIES : ["Sector-12"];
-
-    for (const city of targetCities) {
-        if (!waterDiv.cities.includes(city)) {
-            if (city !== "Sector-12" && corpData.funds > 4e9) {
-                log(ns, `Water: Expanding to ${city}`);
-                await execCorpFunc(
-                    ns,
-                    "expandCity(ns.args[0], ns.args[1])",
-                    "Water",
-                    city,
-                );
-                await ns.sleep(200);
-            }
-            continue;
-        }
-
-        const hasWarehouse = await readCorpFunc(
-            ns,
-            "hasWarehouse(ns.args[0], ns.args[1])",
-            "Water",
-            city,
-        );
-        if (!hasWarehouse) {
-            if (corpData.funds > 5e9) {
-                log(ns, `Water: Purchasing warehouse in ${city}`);
-                await execCorpFunc(
-                    ns,
-                    "purchaseWarehouse(ns.args[0], ns.args[1])",
-                    "Water",
-                    city,
-                );
-            }
-            continue;
-        }
-
-        const office = await readCorpFunc(
-            ns,
-            "getOffice(ns.args[0], ns.args[1])",
-            "Water",
-            city,
-        );
-        if (office.numEmployees < 9) {
-            if (office.size < 9 && corpData.funds > 1e9) {
-                await execCorpFunc(
-                    ns,
-                    "upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])",
-                    "Water",
-                    city,
-                    9 - office.size,
-                );
-            }
-            for (
-                let i = office.numEmployees;
-                i < Math.min(9, office.size);
-                i++
-            ) {
-                await execCorpFunc(
-                    ns,
-                    "hireEmployee(ns.args[0], ns.args[1])",
-                    "Water",
-                    city,
-                );
-            }
-            await assignEmployeesToProduction(
-                ns,
-                "Water",
-                city,
-                false,
-                "quality",
-            );
-            log(ns, `Water: Set up ${city} with quality-focused employees`);
-        }
-
-        const waterMat = await readCorpFunc(
-            ns,
-            "getMaterial(ns.args[0], ns.args[1], ns.args[2])",
-            "Water",
-            city,
-            "Water",
-        );
-        if (!waterMat.desiredSellPrice || waterMat.desiredSellPrice === "0") {
-            await execCorpFunc(
-                ns,
-                "sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])",
-                "Water",
-                city,
-                "Water",
-                "MAX",
-                "MP",
-            );
-        }
-    }
-}
-
-// ============================================================================
 // ROUND 2: CHEMICAL DIVISION
 // ============================================================================
 
@@ -1723,35 +1718,6 @@ async function runRound2(ns, state) {
             log(ns, "Round 2: Purchased Export unlock");
         }
         return;
-    }
-
-    // ========================================================================
-    // WATER UTILITIES - Critical for breaking quality ceiling
-    // Without this, Agriculture is capped at ~4.7 quality (purchased Water has Q=1)
-    // ========================================================================
-
-    // Create Water Utilities division BEFORE Chemical (it's cheaper and essential)
-    if (!corpData.divisions.includes("Water")) {
-        if (corpData.funds > 150e9) {
-            log(
-                ns,
-                "Round 2: Creating Water Utilities division (breaks quality ceiling!)",
-            );
-            await execCorpFunc(
-                ns,
-                "expandIndustry(ns.args[0], ns.args[1])",
-                "Water Utilities",
-                "Water",
-            );
-            await ns.sleep(500);
-            return;
-        }
-        // If we can't afford Water yet, continue with Chemical setup
-    }
-
-    // Set up Water Utilities if it exists
-    if (corpData.divisions.includes("Water")) {
-        await setupWaterDivision(ns, corpData);
     }
 
     // Create Chemical division (if we can afford it)
@@ -1860,6 +1826,8 @@ async function runRound2(ns, state) {
                         city,
                         false,
                         "quality",
+                        state.round,
+                        chemDiv.researchPoints || 0,
                     );
                     log(ns, `Round 2: Hired employees for Chemical in ${city}`);
                 }
@@ -1871,14 +1839,6 @@ async function runRound2(ns, state) {
 
         // Set up export routes: Chemical -> Agriculture (Chemicals)
         await setupExportRoutes(ns, "Chemical", "Agriculture", "Chemicals");
-    }
-
-    // Set up export routes: Water -> Agriculture/Chemical (if Water exists)
-
-    // Set up export routes: Water -> Agriculture (high-quality Water breaks the Q=1 ceiling)
-    if (corpData.divisions.includes("Water")) {
-        await setupExportRoutes(ns, "Water", "Agriculture", "Water");
-        await setupExportRoutes(ns, "Water", "Chemical", "Water");
     }
 
     // Upgrades
@@ -1964,16 +1924,11 @@ async function runRound3Plus(ns, state) {
         findBestQualityCity(plantsQualityByCity);
 
     const readiness = checkProductReadiness(bestPlantsQuality, 25);
-    const now = Date.now();
-    const agricultureAgeMs = state.agricultureCreatedAt
-        ? now - state.agricultureCreatedAt
-        : 0;
-    const bypassByTime = agricultureAgeMs > 300000;
     const bypassByFunds = corpData.funds >= 20e9;
-    const qualityGateReady = readiness.isReady || bypassByTime || bypassByFunds;
+    const qualityGateReady = readiness.isReady || bypassByFunds;
     log(
         ns,
-        `Round 3+: Tobacco gate - Plants Q=${bestPlantsQuality.toFixed(1)} threshold=${readiness.threshold.toFixed(1)} (effective ${readiness.effectiveRatingPercent.toFixed(0)}%), Funds=${formatMoney(corpData.funds)}, AgAge=${(agricultureAgeMs / 1000).toFixed(0)}s, Bypass=${bypassByTime ? "time" : bypassByFunds ? "funds" : readiness.isReady ? "quality" : "none"}`,
+        `Round 3+: Tobacco gate - Plants Q=${bestPlantsQuality.toFixed(1)} threshold=${readiness.threshold.toFixed(1)} (effective ${readiness.effectiveRatingPercent.toFixed(0)}%), Funds=${formatMoney(corpData.funds)}, Bypass=${bypassByFunds ? "funds" : readiness.isReady ? "quality" : "none"}`,
     );
 
     // Create Tobacco division - only if quality is sufficient OR we have lots of funds
@@ -2084,7 +2039,15 @@ async function runRound3Plus(ns, state) {
                     );
                 }
                 // Products need Engineers prioritized
-                await assignEmployeesToProduction(ns, "Tobacco", city, true);
+                await assignEmployeesToProduction(
+                    ns,
+                    "Tobacco",
+                    city,
+                    true,
+                    "product",
+                    state.round,
+                    tobaccoDiv.researchPoints || 0,
+                );
             }
         }
 
@@ -2103,7 +2066,7 @@ async function runRound3Plus(ns, state) {
         await buyWilsonAndAdvert(ns, "Tobacco");
 
         // Buy research upgrades
-        await buyResearch(ns, "Tobacco");
+        await buyResearchForAllDivisions(ns);
     }
 
     // General upgrades (always run regardless of Tobacco status)
@@ -2321,66 +2284,83 @@ async function buyWilsonAndAdvert(ns, division) {
     }
 }
 
-async function buyResearch(ns, division) {
-    const divData = await readCorpFunc(ns, "getDivision(ns.args[0])", division);
-    const rp = divData.researchPoints;
+async function buyResearchForAllDivisions(ns) {
+    const corpData = await readCorpFunc(ns, "getCorporation()");
 
-    // Research priority - Market-TA is critical for sales optimization
-    // AutoBrew/AutoPartyManager eliminate micromanagement
-    const priorityResearch = [
-        { name: "Hi-Tech R&D Laboratory", cost: 5000 }, // Unlocks everything, +10% research
-        { name: "Market-TA.I", cost: 20000 }, // Auto-price at max markup
-        { name: "Market-TA.II", cost: 50000 }, // Auto-match production to sales
-        { name: "Drones", cost: 5000 }, // Prereq for other drone research
-        { name: "Drones - Assembly", cost: 25000 }, // +20% production!
-        { name: "Drones - Transport", cost: 30000 }, // +50% warehouse storage
-        { name: "AutoBrew", cost: 12000 }, // Auto max energy
-        { name: "AutoPartyManager", cost: 15000 }, // Auto max morale
-        { name: "Self-Correcting Assemblers", cost: 25000 }, // +10% production
-        { name: "Automatic Drug Administration", cost: 10000 }, // Prereq for drugs
-        { name: "Go-Juice", cost: 25000 }, // +10 max energy
-        { name: "Sti.mu", cost: 30000 }, // +10 max morale
-        { name: "CPH4 Injections", cost: 25000 }, // +10% ALL employee stats
-        { name: "Overclock", cost: 15000 }, // +25% efficiency & intelligence
-        { name: "uPgrade: Fulcrum", cost: 10000 }, // +5% product production
-        { name: "uPgrade: Capacity.I", cost: 20000 }, // +1 max products
-        { name: "uPgrade: Capacity.II", cost: 30000 }, // +1 max products
-    ];
+    for (const divName of corpData.divisions) {
+        const divData = await readCorpFunc(
+            ns,
+            "getDivision(ns.args[0])",
+            divName,
+        );
+        const rp = divData.researchPoints || 0;
+        const industry = divData.industry;
 
-    // Buy research more aggressively (1.5x instead of 2x)
-    for (const researchItem of priorityResearch) {
-        if (rp > researchItem.cost * 1.5) {
+        const isMaterialDivision = [
+            "Agriculture",
+            "Chemical",
+            "Water",
+        ].includes(industry);
+        const isProductDivision = ["Tobacco"].includes(industry);
+
+        if (!isMaterialDivision && !isProductDivision) continue;
+
+        const researchPlan = isMaterialDivision
+            ? [
+                  "Hi-Tech R&D Laboratory",
+                  "Overclock",
+                  "Sti.mu",
+                  "Automatic Drug Administration",
+                  "Go-Juice",
+                  "CPH4 Injections",
+              ]
+            : [
+                  "Hi-Tech R&D Laboratory",
+                  "uPgrade: Fulcrum",
+                  "Self-Correcting Assemblers",
+                  "Drones",
+                  "Drones - Assembly",
+                  "Drones - Transport",
+              ];
+
+        for (const researchName of researchPlan) {
             try {
-                if (
-                    !(await execCorpFunc(
-                        ns,
-                        "hasResearched(ns.args[0], ns.args[1])",
-                        division,
-                        researchItem.name,
-                    ))
-                ) {
+                const hasIt = await readCorpFunc(
+                    ns,
+                    "hasResearched(ns.args[0], ns.args[1])",
+                    divName,
+                    researchName,
+                );
+                if (hasIt) continue;
+                const cost = await readCorpFunc(
+                    ns,
+                    "getResearchCost(ns.args[0], ns.args[1])",
+                    divName,
+                    researchName,
+                );
+                const threshold =
+                    researchName === "Hi-Tech R&D Laboratory"
+                        ? rp / 2
+                        : rp / 10;
+                if (threshold > cost) {
                     await execCorpFunc(
                         ns,
                         "research(ns.args[0], ns.args[1])",
-                        division,
-                        researchItem.name,
+                        divName,
+                        researchName,
                     );
-                    log(ns, `Researched: ${researchItem.name}`);
-                    break;
                 }
-            } catch (e) {}
+            } catch {}
         }
     }
 }
 
 async function upgradeProductionCapability(ns) {
-    const corpData = await readCorpFunc(ns, "getCorporation()");
-
     // Priority upgrades with more aggressive purchasing
     // Smart Factories (+3% production) and Smart Storage (+10% warehouse) are most impactful
     const priorityUpgrades = [
-        { name: "Smart Factories", fundsMult: 2 }, // Buy if funds > 2x cost
-        { name: "Smart Storage", fundsMult: 2 },
+        { name: "Smart Factories", fundsMult: 1.5 },
+        { name: "Smart Storage", fundsMult: 1.5 },
         { name: "Wilson Analytics", fundsMult: 3 }, // Advertising effectiveness
         { name: "ABC SalesBots", fundsMult: 3 }, // +1% sales per level
         { name: "FocusWires", fundsMult: 4 },
@@ -2391,28 +2371,31 @@ async function upgradeProductionCapability(ns) {
     ];
 
     for (const upgrade of priorityUpgrades) {
-        try {
-            const cost = await execCorpFunc(
-                ns,
-                "getUpgradeLevelCost(ns.args[0])",
-                upgrade.name,
-            );
-            if (corpData.funds > cost * upgrade.fundsMult) {
-                await execCorpFunc(
+        let iterations = 0;
+        while (iterations++ < 20) {
+            try {
+                const cost = await readCorpFunc(
                     ns,
-                    "levelUpgrade(ns.args[0])",
+                    "getUpgradeLevelCost(ns.args[0])",
                     upgrade.name,
                 );
-                // Buy multiple levels if very cheap
-                if (corpData.funds > cost * upgrade.fundsMult * 5) {
+                const currentCorpData = await readCorpFunc(
+                    ns,
+                    "getCorporation()",
+                );
+                if (currentCorpData.funds > cost * upgrade.fundsMult) {
                     await execCorpFunc(
                         ns,
                         "levelUpgrade(ns.args[0])",
                         upgrade.name,
                     );
+                } else {
+                    break;
                 }
+            } catch {
+                break;
             }
-        } catch (e) {}
+        }
     }
 }
 
@@ -2422,42 +2405,36 @@ async function upgradeProductionCapability(ns) {
 
 async function checkInvestment(ns, state) {
     const corpData = await readCorpFunc(ns, "getCorporation()");
-    const offer = await execCorpFunc(ns, "getInvestmentOffer()");
+    const offer = await readCorpFunc(ns, "getInvestmentOffer()");
+    if (!offer || offer.funds <= 0) return;
 
-    const minimumOffer = getLocalMinimumInvestmentOffer(state.round);
-    const isEmergency = corpData.funds < 0;
-    const hasOffer = offer && offer.funds > 0;
-    const offerSummary = hasOffer
-        ? `${formatMoney(offer.funds)} for ${(offer.shares / 1e6).toFixed(0)}M shares`
-        : "No offer";
-    const decision = shouldAcceptInvestment(
-        offer,
-        state.round,
-        0,
-        corpData.funds,
-    );
-    state.lastInvestmentCheck = `Round ${state.round}: ${offerSummary} vs min ${formatMoney(minimumOffer)} => ${decision ? "ACCEPT" : "WAIT"}${isEmergency ? " [EMERGENCY]" : ""}`;
-    log(ns, `Investment check: ${state.lastInvestmentCheck}`);
+    const round = offer.round;
+    const bnMult = state.bnMults?.CorporationValuation || 1;
+    const thresholds = { 1: 440e9, 2: 8.8e12, 3: 12e15, 4: 500e18 };
+    const threshold = thresholds[round] || 0;
 
-    // Pass current funds to enable emergency acceptance when in death spiral
-    if (decision) {
-        await execCorpFunc(ns, "acceptInvestmentOffer()");
-        log(
-            ns,
-            `Accepted investment: ${formatMoney(offer.funds)}`,
-            true,
-            "success",
-        );
-        state.round++;
+    const currentValue = offer.funds + corpData.funds * bnMult;
+
+    if (threshold * bnMult < currentValue || state.roundTrigger) {
+        state.roundTrigger = true;
+        if (state.oldRound <= currentValue) {
+            state.oldRound = currentValue;
+        } else {
+            await execCorpFunc(ns, "acceptInvestmentOffer()");
+            log(
+                ns,
+                `Accepted investment round ${round}: ${formatMoney(offer.funds)}`,
+                true,
+                "success",
+            );
+            state.round = round + 1;
+            state.roundTrigger = false;
+            state.oldRound = 0;
+        }
     }
-}
 
-function getLocalMinimumInvestmentOffer(round) {
-    const minimums = {
-        1: 500e6,
-        2: 1e9,
-        3: 2e9,
-        4: 50e9,
-    };
-    return minimums[round] || 0;
+    log(
+        ns,
+        `Investment: Round ${round}, Offer ${formatMoney(offer.funds)}, Value ${formatMoney(currentValue)}, Threshold ${formatMoney(threshold * bnMult)}, Trigger=${state.roundTrigger}`,
+    );
 }

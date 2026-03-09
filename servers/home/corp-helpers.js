@@ -626,16 +626,11 @@ export function shouldAcceptInvestment(
     customMinimum = 0,
     currentFunds = null,
 ) {
-    if (!offer || offer.funds <= 0) return false;
-
-    // EMERGENCY: If funds are negative (death spiral), accept ANY investment
-    if (currentFunds !== null && currentFunds < 0) {
-        return true; // Accept any offer to escape death spiral
-    }
-
-    const minimum =
-        customMinimum > 0 ? customMinimum : getMinimumInvestmentOffer(round);
-    return offer.funds >= minimum;
+    void offer;
+    void round;
+    void customMinimum;
+    void currentFunds;
+    return false;
 }
 
 // ============================================================================
