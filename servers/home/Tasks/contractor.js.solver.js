@@ -18,11 +18,15 @@ let heartbeat = null;
 const idleWorkers = [];
 const activeWorkers = [];
 
+// One blob URL for the worker source, created once and reused (module state persists across runs),
+// rather than a new never-revoked blob URL for every worker on every run.
+let workerUrl = null;
 function getWorker() {
     if (idleWorkers.length > 0) return idleWorkers.pop();
-    const blob = new Blob([workerCode], { type: "application/javascript" });
-    const worker = new Worker(URL.createObjectURL(blob));
-    return worker;
+    workerUrl ??= URL.createObjectURL(
+        new Blob([workerCode], { type: "application/javascript" }),
+    );
+    return new Worker(workerUrl);
 }
 
 function terminateAllWorkers() {
@@ -275,15 +279,6 @@ function findAnswer(contract) {
         : null;
 }
 
-function convert2DArrayToString(arr) {
-    const components = [];
-    arr.forEach(function (e) {
-        let s = e.toString();
-        s = ["[", s, "]"].join("");
-        components.push(s);
-    });
-    return components.join(",").replace(/\s/g, "");
-}
 
 // Based on https://github.com/danielyxie/bitburner/blob/master/src/data/codingcontracttypes.ts
 const codingContractTypesMetadata = [
@@ -448,8 +443,7 @@ const codingContractTypesMetadata = [
                 }
             }
             result.push([start, end]);
-            const sanitizedResult = convert2DArrayToString(result);
-            return sanitizedResult;
+            return result; // Pass the array as-is (3.0.0 made string->array conversion strict)
         },
     },
     {
@@ -498,7 +492,7 @@ const codingContractTypesMetadata = [
                     }
                 }
             }
-            return ret.toString(); // Answer expected is the string representation of this array
+            return ret; // Pass the array as-is (3.0.0 made string->array conversion strict)
         },
     },
     {
@@ -1414,15 +1408,6 @@ function jsonReviver(key, value) {
     return value;
 }
 
-function convert2DArrayToString(arr) {
-    const components = [];
-    arr.forEach(function (e) {
-        let s = e.toString();
-        s = ["[", s, "]"].join("");
-        components.push(s);
-    });
-    return components.join(",").replace(/\\s/g, "");
-}
 
 function solveFindLargestPrimeFactor(data) {
     let fac = 2;
@@ -1538,7 +1523,7 @@ function solveMergeOverlappingIntervals(data) {
         }
     }
     result.push([start, end]);
-    return convert2DArrayToString(result);
+    return result;
 }
 
 function solveGenerateIPAddresses(data) {
@@ -1561,7 +1546,7 @@ function solveGenerateIPAddresses(data) {
             }
         }
     }
-    return ret.toString();
+    return ret;
 }
 
 function solveAlgorithmicStockTraderI(data) {

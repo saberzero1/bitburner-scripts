@@ -88,7 +88,7 @@ const LAB_SOLVER_CONTENT = [
     `  let pos = [1,1];`,
     `  for (let i = 0; i < 5000; i++) {`,
     `    let report;`,
-    `    try { report = ns.dnet.labreport(); } catch { await ns.sleep(200); continue; }`,
+    `    try { report = await ns.dnet.labreport(); } catch { await ns.sleep(200); continue; }`,
     `    if (!report || !report.success) { await ns.sleep(200); continue; }`,
     `    pos = [report.coords[0], report.coords[1]];`,
     `    const key = pos[0] + "," + pos[1];`,
@@ -128,7 +128,7 @@ const LAB_SOLVER_CONTENT = [
     `  ns.port.write(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 38;
+const PROBE_VERSION = 39;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {

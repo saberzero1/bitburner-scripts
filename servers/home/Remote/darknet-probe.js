@@ -1,4 +1,4 @@
-const PROBE_VERSION = 38;
+const PROBE_VERSION = 39;
 
 export async function main(ns) {
     // NOTE: ns.getScriptName() via runDnetCommand returns the TEMP script's name,
@@ -3315,7 +3315,6 @@ function parseDarknetLogs(logs) {
 
 const nsToken = ["n", "s"].join("");
 const dnetToken = ["d", "n", "e", "t"].join("");
-const scpToken = ["s", "c", "p"].join("");
 const nsPrefix = `${nsToken}.`;
 const dnetPrefix = `${nsPrefix}${dnetToken}.`;
 
@@ -3392,20 +3391,32 @@ function buildNsCommand(name, args = "") {
     return `${nsPrefix}${name}(${args})`;
 }
 
+// Direct calls are written out explicitly so the game's static RAM calculation reserves them.
+// A dynamic lookup (ns.dnet[method]) isn't counted statically, and if dynamic usage ever exceeds the
+// reserved RAM the game kills the probe with a "Dynamic RAM usage" error.
 async function dnetCall(ns, method, ...args) {
     try {
-        const dnet = ns?.[dnetToken];
-        if (dnet && typeof dnet[method] === "function")
-            return await dnet[method](...args);
+        switch (method) {
+            case commandNames.auth:
+                return await ns.dnet.authenticate(...args);
+            case commandNames.depth:
+                return ns.dnet.getDepth(...args);
+            case commandNames.details:
+                return ns.dnet.getServerDetails(...args);
+            case commandNames.dnetScan:
+                return ns.dnet.probe(...args);
+            case commandNames.labReport:
+                return await ns.dnet.labreport(...args);
+            case commandNames.link:
+                return ns.dnet.connectToSession(...args);
+        }
     } catch {}
     return null;
 }
 
 async function nsScpDirect(ns, source, destination, fromHost) {
     try {
-        const fn = ns?.[scpToken];
-        if (typeof fn === "function")
-            return await fn.call(ns, source, destination, fromHost);
+        return await ns.scp(source, destination, fromHost);
     } catch {}
     return null;
 }
