@@ -86,6 +86,8 @@ const STASIS_SWAP_REQUEST_PORT = 21; // Legacy: probe stasis swap requests (drai
 const ANCHOR_COMMAND_PORT = 22; // Orchestrator -> probes: {link: [hostnames]} (peeked, not consumed)
 const PROBE_OPTIONS_PORT = 23; // Orchestrator -> probes: the probe options (peeked). Probes can only read files on their
 // own server, so the options file on home never reached them.
+const PROBE_PASSWORDS_PORT = 24; // Orchestrator -> probes: every known password (peeked), so a restarted probe can
+// reconnect to servers cracked earlier instead of skipping them.
 const STASIS_PWD_PORT = 19; // Netscript port for probe-reported stasis server passwords
 
 // Self-contained labyrinth solver script. Deployed to a neighbor of a labyrinth server; position is per-PID, so it
@@ -140,7 +142,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 47;
+const PROBE_VERSION = 48;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -2086,10 +2088,10 @@ async function execStasisLink(ns, state, hostname, enable, options) {
             } catch {}
             state.activeProbes.delete(hostname);
         }
-        // Also kill any probe by filename (safety net)
+        // Also kill any probe by filename (safety net), and pause the spare-RAM worker (the probe restarts it)
         const runningProbes = ns
             .ps(hostname)
-            .filter((p) => p.filename === probeScript);
+            .filter((p) => p.filename === probeScript || /darknet-worker-/.test(p.filename));
         for (const proc of runningProbes) {
             try {
                 ns.kill(proc.pid);
@@ -2632,6 +2634,8 @@ async function writeProbeOptions(ns, options, state) {
         ns.write(OPTIONS_FILE, json, "w");
         portClear(ns, PROBE_OPTIONS_PORT);
         portWrite(ns, PROBE_OPTIONS_PORT, json);
+        portClear(ns, PROBE_PASSWORDS_PORT);
+        portWrite(ns, PROBE_PASSWORDS_PORT, JSON.stringify(Object.fromEntries(state.knownPasswords)));
     } catch {}
 }
 

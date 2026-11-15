@@ -1,4 +1,4 @@
-const PROBE_VERSION = 47;
+const PROBE_VERSION = 48;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -340,6 +340,14 @@ async function processServer(
         };
     }
 
+    // After a restart, probes have no sessions and their password files can be stale: take the orchestrator's
+    // password for servers cracked earlier (by any probe) instead of skipping them.
+    const published = getPublishedPassword(ns, hostname);
+    if (!passwords.has(hostname) && published !== undefined) passwords.set(hostname, published);
+    if (passwords.has(hostname) && published !== undefined && passwords.get(hostname) !== published) {
+        await dnetCall(ns, commandNames.link, hostname, passwords.get(hostname) ?? "");
+        if (!(await getAuthDetails(ns, hostname))?.hasSession) passwords.set(hostname, published);
+    }
     // If we have a saved password, try to establish a session with it.
     // connectToSession works at any distance and is instant.
     if (passwords.has(hostname)) {
@@ -419,8 +427,12 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         return hintCandidate;
     }
 
-    // Re-check: another agent may have cracked this while we tried hints
-    if (await isAlreadyCracked(ns, hostname, true)) return "";
+    // Re-check: another agent may have cracked this while we tried hints. Its password (not "", which only opens
+    // servers whose password is empty) is needed for a session; without it, crack it again below.
+    if (await isAlreadyCracked(ns, hostname, true)) {
+        const published = getPublishedPassword(ns, hostname);
+        if (published !== undefined) return published;
+    }
 
     const solver = getSolver(details.modelId);
     if (solver) {
@@ -438,8 +450,9 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         }
     }
 
-    // Re-check: another agent may have cracked this
-    if (await isAlreadyCracked(ns, hostname, true)) return "";
+    // Re-check: another agent may have cracked this (the solvers stop early when it has). Use its password once
+    // darknet.js publishes it; until then retry later (an empty password would never open a session).
+    if (await isAlreadyCracked(ns, hostname, true)) return getPublishedPassword(ns, hostname) ?? null;
 
     return null;
 }
@@ -1112,7 +1125,7 @@ const WORKER_SOURCES = {
     money: `export async function main(ns){const d=ns.dnet;while(true){try{await d.${["phishing", "Attack"].join("")}();}catch{await ns.sleep(5000);}}}`,
 };
 const WORKER_THREAD_RAM = 3.6; // 1.6 base + 2.0 for the dnet call
-const WORKER_RESERVE_GB = 16; // left free for the probe's temp scripts and setStasisLink (13.6 GB)
+const WORKER_RESERVE_GB = 8; // left free for the probe's temp scripts (anchoring pauses the worker: setStasisLink needs 13.6 GB)
 
 async function manageWorker(ns, optionsFile, host) {
     if (host === "home") return; // phishingAttack and promoteStock only work on darknet servers
@@ -1172,6 +1185,23 @@ async function runOptionalActions(ns, optionsFile, hostname) {
 }
 
 const PROBE_OPTIONS_PORT = 23; // published by darknet.js (files on home can't be read from darknet servers)
+const PROBE_PASSWORDS_PORT = 24; // every password darknet.js knows, published the same way
+
+let _publishedRaw = null, _publishedPasswords = {};
+/** The orchestrator's password for `hostname`, or undefined. */
+function getPublishedPassword(ns, hostname) {
+    try {
+        const raw = portPeek(ns, PROBE_PASSWORDS_PORT);
+        if (raw === "NULL PORT DATA") return undefined;
+        if (raw !== _publishedRaw) {
+            _publishedPasswords = JSON.parse(String(raw)) ?? {};
+            _publishedRaw = raw;
+        }
+        return Object.hasOwn(_publishedPasswords, hostname) ? _publishedPasswords[hostname] : undefined;
+    } catch {
+        return undefined;
+    }
+}
 
 function loadProbeOptions(ns, filePath) {
     const defaults = {
@@ -1398,6 +1428,12 @@ async function execStasisBootstrap(ns, hostname, enable) {
     const STASIS_SCRIPT_RAM = 13.6; // 1.6 base + 12.0 setStasisLink
     const PROBE_RAM_COST = getProbeRamCost(ns);
 
+    // Pause the spare-RAM worker if it leaves too little room (manageWorker restarts it next loop)
+    if (nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) < STASIS_SCRIPT_RAM) {
+        for (const p of ((await nsPs(ns, host)) || []).filter((p) => /darknet-worker-/.test(p.filename)))
+            await nsKill(ns, p.pid);
+        await ns.sleep(100);
+    }
     // Check if we have enough free RAM alongside the probe
     const maxRam = await nsGetServerMaxRam(ns, host);
     const usedRam = await nsGetServerUsedRam(ns, host);
