@@ -1718,8 +1718,12 @@ export function tail(ns, processId = undefined) {
     ns.write(tailFile, JSON.stringify(tailedPids), "w");
 }
 
+// The game version can't change while scripts are running, so check it once per session.
+// (Module state is shared by every script that imports helpers.js.)
+let _isV3 = null;
 function isV3(ns) {
-    return ns.ui.getGameInfo().versionNumber >= 44;
+    _isV3 ??= ns.ui.getGameInfo().versionNumber >= 44;
+    return _isV3;
 }
 
 export function formatTime(ns, milliseconds, milliPrecision) {

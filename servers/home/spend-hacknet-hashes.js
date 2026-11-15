@@ -26,6 +26,7 @@ const argsSchema = [
     ["reserve-buffer", 1], // To avoid wasting hashes, spend if would be within this many hashes of our max capacity on the next tick.
     ["max-purchases-per-loop", 10000], // When we're producing hashes faster than we can spend them, this keeps things from getting hung up
     ["no-corp-priority", false], // Set to true to disable automatically prioritizing corporation hash spending (Sell for Corporation Funds / Exchange for Corporation Research) when a corporation exists.
+    ["corp-priority-share", 0.5], // Max fraction of each spending pass that auto-added corporation actions may use, so --spend-on purchases aren't starved. (Corp actions listed explicitly in --spend-on are not capped.)
 ];
 
 const basicSpendOptions = [
@@ -69,6 +70,13 @@ export async function main(ns) {
         options["spend-on-server"]?.replaceAll("_", " ") ?? undefined;
     const maxPurchasesPerLoop = options["max-purchases-per-loop"];
     const noCorpPriority = options["no-corp-priority"];
+    const corpPriorityShare = Math.min(
+        1,
+        Math.max(0, Number(options["corp-priority-share"]) || 0),
+    );
+    // Corp actions we add automatically (as opposed to ones the user listed) get a capped budget
+    const isAutoCorpAction = (action) =>
+        corpSpendActions.includes(action) && !baseToBuy.includes(action);
     // Helper to check if the player currently has a corporation (returns false if SF3/Corp API unavailable)
     const hasCorporation = () => {
         try {
@@ -184,7 +192,11 @@ export async function main(ns) {
                     lastPurchaseSucceeded = false; // Safety mechanism to avoid looping if we don't enter the for-loop below for some reason
                     for (const spendAction of purchases) {
                         const cost = ns.hacknet.hashCost(spendAction); // What's the cost of making this purchase
-                        const budget = maxHashSpend();
+                        // Every purchase takes as much of the budget as it can, so cap auto-added corp actions
+                        // to a share of it; otherwise they would starve the user's --spend-on purchases.
+                        const budget = isAutoCorpAction(spendAction)
+                            ? maxHashSpend() * corpPriorityShare
+                            : maxHashSpend();
                         if (cost > budget) continue; // Skip this purchase if if costs more than we have left
                         let quantity = Math.max(1, Math.floor(budget / cost));
                         const serverTarget = parameterizedSpendOptions.includes(

@@ -172,6 +172,12 @@ export async function main(ns) {
 
     log(ns, "INFO: Darknet orchestrator v2 starting...", true, "info");
 
+    // Remove leftover per-call temp files from older script versions (they bloat the save file).
+    // --legacy only touches file names current code never creates, so it's safe while probes run.
+    try {
+        ns.exec(getFilePath("cleanup.js"), "home", 1, "--legacy");
+    } catch {}
+
     // Main loop
     while (true) {
         try {
@@ -954,77 +960,89 @@ async function discoverFromAuthedServers(ns, state) {
 
     // Use a dedicated Netscript port for receiving probe results from remote servers.
     // Ports are global — any server can write to them regardless of network topology.
-    // Port 20 is reserved for darknet discovery (helpers.js uses ports 1-20 round-robin,
-    // but only briefly; we clear before and after use).
+    // (helpers.js completion ports live at 9000+, so they no longer collide with this one.)
     const DISCOVERY_PORT = 20;
     ns.port.clear(DISCOVERY_PORT);
 
+    // The temp script runs probe() on the remote server and writes result to a port.
+    // This avoids scp back to home which may be unreachable from the darknet.
+    // Content is constant, so one file is reused (and only compiled once by the game).
+    const helperScript = `/Temp/darknet-probe-helper.js`;
+    const helperContent =
+        `/** @param {NS} ns */ export async function main(ns) {` +
+        ` const result = ns.dnet.probe();` +
+        ` const data = JSON.stringify({ source: ns.getHostname(), servers: result ?? [] });` +
+        ` ns.port.write(${DISCOVERY_PORT}, data);` +
+        `}`;
+    ns.write(helperScript, helperContent, "w");
 
+    const readResults = () => {
+        while (ns.port.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
+            const raw = ns.port.read(DISCOVERY_PORT);
+            try {
+                const parsed = JSON.parse(String(raw));
+                const source = parsed?.source;
+                const servers = parsed?.servers;
+                if (!Array.isArray(servers)) continue;
+                for (const s of servers) {
+                    if (!discovered.includes(s)) discovered.push(s);
+                    // Record adjacency: source can reach s
+                    if (source) {
+                        if (!state.probeAdjacency.has(s))
+                            state.probeAdjacency.set(s, new Set());
+                        state.probeAdjacency.get(s).add(source);
+                    }
+                }
+            } catch {}
+        }
+    };
+
+    // Launch the helper on every target first, then wait for all of them together
+    // (previously each target was waited on in turn, up to 2s each).
+    const pending = new Map(); // pid -> target
     for (const target of probeTargets) {
         try {
             // Check if target has enough RAM for temp probe script (1.8 GB)
-            const maxRam = ns.getServerMaxRam(target);
-            const usedRam = ns.getServerUsedRam(target);
-            const freeRam = Math.max(0, maxRam - usedRam);
+            const freeRam = Math.max(
+                0,
+                ns.getServerMaxRam(target) - ns.getServerUsedRam(target),
+            );
             if (freeRam < 1.8) continue;
-
-            const helperScript = `/Temp/darknet-probe-helper.js`; // one file: content is constant
-
-            // The temp script runs probe() on the remote server and writes result to a port.
-            // This avoids scp back to home which may be unreachable from the darknet.
-            const helperContent =
-                `/** @param {NS} ns */ export async function main(ns) {` +
-                ` const result = ns.dnet.probe();` +
-                ` const data = JSON.stringify({ source: ns.getHostname(), servers: result ?? [] });` +
-                ` ns.port.write(${DISCOVERY_PORT}, data);` +
-                `}`;
-
-            ns.write(helperScript, helperContent, "w");
             ns.scp(helperScript, target, "home");
-
             const pid = ns.exec(helperScript, target, 1);
-            if (pid <= 0) continue;
-
-            // Wait for the temp script to finish (probe is near-instant)
-            let waited = 0;
-            while (waited < 2000) {
-                await ns.sleep(50);
-                waited += 50;
-                if (!ns.ps(target).some((p) => p.pid === pid)) break;
-            }
-
-            // Read all results from the port (the script wrote one JSON object with source + servers)
-            while (ns.port.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
-                const raw = ns.port.read(DISCOVERY_PORT);
-                try {
-                    const parsed = JSON.parse(String(raw));
-                    const source = parsed?.source;
-                    const servers = parsed?.servers;
-                    if (Array.isArray(servers)) {
-                        for (const s of servers) {
-                            if (!discovered.includes(s)) discovered.push(s);
-                            // Record adjacency: source can reach s
-                            if (source) {
-                                if (!state.probeAdjacency.has(s)) {
-                                    state.probeAdjacency.set(s, new Set());
-                                }
-                                state.probeAdjacency.get(s).add(source);
-                            }
-                        }
-                    }
-                } catch {}
-            }
-
-            // Cleanup temp script on both home and target
-            try {
-                ns.rm(helperScript);
-            } catch {}
-            try {
-                ns.rm(helperScript, target);
-            } catch {}
+            if (pid > 0) pending.set(pid, target);
         } catch {
             // Target server offline or inaccessible
         }
+    }
+
+    // Probe is near-instant; read the port while waiting so it can't overflow (ports hold 50 entries).
+    const deadline = Date.now() + 2000;
+    while (pending.size > 0 && Date.now() < deadline) {
+        await ns.sleep(50);
+        readResults();
+        const runningByHost = new Map();
+        for (const [pid, target] of pending) {
+            let running = runningByHost.get(target);
+            if (!running) {
+                try {
+                    running = new Set(ns.ps(target).map((p) => p.pid));
+                } catch {
+                    running = new Set();
+                }
+                runningByHost.set(target, running);
+            }
+            if (!running.has(pid)) pending.delete(pid);
+        }
+    }
+    readResults();
+
+    // Cleanup the temp script on targets (the home copy is reused next tick)
+    for (const target of new Set(probeTargets)) {
+        if (target === "home") continue;
+        try {
+            if (ns.fileExists(helperScript, target)) ns.rm(helperScript, target);
+        } catch {}
     }
 
     // Final cleanup: drain any leftover port data
