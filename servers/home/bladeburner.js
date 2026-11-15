@@ -146,7 +146,8 @@ const getBBDict = async (ns, strFunction, elements, ...args) =>
     await getNsDataThroughFile(
         ns,
         `Object.fromEntries(JSON.parse(ns.args[0]).map(e => [e, ns.bladeburner.${strFunction.replace("%", "e")}]))`,
-        `/Temp/bladeburner-${strFunction.split("(")[0]}-all.txt`,
+        // One file per action type when there is one (dashboard.jsx reads each), instead of overwriting a shared file
+        `/Temp/bladeburner-${strFunction.split("(")[0]}${args.length ? "-" + String(args[0]).replace(/\s+/g, "") : ""}-all.txt`,
         [JSON.stringify(elements), ...args],
     );
 // Helper for dual-parameter bladeburner functions e.g. getActionCountRemaining(actionType, action)

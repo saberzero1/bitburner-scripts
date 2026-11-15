@@ -318,6 +318,7 @@ export async function main(ns) {
             }
 
             ns.write(STATE_FILE, JSON.stringify(st), "w");
+            ns.write("/Temp/corp-heartbeat.txt", String(Date.now()), "w"); // lets dashboard.jsx tell if the snapshot is current
             if (Date.now() - lastStatus > 60000) {
                 lastStatus = Date.now();
                 logStatus(ctx);

@@ -228,6 +228,19 @@ export async function main(ns) {
     } catch {}
     await ns.sleep(4);
 
+    // We killed every other script (including autopilot), so whatever happens, relaunch the completion script
+    const runCompletionScript = () => {
+        const completionScript = options["on-completion-script"];
+        if (!completionScript) return;
+        const completionArgs = options["on-completion-script-args"];
+        if (ns.run(completionScript, 1, ...completionArgs))
+            log(ns, `INFO: Launching ${completionScript}...`);
+        else log(ns, `WARNING: Failed to launch ${completionScript}...`, false, "warning");
+    };
+    // Sanity check: every 2000 flips, casino earnings must have gone up. If not, the replayed sequence is out of step
+    // (e.g. a manual click or a second instance) and we'd be betting at even odds forever.
+    let earningsAtLastCheck = ns.getMoneySources().sinceInstall.casino;
+
     // Step 9: Execute the sequence, winning every flip
     while (true) {
         try {
@@ -239,6 +252,25 @@ export async function main(ns) {
 
             if (loops % 2000 === 0) {
                 await ns.sleep(4);
+                if (loops > 0) {
+                    const earnings = ns.getMoneySources().sinceInstall.casino;
+                    const outOfStep = earnings <= earningsAtLastCheck;
+                    const cantAffordBet = ns.getServerMoneyAvailable("home") < 10000;
+                    if (outOfStep || cantAffordBet) {
+                        log(
+                            ns,
+                            `ERROR: Stopping the casino: ` +
+                                (outOfStep
+                                    ? `earnings didn't increase over the last 2000 flips (sequence out of step?)`
+                                    : `we can no longer afford the $10k bet`),
+                            true,
+                            "error",
+                        );
+                        runCompletionScript();
+                        return;
+                    }
+                    earningsAtLastCheck = earnings;
+                }
             }
             loops++;
             if (ns.getMoneySources().sinceInstall.casino >= 10_000_000_000) {
@@ -247,24 +279,12 @@ export async function main(ns) {
                     `SUCCESS: Won ${formatMoney(10e9)} at the casino! We've been kicked out.`,
                     true,
                 );
-                // Run the completion script before shutting down
-                const completionScript = options["on-completion-script"];
-                if (completionScript) {
-                    const completionArgs = options["on-completion-script-args"];
-                    if (ns.run(completionScript, 1, ...completionArgs))
-                        log(ns, `INFO: Launching ${completionScript}...`);
-                    else
-                        log(
-                            ns,
-                            `WARNING: Failed to launch ${completionScript}...`,
-                            false,
-                            "warning",
-                        );
-                }
+                runCompletionScript();
                 return;
             }
         } catch (e) {
             log(ns, `ERROR: ${getErrorInfo(e)}`, true, "error");
+            runCompletionScript();
             return;
         }
     }

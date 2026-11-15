@@ -26,6 +26,9 @@ const argsSchema = [
     ["cheat-chance-threshold", 0.9], // Don't cheat if our success chance is less than this
     ["logtime", false], // Logs time time it takes for each player to take their move
     ["runOnce", false], // Will only play one game if enabled
+    ["board-size", 13], // Board size for new games (5, 7, 9 or 13). The game's node power scales with score, so bigger boards give more per win.
+    ["random-opponents", false], // Pick opponents uniformly at random (old behaviour) instead of by expected value and win rate
+    ["max-cheats-per-game", 1], // A failed cheat after an earlier one in the same game has a 10% chance of ejection (a loss, breaking the win streak)
     ["silent", false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
 ];
 
@@ -40,6 +43,12 @@ export function autocomplete(data, args) {
 export async function main(ns) {
     let cheats = false;
     let cheatChanceThreshold = 1.0;
+    let cheatsThisGame = 0;
+    let maxCheatsPerGame = 1;
+    let boardSize = 13;
+    let randomOpponents = false;
+    let lastStats = null; // ns.go.analysis.getStats() snapshot, to detect each game's result
+    const GO_RESULTS_FILE = "/data/go-results.txt";
     let logtime = false;
     let runOnce = true;
     let silent = false;
@@ -123,6 +132,12 @@ export async function main(ns) {
         // Enable cheats if we have SF14.2 or higher (unless the user disabled cheats).
         cheats = !runOptions["disable-cheats"] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
+        maxCheatsPerGame = runOptions["max-cheats-per-game"];
+        boardSize = [5, 7, 9, 13].includes(runOptions["board-size"]) ? runOptions["board-size"] : 13;
+        randomOpponents = runOptions["random-opponents"];
+        try {
+            lastStats = ns.go.analysis.getStats();
+        } catch {}
 
         ns.disableLog("go.makeMove");
 
@@ -222,6 +237,7 @@ export async function main(ns) {
         const currentGame = await ns.go.opponentNextTurn(false);
         checkNewGame(ns, currentGame);
         let playStyle = getStyle(ns);
+        let lastResults = null; // The opponent's last response (type "pass" means they passed)
         while (true) {
             turn++;
             if (turn === 1) playStyle = getStyle(ns); // A new game (possibly a different opponent) started
@@ -240,6 +256,16 @@ export async function main(ns) {
             //We have our test board
 
             let results;
+            if (turn >= 3 && lastResults?.type === "pass") {
+                const state = ns.go.getGameState();
+                if (state.blackScore > state.whiteScore) {
+                    ns.print(`Opponent passed and we're ahead (${state.blackScore} vs ${state.whiteScore}): passing to win`);
+                    results = await ns.go.passTurn();
+                    lastResults = results;
+                    checkNewGame(ns, results);
+                    continue;
+                }
+            }
             if (turn < 3) results = await movePiece(ns, getOpeningMove(ns));
 
             if (turn >= 3) {
@@ -827,8 +853,59 @@ export async function main(ns) {
                         break;
                 } //End of style switch
             } // end of turn >= 3
+            lastResults = results;
             checkNewGame(ns, results);
         }
+    }
+
+    /** Append this game's result (detected from the change in ns.go.analysis.getStats) to GO_RESULTS_FILE. */
+    function recordGameResult(ns) {
+        try {
+            const stats = ns.go.analysis.getStats();
+            const opp = ns.go.getOpponent();
+            const before = lastStats?.[opp] ?? { wins: 0, losses: 0 };
+            const after = stats[opp] ?? { wins: 0, losses: 0 };
+            lastStats = stats;
+            const won = after.wins > before.wins;
+            if (!won && !(after.losses > before.losses)) return; // couldn't tell
+            const entry = {
+                t: Date.now(),
+                opp,
+                size: board?.length ?? null, // last board fetched this game (getBoardState directly would cost 4 GB)
+                won,
+                streak: after.winStreak,
+                cheats: cheatsThisGame,
+            };
+            ns.write(GO_RESULTS_FILE, JSON.stringify(entry) + "\n", "a");
+            const text = ns.read(GO_RESULTS_FILE);
+            if (text.length > 200_000) ns.write(GO_RESULTS_FILE, text.slice(text.indexOf("\n", text.length - 100_000) + 1), "w");
+            ns.print(`${won ? "WON" : "LOST"} vs ${opp} (streak ${after.winStreak}, record ${after.wins}-${after.losses})`);
+        } catch {}
+    }
+
+    /** Pick the next opponent by expected node power: difficulty multiplier (komi) x bonus usefulness x win rate^6.
+     *  Win streaks multiply node power (up to 3x) and any loss drops it to 0.5x, so opponents we sometimes lose to are
+     *  rarely picked. Opponents with few games are still explored. */
+    function chooseOpponent(ns, candidates) {
+        if (randomOpponents) return candidates[Math.floor(Math.random() * candidates.length)];
+        const komi = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5, "????????????": 9.5 };
+        // Rough usefulness of each faction's bonus to this repo's automation (hacking-related bonuses matter most)
+        const usefulness = { Netburners: 0.4, "Slum Snakes": 0.5, "The Black Hand": 1, Tetrads: 0.4, Daedalus: 1, Illuminati: 1.2, "????????????": 1.2 };
+        let stats = {};
+        try {
+            stats = ns.go.analysis.getStats();
+        } catch {}
+        const weights = candidates.map((o) => {
+            const s = stats[o] ?? { wins: 0, losses: 0 };
+            const games = s.wins + s.losses;
+            const winRate = (s.wins + 1) / (games + 2); // Laplace-smoothed
+            const exploration = games < 5 ? 0.5 : 0;
+            return ((komi[o] ?? 5.5) + 0.5) * 0.25 * (usefulness[o] ?? 1) * (Math.pow(winRate, 6) + exploration);
+        });
+        const total = weights.reduce((a, b) => a + b, 0);
+        let r = Math.random() * total;
+        for (let i = 0; i < candidates.length; i++) if ((r -= weights[i]) <= 0) return candidates[i];
+        return candidates[candidates.length - 1];
     }
 
     /** @param {NS} ns */
@@ -856,17 +933,14 @@ export async function main(ns) {
      */
     function checkNewGame(ns, gameInfo) {
         if (gameInfo.type === "gameOver") {
+            recordGameResult(ns);
             if (runOnce) ns.exit();
+            cheatsThisGame = 0;
             try {
-                ns.go.resetBoardState(
-                    opponent2[Math.floor(Math.random() * opponent2.length)],
-                    13,
-                );
+                ns.go.resetBoardState(chooseOpponent(ns, opponent2), boardSize);
             } catch {
-                ns.go.resetBoardState(
-                    opponent[Math.floor(Math.random() * opponent.length)],
-                    13,
-                );
+                // (The w0r1d_d43m0n is only available after the Red Pill)
+                ns.go.resetBoardState(chooseOpponent(ns, opponent), boardSize);
             }
             turn = 0;
             currentValidMovesTurn = -1; // turn numbers restart, so don't reuse the previous game's move list
@@ -2292,11 +2366,12 @@ export async function main(ns) {
     /** @param {NS} ns
      * @returns {Promise<false | {type:"move"|"pass"|"gameOver"; x:number; y:number;}} */
     async function moveSnakeEyes(ns, attack) {
-        if (attack.coords === undefined || !cheats) return false;
+        if (attack.coords === undefined || !cheats || cheatsThisGame >= maxCheatsPerGame) return false;
         const [s1x, s1y, s2x, s2y] = attack.coords;
         if (s1x === undefined) return false;
         const chance = await go_cheat_getCheatSuccessChance(ns);
         if (chance < cheatChanceThreshold) return false;
+        cheatsThisGame++;
         try {
             let mid = performance.now();
             const results = await go_cheat_playTwoMoves(ns, s1x, s1y, s2x, s2y);

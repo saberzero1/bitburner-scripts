@@ -1197,14 +1197,17 @@ function BladeburnerTab({ ns, freeRam }) {
                 "/Temp/ns-bladeburner-getSkillPoints.txt",
             );
 
-            const actionCounts = readJsonFile(
-                ns,
-                "/Temp/bladeburner-getActionCountRemaining-all.txt",
-            );
-            const actionChances = readJsonFile(
-                ns,
-                "/Temp/bladeburner-getActionEstimatedSuccessChance-all.txt",
-            );
+            // bladeburner.js writes one file per action type (and older versions one shared file)
+            const actionTypeSuffixes = ["-Contracts", "-Operations", "-BlackOperations", ""];
+            const mergeActionFiles = (fn) =>
+                Object.assign(
+                    {},
+                    ...actionTypeSuffixes.map(
+                        (sfx) => readJsonFile(ns, `/Temp/bladeburner-${fn}${sfx}-all.txt`) || {},
+                    ),
+                );
+            const actionCounts = mergeActionFiles("getActionCountRemaining");
+            const actionChances = mergeActionFiles("getActionEstimatedSuccessChance");
 
             const actionNames = new Set([
                 ...Object.keys(actionCounts || {}),
@@ -1348,9 +1351,12 @@ function CorpTab({ ns, freeRam }) {
                 return;
             }
 
-            // corporation.js writes a full snapshot each cycle; stats.js still uses getCorporation directly
+            // corporation.js writes a full snapshot each cycle (plus a heartbeat); stats.js uses getCorporation directly.
+            // Only trust the snapshot while corporation.js is running, otherwise it would show stale data as current.
+            const heartbeat = Number(ns.read("/Temp/corp-heartbeat.txt") || 0);
+            const snapshotIsCurrent = Date.now() - heartbeat < 120_000;
             const parsed =
-                readJsonFile(ns, "/Temp/corp-op-snapA.txt")?.corp ??
+                (snapshotIsCurrent ? readJsonFile(ns, "/Temp/corp-op-snapA.txt")?.corp : null) ??
                 readJsonFile(ns, "/Temp/ns-corporation-getCorporation.txt");
 
             if (parsed && typeof parsed === "object") {

@@ -621,6 +621,16 @@ function claimRewardDirect(infiltration, faction) {
     const soaName = "Shadows of Anarchy";
     const soaFaction = gFactions[soaName];
     if (soaFaction) {
+        // Infiltrating is the only way to get the SoA invite (inviteToFaction in Victory.tsx / FactionHelpers.tsx)
+        if (!soaFaction.alreadyInvited && !soaFaction.isMember && !gPlayer.factions.includes(soaName)) {
+            try {
+                gPlayer.receiveInvite(soaName);
+                soaFaction.alreadyInvited = true;
+                soaFaction.discovery = "known";
+            } catch (e) {
+                console.warn("[claimRewardDirect] Could not send the Shadows of Anarchy invite:", e);
+            }
+        }
         if (gPlayer.factions.includes(soaName)) {
             const soaRep = inlineCalculateSoARep(
                 soaFaction,
