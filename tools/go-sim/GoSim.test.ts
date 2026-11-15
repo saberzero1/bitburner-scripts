@@ -82,6 +82,8 @@ test(
       return r;
     };
     const searchMove = timed(searchFns.searchMove);
+    const fastSrc = fs.readFileSync(SCRIPT.replace(/go\.js$/, "go-fast.js"), "utf8").replace(/^export\s+/gm, "");
+    const fastSearch = timed(new Function(fastSrc + "\nreturn fastSearch;")());
     const evaluateMove = timed(searchFns.evaluateMove);
     src = src.replace(/^export\s+/gm, "");
     const files: Record<string, string> = {};
@@ -110,6 +112,7 @@ test(
       "formatTime",
       "searchMove",
       "evaluateMove",
+      "fastSearch",
       src + "\nreturn main;",
     )(
       getConfiguration,
@@ -121,6 +124,7 @@ test(
       (ms: number) => `${ms}ms`,
       searchMove,
       evaluateMove,
+      fastSearch,
     );
 
     // Per-game records: detect game ends from the stats (wins + losses) after each move/pass

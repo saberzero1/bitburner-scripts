@@ -20,6 +20,7 @@ import {
     formatTime,
 } from "./helpers.js";
 import { evaluateMove, searchMove } from "./go-search.js";
+import { fastSearch } from "./go-fast.js";
 
 const argsSchema = [
     ["cheats", true], // (Now true by default - but still an option for backwards compatibility) This is only possible if you have BN14.2
@@ -39,6 +40,14 @@ const argsSchema = [
     ["favor-factions", "Daedalus"], // While a member and before installing The Red Pill, play these factions first until Go
     // has given its maximum favour with them (win streaks add favour, up to 400k rep's worth with SF14.3). Daedalus favour
     // speeds up earning The Red Pill's rep, the long final wait of BN12 runs (tools/favor-model). "" = off.
+    ["fast-search", true], // Play by UCT search with fast tactical playouts (go-fast.js) on boards up to search-max-size.
+    // tools/go-sim gq_1500 vs heuristics, 5x5 node power/h: Illuminati 344k vs 184k (86% vs 45% won), Daedalus 93k vs 90k,
+    // Slum Snakes 88k vs 80k, Tetrads 66k vs 60k; The Black Hand 62k vs 71k and Netburners 44k vs 55k (skipped below)
+    ["fast-search-skip", "Netburners,The Black Hand"], // Opponents the heuristics already beat more cheaply
+    ["fast-playouts", 1500], // Playouts per move (~0.03 s CPU on 5x5); 1000-2500 were about as good, 4000+ cost more than they won
+    ["early-cheats", 2], // With fast-search: cheat (play two moves) on our first N moves of a game. tools/go-fast/match.mjs vs
+    // Illuminati 5x5: 0 cheats 50% won, 1: 63%, 2: ~88% (80/80 on boards without offline nodes), 3: 89%; cheating only when
+    // behind did no better than cheating early
     ["search", false], // Choose moves by Monte Carlo search on the game's own rules and AI (go-search.js). Off: live it won 28/28 but took
     // 39s per game against 4s for the heuristics (93% won), so node power per hour fell ~5x. Use with a small --search-playouts
     ["search-verify", false], // Check each heuristic move with a few playouts (go-search.js); if any is lost, search instead
@@ -189,6 +198,8 @@ export async function main(ns) {
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
         searchOptions = {
+            fast: runOptions["fast-search"], fastSkip: String(runOptions["fast-search-skip"]).split(",").map((s) => s.trim()),
+            fastPlayouts: runOptions["fast-playouts"], earlyCheats: runOptions["early-cheats"],
             on: runOptions.search, verify: runOptions["search-verify"], verifyPlayouts: runOptions["verify-playouts"],
             playouts: runOptions["search-playouts"], maxSize: runOptions["search-max-size"],
         };
@@ -301,6 +312,40 @@ export async function main(ns) {
         //return await getNsDataThroughFile(ns, `await ns.go.makeMove(...ns.args)`, null, [x, y]);
     }
 
+    /** One turn by fast search (go-fast.js): on our first early-cheats moves, two moves via a tick-timed cheat. */
+    async function fastTurn(ns) {
+        const komi = ns.go.getGameState().komi ?? 7.5;
+        const legalOf = (rows, exclude) => {
+            const moves = [];
+            for (let x = 0; x < rows.length; x++)
+                for (let y = 0; y < rows.length; y++)
+                    if (validMove[x][y] && !(exclude && exclude.x === x && exclude.y === y)) moves.push({ x, y });
+            return moves;
+        };
+        const yieldFn = () => ns.sleep(0);
+        const opts = { playouts: searchOptions.fastPlayouts, yieldFn };
+        const first = await fastSearch(board, komi, legalOf(board), opts);
+        if (!first.move) {
+            ns.print(`Fast search: pass (win ${(first.winRate * 100).toFixed(0)}%)`);
+            return await ns.go.passTurn();
+        }
+        if (cheats && cheatsThisGame < searchOptions.earlyCheats && cheatsThisGame < maxCheatsPerGame) {
+            const rows = board.map((r, x) => (x === first.move.x ? r.slice(0, first.move.y) + "X" + r.slice(first.move.y + 1) : r));
+            const second = await fastSearch(rows, komi, legalOf(rows, first.move), opts);
+            if (second.move) {
+                cheatsThisGame++;
+                const results = await go_cheat_playTwoMoves(ns, first.move.x, first.move.y, second.move.x, second.move.y);
+                if (results) {
+                    ns.print(`Fast search: cheat ${first.move.x},${first.move.y} + ${second.move.x},${second.move.y} (win ${(second.winRate * 100).toFixed(0)}%)`);
+                    return results;
+                }
+                cheatsThisGame--; // no successful tick: play normally
+            }
+        }
+        ns.print(`Fast search: ${first.move.x},${first.move.y} (win ${(first.winRate * 100).toFixed(0)}%, ${first.playouts} playouts)`);
+        return await go_makeMove(ns, first.move.x, first.move.y);
+    }
+
     /** @param {NS} ns */
     async function playGo(ns) {
         const startBoard = await go_getBoardState(ns);
@@ -345,6 +390,18 @@ export async function main(ns) {
                 if (state.blackScore > state.whiteScore) {
                     ns.print(`Opponent passed and we're ahead (${state.blackScore} vs ${state.whiteScore}): passing to win`);
                     results = await ns.go.passTurn();
+                    lastResults = results;
+                    checkNewGame(ns, results);
+                    continue;
+                }
+            }
+            if (searchOptions.fast && size <= searchOptions.maxSize && !searchOptions.fastSkip.includes(ns.go.getOpponent())) {
+                try {
+                    results = await fastTurn(ns);
+                } catch (err) {
+                    log(ns, `WARNING: Go fast search failed, using the heuristics this turn: ${getErrorInfo(err)}`);
+                }
+                if (results) {
                     lastResults = results;
                     checkNewGame(ns, results);
                     continue;

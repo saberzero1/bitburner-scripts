@@ -1727,6 +1727,7 @@ export {
   evaluateIfMoveIsValid,
   getAllValidMoves,
   getMove,
+  getNewBoardState,
   getNewBoardStateFromSimpleBoard,
   getScore,
   getStateCopy,
