@@ -45,7 +45,7 @@ export async function main(ns) {
     let hasSF4 = false;
     try {
         const sourceFiles = await getActiveSourceFiles(ns, true, true);
-        hasSF4 = (sourceFiles[4] ?? 0) >= 2;
+        hasSF4 = (sourceFiles[4] ?? 0) >= 1; // travel/navigation only needs Singularity access (SF4.1)
     } catch {
         // If we can't determine source files, we'll try manual navigation
     }

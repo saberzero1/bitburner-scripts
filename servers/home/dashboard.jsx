@@ -753,12 +753,20 @@ function GangTab({ ns, freeRam }) {
             } else {
                 let parsed = null;
                 try {
-                    parsed = JSON.parse(text);
+                    // Written by getNsDataThroughFile, so it's wrapped as {"$type":"result","$value":...}
+                    parsed = unwrapNsData(JSON.parse(text));
                 } catch (error) {
                     parsed = null;
                 }
 
-                if (parsed && typeof parsed === "object") {
+                if (parsed === false) {
+                    // Not in a gang
+                    setGangData((prev) => (prev === null ? prev : null));
+                    setRawData((prev) => (prev === "" ? prev : ""));
+                    setStatus((prev) =>
+                        prev === "Not in a gang" ? prev : "Not in a gang",
+                    );
+                } else if (parsed && typeof parsed === "object") {
                     setGangData((prev) =>
                         areGangDataEqual(prev, parsed) ? prev : parsed,
                     );

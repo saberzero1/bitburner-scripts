@@ -206,6 +206,7 @@ export async function main(ns) {
         const startBoard = await go_getBoardState(ns);
         let inProgress = false;
         turn = 0;
+        currentValidMovesTurn = -1; // (re)starting: don't trust a move list cached before a crash
         START = performance.now();
         //If we have already moved, jump the turn to 3 to get out of Opening Moves
         for (let x = 0; x < startBoard[0].length; x++) {
@@ -220,9 +221,10 @@ export async function main(ns) {
         }
         const currentGame = await ns.go.opponentNextTurn(false);
         checkNewGame(ns, currentGame);
-        const playStyle = getStyle(ns);
+        let playStyle = getStyle(ns);
         while (true) {
             turn++;
+            if (turn === 1) playStyle = getStyle(ns); // A new game (possibly a different opponent) started
             board = await go_getBoardState(ns);
             contested = await go_analysis_getControlledEmptyNodes(ns);
             validMove = await go_analysis_getValidMoves(ns);
@@ -867,6 +869,7 @@ export async function main(ns) {
                 );
             }
             turn = 0;
+            currentValidMovesTurn = -1; // turn numbers restart, so don't reuse the previous game's move list
             ns.clearLog();
         }
     }
@@ -890,7 +893,7 @@ export async function main(ns) {
             for (let cx = (patternSize - 1) * -1; cx <= 0; cx++) {
                 // We've added a wall around everything, so 0 is a wall
                 if (cx + x + 1 < 0 || cx + x + 1 > size - 1) continue;
-                for (let cy = (patternSize - 1) * -1; cy <= 0 - 1; cy++) {
+                for (let cy = (patternSize - 1) * -1; cy <= 0; cy++) {
                     //We now have a cycle that will check each section of the grid against the pattern
                     //Safety checks: We know 0,0 is safe, we were sent it, but each other section could be bad
                     if (cy + y + 1 < 0 || cy + y + 1 > size - 1) continue;

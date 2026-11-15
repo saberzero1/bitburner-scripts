@@ -35,11 +35,10 @@ const symbols = [
 ];
 // Completion ports for temp scripts. Kept well away from low port numbers, which other scripts use
 // (darknet: 17-21, infiltration: 1 and 30). Module state is shared by every script importing helpers.js.
-// Each temp script signals completion on port COMPLETION_PORT_BASE + (its pid % COMPLETION_PORT_COUNT), so one script
-// file per command serves every call (previously one file per port per command: ~2400 files on home, all in the save).
-// A stale signal on a reused port only wakes the waiter early; it then still checks the result file.
-const COMPLETION_PORT_BASE = 10000;
-const COMPLETION_PORT_COUNT = 1000;
+// Each temp script sends its result on its own port, RESULT_PORT_BASE + its pid. Ports are unique per process, so
+// concurrent callers of the same command can never read each other's result (they used to share one result file),
+// one script file per command serves every call, and nothing has to be pre-written or re-read.
+const RESULT_PORT_BASE = 1_000_000_000;
 
 /** Port helpers: use the ns.port namespace (dev/v3+) and fall back to the deprecated top-level functions.
  * @param {NS} ns */
@@ -112,12 +111,19 @@ export function formatNumberShort(
 export function parseShortNumber(text = "0") {
     let parsed = Number(text);
     if (!isNaN(parsed)) return parsed;
-    for (const sym of symbols.slice(1))
-        if (text.toLowerCase().endsWith(sym))
-            return (
-                Number.parseFloat(text.slice(0, text.length - sym.length)) *
-                Math.pow(10, 3 * symbols.indexOf(sym))
-            );
+    // Longest suffixes first; exact case first, since q/Q (1e15/1e18) and s/S (1e21/1e24) differ only by case
+    const bySuffixLength = symbols.slice(1).sort((a, b) => b.length - a.length);
+    const parse = (sym) =>
+        Number.parseFloat(text.slice(0, text.length - sym.length)) *
+        Math.pow(10, 3 * symbols.indexOf(sym));
+    for (const sym of bySuffixLength) if (text.endsWith(sym)) return parse(sym);
+    // Then case-insensitively (e.g. "1.5M"), only for suffixes that don't have a different-case counterpart
+    for (const sym of bySuffixLength)
+        if (
+            text.toLowerCase().endsWith(sym.toLowerCase()) &&
+            symbols.filter((o) => o.toLowerCase() === sym.toLowerCase()).length === 1
+        )
+            return parse(sym);
     return Number.NaN;
 }
 
@@ -139,7 +145,7 @@ export function formatNumber(
                   minDecimalPlaces,
                   Math.max(
                       0,
-                      minSignificantFigures - Math.ceil(Math.log10(num)),
+                      minSignificantFigures - Math.ceil(Math.log10(Math.abs(num))),
                   ),
               ),
           );
@@ -425,22 +431,21 @@ export async function getNsDataThroughFile_Custom(
     // Check whether any backwards-compatible changes need to be made to the command being executed
     command = checkBackwardsCompatibility(ns, command);
 
-    // Create a file that will store the results of whatever command is executed.
+    // The result is also written to this file, for scripts that display it (e.g. dashboard.jsx, stats.js)
     fName = fName || getDefaultCommandFileName(command);
-    // Pre-write contents to the file that will allow us to detect if our temp script never got run
-    const initialContents = "<Insufficient RAM>";
-    ns.write(fName, initialContents, "w");
-
     const fNameCommand = `${fName}.${hashString(command)}.js`;
+    // The source must stay identical for every call (the game caches each distinct script source forever), so the
+    // result port is derived from the temp script's own pid rather than inlined.
     const commandToFile =
+        `const p=${RESULT_PORT_BASE}+ns.pid;` +
+        `const send=(x)=>{if(ns.port)ns.port.write(p,x);else ns.writePort(p,x);};` +
+        // If the temp script is killed before it finishes (e.g. a killall), still tell the caller instead of leaving it waiting
+        `let done=false;ns.atExit(()=>{if(!done)send("ERROR: The temp script was killed before it finished.");});` +
         `let r;try{const v=(${command});` +
         `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
         `r=JSON.stringify({ $type:'result', $value:w }, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}` +
         `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w');` +
-        // Completion port from our own pid (the source stays identical for every call: the game caches each
-        // distinct script source forever)
-        `const p=${COMPLETION_PORT_BASE}+ns.pid%${COMPLETION_PORT_COUNT};` +
-        `if(ns.port)ns.port.write(p,1);else if(typeof ns.writePort==='function')ns.writePort(p,1);`;
+        `done=true;send(r);`;
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(
         ns,
@@ -453,47 +458,36 @@ export async function getNsDataThroughFile_Custom(
         retryDelayMs,
         silent,
     );
-    // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
-    const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
-    const completionPort = pid ? COMPLETION_PORT_BASE + (pid % COMPLETION_PORT_COUNT) : null;
-    await waitForProcessToComplete_Custom(
-        ns,
-        fnIsAlive,
-        pid,
-        verbose,
-        completionPort,
-    );
-    if (verbose)
-        log(ns, `Process ${pid} is done. Reading the contents of ${fName}...`);
-    // Read the file, with auto-retries if it fails
-    let lastRead;
-    const fileData = await autoRetry(
-        ns,
-        () => ns.read(fName),
-        (f) =>
-            (lastRead = f) !== undefined &&
-            f !== "" &&
-            f !== initialContents &&
-            !(typeof f == "string" && f.startsWith("ERROR: ")),
-        () =>
-            `\nns.read('${fName}') returned a bad result: "${lastRead}".` +
-            `\n  Script:  ${fNameCommand}\n  Args:    ${JSON.stringify(args)}\n  Command: ${command}` +
-            (lastRead == undefined
-                ? "\nThe developer has no idea how this could have happened. Please post a screenshot of this error on discord."
-                : lastRead == initialContents
-                  ? `\nThe script that ran this will likely recover and try again later once you have more free ram.`
-                  : lastRead == ""
-                    ? `\nThe file appears to have been deleted before a result could be retrieved. Perhaps there is a conflicting script.`
-                    : lastRead.includes("API ACCESS ERROR")
-                      ? `\nThis script should not have been run until you have the required Source-File upgrades. Sorry about that.`
-                      : `\nThe script was likely passed invalid arguments. Please post a screenshot of this error on discord.`),
-        maxRetries,
-        retryDelayMs,
-        undefined,
-        verbose,
-        verbose,
-        silent,
-    );
+    if (!pid)
+        throw new Error(
+            `Failed to start a temp script for command: ${command} (args: ${JSON.stringify(args)})`,
+        );
+    // Wait for the result on this process's own port
+    const resultPort = RESULT_PORT_BASE + pid;
+    let fileData;
+    let sleepMs = 1;
+    for (let waitIteration = 0; waitIteration < 1000; waitIteration++) {
+        if (portPeek(ns, resultPort) !== "NULL PORT DATA") {
+            fileData = portRead(ns, resultPort);
+            break;
+        }
+        if (verbose && waitIteration % 100 === 99)
+            log(ns, `Waiting for temp script ${fNameCommand} (pid ${pid}) to report its result...`);
+        await ns.sleep(sleepMs);
+        sleepMs = Math.min(sleepMs * 2, 200);
+    }
+    const context =
+        `\n  Script:  ${fNameCommand}\n  Args:    ${JSON.stringify(args)}\n  Command: ${command}`;
+    if (fileData === undefined)
+        throw new Error(`Temp script (pid ${pid}) never reported a result.${context}`);
+    // An error result is final: the command already ran, so re-reading or waiting can't change it
+    if (typeof fileData === "string" && fileData.startsWith("ERROR: "))
+        throw new Error(
+            `${fileData}${context}` +
+                (fileData.includes("API ACCESS ERROR")
+                    ? `\nThis script should not have been run until you have the required Source-File upgrades. Sorry about that.`
+                    : ""),
+        );
     if (verbose)
         log(ns, `Read the following data for command ${command}:\n${fileData}`);
     return JSON.parse(fileData, jsonReviver); // Deserialize it back into an object/array and return
@@ -986,11 +980,14 @@ export function log(
         );
     if (alsoPrintToTerminal) {
         ns.tprint(message);
-        ns.write(
-            "/Temp/terminal-log.txt",
-            `${formatDateTime(new Date())} ${message}\n`,
-            "a",
-        );
+        const terminalLog = "/Temp/terminal-log.txt";
+        ns.write(terminalLog, `${formatDateTime(new Date())} ${message}\n`, "a");
+        // Keep it bounded (it's saved with the game): trim to the last ~100 KB once it passes 200 KB
+        const contents = ns.read(terminalLog);
+        if (contents.length > 200_000) {
+            const tail = contents.slice(-100_000);
+            ns.write(terminalLog, tail.slice(tail.indexOf("\n") + 1), "w");
+        }
     }
     return message;
 }
@@ -1475,6 +1472,7 @@ export function getConfiguration(ns, argsSchema) {
     const confName = `${scriptName}.config.txt`;
     const overrides = ns.read(confName);
     const overriddenSchema = overrides ? [...argsSchema] : argsSchema; // Clone the original args schema
+    const configOverriddenKeys = new Set(); // Keys whose default the config file changed (skip type checks for these)
     const dictArgsSchema = Object.fromEntries(argsSchema);
     if (overrides) {
         try {
@@ -1493,7 +1491,7 @@ export function getConfiguration(ns, argsSchema) {
                 const match =
                     matchIndex === -1 ? null : overriddenSchema[matchIndex];
                 const strDefaultValue =
-                    match[1] === undefined
+                    match?.[1] === undefined
                         ? "undefined"
                         : JSON.stringify(match[1], jsonReplacer);
                 const strFinalValue =
@@ -1516,6 +1514,7 @@ export function getConfiguration(ns, argsSchema) {
                     );
                     overriddenSchema[matchIndex] = { ...match }; // Clone the (previously shallow-copied) object at this position of the new argsSchema
                     overriddenSchema[matchIndex][1] = override; // Update the value of the clone.
+                    configOverriddenKeys.add(key);
                 }
             }
         } catch (err) {
@@ -1538,7 +1537,8 @@ export function getConfiguration(ns, argsSchema) {
         const finalOptions = ns.flags(overriddenSchema);
         for (const [key, defaultValue] of Object.entries(dictArgsSchema)) {
             const finalValue = finalOptions[key];
-            if (defaultValue == null) continue;
+            // Options with no default, overridden by the config file (which may set null or another type), or left null
+            if (defaultValue == null || configOverriddenKeys.has(key) || finalValue == null) continue;
             if (Array.isArray(defaultValue) && !Array.isArray(finalValue))
                 throw new Error(
                     `Invalid value for --${key}. Expected array, got ${typeof finalValue}.`,

@@ -310,7 +310,7 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
             ns.getServerMaxRam(currentServer) -
             ns.getServerUsedRam(currentServer);
         let reservedRam =
-            idealReservedRam / availableRam < 0.05
+            options["reserved-ram-ideal"] / availableRam < 0.05
                 ? options["reserved-ram-ideal"]
                 : options["reserved-ram"];
         const threads = Math.floor((availableRam - reservedRam) / 2.0);
@@ -339,6 +339,7 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
         await waitForProcessToComplete(ns, pid);
         chargeAttempts[fragment.id] = 1 + (chargeAttempts[fragment.id] || 0);
     }
+    return true; // Completed a round (the main loop only sleeps briefly between successful rounds)
 }
 
 /** Get the current active stanek fragments

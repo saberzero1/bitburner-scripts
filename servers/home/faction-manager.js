@@ -125,7 +125,7 @@ const argsSchema = [
     ["v", false], // (Kept for backwards compatilily) this was an alias flag for setting --verbose to true when it previously defaulted to false.
     ["ignore-player-data", false], // Display stats for all factions and augs, despite what we already have (kind of a "mock" mode)
     ["i", false], // Flag alias for --ignore-player-data
-    // Shadows of Anarchy was previously ignored by default (infiltration was manual), but is now supported via automated infiltration.js
+    // Shadows of Anarchy was previously ignored by default (infiltration was manual), but is now supported via automated infiltrator.js
     ["ignore-faction", []], // Factions to omit from all data, stats, and calcs, (e.g.) if you do not want to purchase augs from them, or do not want to see them because they are impractical to join at this time
     ["after-faction", []], // Pretend we were to buy all augs offered by these factions. Show us only what remains.
     ["force-join", null], // Always join these factions if we have an invite (useful to force join a gang faction)
@@ -1886,7 +1886,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
         )
             outputRows.push(
                 factionsWithAug[0].name === "Shadows of Anarchy"
-                    ? `SUGGESTION: Run \`infiltration.js --auto --faction "Shadows of Anarchy"\` to earn rep for ${strNF} via automated infiltration (SoA does not support donations or traditional faction work).`
+                    ? `SUGGESTION: Run \`infiltrator.js --auto --faction "Shadows of Anarchy"\` to earn rep for ${strNF} via automated infiltration (SoA does not support donations or traditional faction work).`
                     : `SUGGESTION: Do some work for faction ${factionsWithAug[0].name} to quickly earn rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`,
             );
         else if (
@@ -1928,7 +1928,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
                 ns,
                 `Cannot buy any NF due to best provider faction ${getFrom} having insufficient rep, and donations are not unlocked.` +
                     (getFrom === "Shadows of Anarchy"
-                        ? ` Run \`infiltration.js --auto --faction "Shadows of Anarchy"\` to earn rep via infiltration.`
+                        ? ` Run \`infiltrator.js --auto --faction "Shadows of Anarchy"\` to earn rep via infiltration.`
                         : ``),
             );
         else if (joined)

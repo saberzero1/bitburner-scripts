@@ -13,6 +13,7 @@ import {
     autoRetry,
     portWrite,
     portClear,
+    portPeek,
 } from "./helpers";
 
 // =============================================================================
@@ -506,7 +507,7 @@ function inlineCalculateSellCash(
     const marketMult = inlineCalculateMarketDemandMultiplier(timestamp);
     const hasWKS =
         gPlayer && typeof gPlayer.hasAugmentation === "function"
-            ? gPlayer.hasAugmentation("WKSharmonizer", true)
+            ? gPlayer.hasAugmentation("SoA - phyzical WKS harmonizer", true)
             : false;
     const infiltrationMoney = nodeMults ? nodeMults.InfiltrationMoney : 1;
     return (
@@ -540,7 +541,7 @@ function inlineCalculateTradeRep(
     else balanceMultiplier = 0.2;
     const hasWKS =
         gPlayer && typeof gPlayer.hasAugmentation === "function"
-            ? gPlayer.hasAugmentation("WKSharmonizer", true)
+            ? gPlayer.hasAugmentation("SoA - phyzical WKS harmonizer", true)
             : false;
     const infiltrationRep = nodeMults ? nodeMults.InfiltrationRep : 1;
     return (
@@ -576,7 +577,7 @@ function inlineCalculateSoARep(
     const marketMult = inlineCalculateMarketDemandMultiplier(timestamp);
     const hasWKS =
         gPlayer && typeof gPlayer.hasAugmentation === "function"
-            ? gPlayer.hasAugmentation("WKSharmonizer", true)
+            ? gPlayer.hasAugmentation("SoA - phyzical WKS harmonizer", true)
             : false;
     const favor =
         faction && typeof faction.favor === "number" ? faction.favor : 0;
@@ -1228,9 +1229,7 @@ function findButton(text) {
  * Click a button via its React fiber onClick handler (bypasses isTrusted checks).
  */
 function clickButton(btn) {
-    const reactKey = Object.keys(btn).find(
-        (k) => k.startsWith("__reactProps$") || k.startsWith("__reactFiber$"),
-    );
+    const reactKey = Object.keys(btn).find((k) => k.startsWith("__reactProps$"));
     if (reactKey && btn[reactKey] && btn[reactKey].onClick) {
         btn[reactKey].onClick({ isTrusted: true });
     } else {
@@ -1276,6 +1275,8 @@ function infLoop() {
                 `[infLoop] Starting infiltration: ${infiltration.location?.name || "unknown"}`,
             );
         }
+        // Starting at difficulty >= 3.5 sets HP to 0 (Infiltration.ts startInfiltration); the game greys out Start there
+        if ((infiltration.startingDifficulty ?? 0) >= 3.5) return;
         try {
             infiltration.startInfiltration();
         } catch (e) {
@@ -1945,6 +1946,19 @@ export async function main(ns) {
         }
         wrapEventListeners();
         wnd.tmrAutoInf = setInterval(infLoop, speed);
+        // The interval and the key-event wrapper live on the page, so they outlive the script unless cleaned up.
+        // (--auto mode deliberately exits and keeps the loop running.)
+        if (!autoMode)
+            ns.atExit(() => {
+                if (wnd.tmrAutoInf) {
+                    clearInterval(wnd.tmrAutoInf);
+                    delete wnd.tmrAutoInf;
+                }
+                restoreEventListeners();
+                try {
+                    if (portPeek(ns, 30) === ns.pid) portClear(ns, 30); // release the "infiltration active" lock
+                } catch {}
+            });
     }
 
     if (options["info"]) {
@@ -2045,6 +2059,9 @@ export async function main(ns) {
         // Recompute best faction+target before each infiltration using live reputation
         let totalLoops = 0;
         let goal;
+        // Alternate between faction rep goals and bounded money sessions, so new faction needs are picked up and
+        // the "infiltration active" lock (port 30) doesn't block work-for-factions forever.
+        for (;;) {
         while (
             (goal = await computeNextGoal(
                 ns,
@@ -2162,8 +2179,16 @@ export async function main(ns) {
                     ? 1e39
                     : parseShortNumber(options["getMoney"]);
             let stock = options["stock"];
-            await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
+            const outcome = await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock, 10);
+            if (outcome !== "loop-cap") break; // reached the money target (or gave up)
+            portClear(ns, 30); // release the lock so other scripts can use the gap
+            await ns.sleep(30000);
+            portWrite(ns, 30, ns.pid);
+            player = await getPlayerInfo(ns);
+            locations = await getLocations(ns, verbose);
+            await updateAugmentationData(ns, player, ignoreFaction);
         }
+        } // for (;;)
     } else {
         let maxMoney =
             options["getMoney"] === ""
@@ -2185,7 +2210,7 @@ export async function main(ns) {
  * @param {boolean} [stock] - If true, the script will take into account the value of your stocks when calculating how much money you have.
  * @returns {Promise<void>}
  */
-async function infiltrateForMoney(ns, player, maxMoney, target, stock = true) {
+async function infiltrateForMoney(ns, player, maxMoney, target, stock = true, maxSessionLoops = Infinity) {
     let faction = "none";
     let loop = 1;
     let currentMoney = player.money + (stock ? await getStocksValue(ns) : 0);
@@ -2226,8 +2251,10 @@ async function infiltrateForMoney(ns, player, maxMoney, target, stock = true) {
 
     if (options["info"]) return;
 
+    let sessionLoops = 0;
     while (currentMoney < maxMoney) {
         if (loop > options["max-loop"]) return log(ns, "maximum loops reached");
+        if (++sessionLoops > maxSessionLoops) return "loop-cap"; // let the caller re-check its goals
 
         if (!options["no-tail"]) ns.ui.openTail();
         if (options["sleep-Between-Infiltration-Time"])
@@ -2397,7 +2424,8 @@ async function infiltrate(ns, city, target, faction) {
     // ns.sleep() returns a Netscript promise that can't be cancelled; if the
     // rewardPromise resolves first, the dangling ns.sleep lingers and collides
     // with the next ns.sleep call in the main orchestrator loop.
-    const TIMEOUT_MS = 60000; // 60 second timeout (normal run ~35s)
+    // Each level has a ~0.9s countdown plus the minigame; big targets (50 levels) don't fit in a fixed 60s
+    const TIMEOUT_MS = Math.max(60000, (target?.maxClearanceLevel ?? 0) * 1500 + 20000);
     const pollInterval = 1000;
     let elapsed = 0;
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));

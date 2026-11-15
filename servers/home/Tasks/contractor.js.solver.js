@@ -165,7 +165,8 @@ export async function main(ns) {
 
             worker.onmessage = (msg) => {
                 completed++;
-                const [answer, contract, hostname, type] = msg.data;
+                const [answer, contract, hostname, , workerError] = msg.data;
+                const type = contractInfo.type; // (the worker reports its solver function name)
                 let notice = null;
 
                 if (answer != null) {
@@ -185,6 +186,7 @@ export async function main(ns) {
                                 ns.tprint(message);
                             }
                         } else {
+                            failureCount++;
                             notice =
                                 `ERROR: Wrong answer for contract type "${type}" (${contract} on ${hostname}):` +
                                 `\nIncorrect Answer Given: ${JSON.stringify(answer)}`;
@@ -199,14 +201,17 @@ export async function main(ns) {
                         notice = `ERROR: Attempt to solve contract raised an error. (Answer Given: ${JSON.stringify(answer)})\n"${errorMessage}"`;
                         // Suppress errors about missing contracts. This can happen if this script gets while another instance is already running.
                         if (
-                            errorMessage.indexOf("Cannot find contract") == -1
+                            errorMessage.indexOf("Cannot find contract") != -1
                         ) {
                             ns.print(notice); // Still log it to the terminal in case we're debugging a fake contract.
                             notice = null;
                         }
                     }
                 } else {
-                    notice = `ERROR: Worker returned null answer for contract type "${type}" (${contract} on ${hostname})`;
+                    failureCount++;
+                    notice =
+                        `ERROR: Worker returned null answer for contract type "${type}" (${contract} on ${hostname})` +
+                        (workerError ? `: ${workerError}` : "");
                 }
 
                 if (notice) {
@@ -1402,9 +1407,17 @@ const codingContractTypesMetadata = [
 // The jsonReviver is included so workers can parse BigInt values from contract data.
 // Each function name matches the solverTypeMap keys above.
 const workerCode = `
+// Same rules as helpers.js jsonReviver (contract data is serialized with helpers.js jsonReplacer)
 function jsonReviver(key, value) {
-    if (typeof value === "string" && /^-?[0-9]+(\\.[0-9]+)?n$/.test(value))
-        return BigInt(value.slice(0, -1));
+    if (typeof value === "string" && /^-?[0-9]+n$/.test(value))
+        return BigInt(value.slice(0, -1)); // legacy format
+    if (value == null || typeof value !== "object" || value.$type == null) return value;
+    if (value.$type == "bigint") return BigInt(value.$value);
+    if (value.$type == "number") return Number.parseFloat(value.$value);
+    if (value.$type == "undefined") return undefined;
+    if (value.$type == "null") return null;
+    if (value.$type == "Map") return new Map(value.$value);
+    if (value.$type == "Set") return new Set(value.$value);
     return value;
 }
 
@@ -2009,7 +2022,7 @@ onmessage = (event) => {
         const answer = solver(data);
         postMessage([answer, contract, hostname, solverName]);
     } catch (err) {
-        postMessage([null, contract, hostname, solverName]);
+        postMessage([null, contract, hostname, solverName, String(err?.message ?? err)]);
     }
 };
 `;

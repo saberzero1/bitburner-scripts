@@ -54,7 +54,7 @@ const argsSchema = [
     ["xp-mode-interval-minutes", 55], // Every time this many minutes has elapsed, toggle daemon.js to runing in --xp-only mode, which prioritizes earning hack-exp rather than money
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
-    ["disable-infiltration", false], // Set to true to disable running the infiltration.js script automatically
+    ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
 ];
 
 export function autocomplete(data, args) {
@@ -1438,8 +1438,10 @@ export async function main(ns) {
             // Otherwise, something went wrong
             log(
                 ns,
-                `ERROR: Something went wrong. casino.js was run, but we haven't been killed. It must have run into a problem...`,
+                `ERROR: Something went wrong. casino.js was run, but we haven't been killed. It must have run into a problem... ` +
+                    `Not retrying it this reset (each attempt kills work-for-factions, infiltrator, daemon and dashboard).`,
             );
+            ranCasino = true;
         }
     }
 
