@@ -35,9 +35,11 @@ const symbols = [
 ];
 // Completion ports for temp scripts. Kept well away from low port numbers, which other scripts use
 // (darknet: 17-21, infiltration: 1 and 30). Module state is shared by every script importing helpers.js.
-const COMPLETION_PORT_BASE = 9000;
-const COMPLETION_PORT_COUNT = 20;
-let nextCompletionPort = 0;
+// Each temp script signals completion on port COMPLETION_PORT_BASE + (its pid % COMPLETION_PORT_COUNT), so one script
+// file per command serves every call (previously one file per port per command: ~2400 files on home, all in the save).
+// A stale signal on a reused port only wakes the waiter early; it then still checks the result file.
+const COMPLETION_PORT_BASE = 10000;
+const COMPLETION_PORT_COUNT = 1000;
 
 /** Port helpers: use the ns.port namespace (dev/v3+) and fall back to the deprecated top-level functions.
  * @param {NS} ns */
@@ -429,19 +431,16 @@ export async function getNsDataThroughFile_Custom(
     const initialContents = "<Insufficient RAM>";
     ns.write(fName, initialContents, "w");
 
-    nextCompletionPort = (nextCompletionPort + 1) % COMPLETION_PORT_COUNT;
-    const completionPort = COMPLETION_PORT_BASE + nextCompletionPort;
-    portClear(ns, completionPort);
-    const fNameCommand = `${fName}.${hashString(command)}.${completionPort}.js`;
+    const fNameCommand = `${fName}.${hashString(command)}.js`;
     const commandToFile =
         `let r;try{const v=(${command});` +
         `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
         `r=JSON.stringify({ $type:'result', $value:w }, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}` +
         `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w');` +
-        // The port is parsed from the script's own name (not inlined) so the source is identical for every
-        // port: the game caches each distinct script source forever.
-        `const p=+(ns.getScriptName().match(/\\.(\\d+)\\.js$/)||[])[1];` +
-        `if(p){if(ns.port)ns.port.write(p,1);else if(typeof ns.writePort==='function')ns.writePort(p,1);}`;
+        // Completion port from our own pid (the source stays identical for every call: the game caches each
+        // distinct script source forever)
+        `const p=${COMPLETION_PORT_BASE}+ns.pid%${COMPLETION_PORT_COUNT};` +
+        `if(ns.port)ns.port.write(p,1);else if(typeof ns.writePort==='function')ns.writePort(p,1);`;
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(
         ns,
@@ -456,6 +455,7 @@ export async function getNsDataThroughFile_Custom(
     );
     // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
     const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
+    const completionPort = pid ? COMPLETION_PORT_BASE + (pid % COMPLETION_PORT_COUNT) : null;
     await waitForProcessToComplete_Custom(
         ns,
         fnIsAlive,

@@ -63,6 +63,12 @@ const DARKWEB_HOSTNAME = "darkweb";
 const CLUE_FILE_SUFFIX = ".data.txt";
 const PROBE_SCRIPT = "/Remote/darknet-probe.js";
 const PASSWORD_FILE = "/data/darknet-passwords.txt";
+// When each password's host was last seen (discovered or authenticated). Used to prune passwords of servers that are
+// gone: darknet hostnames churn, and without pruning the password file grew without bound (it is copied to every
+// probe host and merged back from probe reports, so it ends up many times in the save file).
+const PASSWORD_SEEN_FILE = "/data/darknet-password-seen.txt";
+const PASSWORD_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+const PASSWORD_MAX_ENTRIES = 5000;
 const OPTIONS_FILE = "/data/darknet-options.txt";
 const CLUE_CACHE_FILE = "/data/darknet-clues-scanned.txt";
 const STASIS_HELPER_SCRIPT = "/Temp/darknet-stasis-helper.js";
@@ -257,6 +263,7 @@ class DarknetState {
         this.options = options;
         this.discoveredServers = new Map(); // hostname -> DarknetServerInfo
         this.knownPasswords = new Map(); // hostname -> password
+        this.passwordSeen = new Map(); // hostname -> last time the host was seen (for pruning)
         this.activeProbes = new Map(); // hostname -> { pid, version }
         this.stasisServers = new Set(); // hostnames with active stasis links
         this.zombieStasisServers = new Map(); // hostname -> { failCount, firstFailAt, lastFailAt } — stasis servers with connection issues
@@ -293,6 +300,14 @@ class DarknetState {
                 for (const [host, pwd] of Object.entries(parsed)) {
                     this.knownPasswords.set(host, pwd);
                 }
+                let seen = {};
+                try {
+                    seen = JSON.parse(ns.read(PASSWORD_SEEN_FILE) || "{}");
+                } catch {}
+                // Entries without a timestamp (older files) get 30 minutes to be seen again before they're pruned
+                const grace = Date.now() - PASSWORD_MAX_AGE_MS + 30 * 60 * 1000;
+                for (const host of this.knownPasswords.keys())
+                    this.passwordSeen.set(host, seen[host] ?? grace);
                 log(
                     ns,
                     `INFO: Loaded ${this.knownPasswords.size} saved passwords`,
@@ -303,9 +318,31 @@ class DarknetState {
         }
     }
 
+    /** Note that a host was seen (discovered or authenticated), keeping its password from being pruned. */
+    touchPassword(hostname) {
+        if (this.knownPasswords.has(hostname)) this.passwordSeen.set(hostname, Date.now());
+    }
+
     savePasswords(ns) {
-        const data = JSON.stringify(Object.fromEntries(this.knownPasswords));
-        ns.write(PASSWORD_FILE, data, "w");
+        // Drop passwords of hosts not seen recently, and cap the total (most recently seen first)
+        const cutoff = Date.now() - PASSWORD_MAX_AGE_MS;
+        for (const host of [...this.knownPasswords.keys()]) {
+            if ((this.passwordSeen.get(host) ?? 0) < cutoff) {
+                this.knownPasswords.delete(host);
+                this.passwordSeen.delete(host);
+            }
+        }
+        if (this.knownPasswords.size > PASSWORD_MAX_ENTRIES) {
+            const byAge = [...this.knownPasswords.keys()].sort(
+                (a, b) => (this.passwordSeen.get(a) ?? 0) - (this.passwordSeen.get(b) ?? 0),
+            );
+            for (const host of byAge.slice(0, this.knownPasswords.size - PASSWORD_MAX_ENTRIES)) {
+                this.knownPasswords.delete(host);
+                this.passwordSeen.delete(host);
+            }
+        }
+        ns.write(PASSWORD_FILE, JSON.stringify(Object.fromEntries(this.knownPasswords)), "w");
+        ns.write(PASSWORD_SEEN_FILE, JSON.stringify(Object.fromEntries(this.passwordSeen)), "w");
     }
 
     loadScannedClues(ns) {
@@ -361,8 +398,16 @@ class DarknetState {
         this.pruneEphemeralState();
     }
 
-    addPassword(ns, hostname, password) {
+    /** @param {boolean} seen false for passwords relayed from probe reports about hosts we haven't seen ourselves */
+    addPassword(ns, hostname, password, seen = true) {
         this.knownPasswords.set(hostname, password);
+        if (seen || !this.passwordSeen.has(hostname))
+            this.passwordSeen.set(
+                hostname,
+                seen || this.discoveredServers.has(hostname)
+                    ? Date.now()
+                    : Date.now() - PASSWORD_MAX_AGE_MS + 30 * 60 * 1000,
+            );
         this.savePasswords(ns);
         // Clear zombie status when we learn a password for a zombie stasis server.
         // This is the primary recovery path: probes adjacent to the server re-authenticate
@@ -379,6 +424,7 @@ class DarknetState {
     removePassword(ns, hostname) {
         if (this.knownPasswords.has(hostname)) {
             this.knownPasswords.delete(hostname);
+            this.passwordSeen.delete(hostname);
             this.savePasswords(ns);
         }
     }
@@ -570,7 +616,7 @@ async function orchestrateDarknet(ns, state, options) {
                 let newCount = 0;
                 for (const [host, pwd] of Object.entries(remotePwds)) {
                     if (!state.knownPasswords.has(host)) {
-                        state.addPassword(ns, host, pwd);
+                        state.addPassword(ns, host, pwd, false);
                         newCount++;
                     }
                 }
@@ -717,7 +763,7 @@ async function orchestrateDarknet(ns, state, options) {
                                     remotePwds,
                                 )) {
                                     if (!state.knownPasswords.has(host)) {
-                                        state.addPassword(ns, host, pwd);
+                                        state.addPassword(ns, host, pwd, false);
                                         newCount++;
                                     }
                                 }
@@ -1000,6 +1046,7 @@ function buildWorkQueue(ns, state, nearbyServers, options) {
 
         const serverInfo = new DarknetServerInfo(hostname, details);
         state.discoveredServers.set(hostname, serverInfo);
+        state.touchPassword(hostname);
 
         // Track depth
         if (serverInfo.depth !== null) {
@@ -1073,6 +1120,7 @@ async function processServer(ns, state, hostname, options) {
 
     const serverInfo = new DarknetServerInfo(hostname, details);
     state.discoveredServers.set(hostname, serverInfo);
+    state.touchPassword(hostname);
 
     // Already authenticated — deploy probe
     if (isServerAuthenticated(state, hostname)) {
@@ -2210,7 +2258,9 @@ async function chargeMigrations(ns, state, options) {
     const maxLoops = options["migration-charge-loops"];
 
     const MIGRATION_HELPER_SCRIPT = "/Temp/darknet-migration-helper.js";
-    const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { ns.dnet.induceServerMigration(ns.args[0]); ns.rm('${MIGRATION_HELPER_SCRIPT}'); }`;
+    // induceServerMigration returns a promise: it must be awaited (an un-awaited call followed by any other ns call throws a
+    // concurrency error). The file has constant content and is reused, so it doesn't delete itself (that also cost 1 GB).
+    const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { await ns.dnet.induceServerMigration(ns.args[0]); }`;
 
     // Performance: cap servers charged per tick to avoid spawning too many helpers
     const MAX_MIGRATION_SERVERS_PER_TICK = 3;
