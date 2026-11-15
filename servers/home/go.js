@@ -19,7 +19,7 @@ import {
     getNsDataThroughFile,
     formatTime,
 } from "./helpers.js";
-import { evaluateMove, searchMove } from "./go-search.js";
+import { evaluateMove, replyCheck, searchMove } from "./go-search.js";
 import { fastSearch } from "./go-fast.js";
 
 const argsSchema = [
@@ -44,6 +44,9 @@ const argsSchema = [
     // tools/go-sim gq_1500 vs heuristics, 5x5 node power/h: Illuminati 344k vs 184k (86% vs 45% won), Daedalus 93k vs 90k,
     // Slum Snakes 88k vs 80k, Tetrads 66k vs 60k; The Black Hand 62k vs 71k and Netburners 44k vs 55k (skipped below)
     ["fast-search-skip", "Netburners,The Black Hand"], // Opponents the heuristics already beat more cheaply
+    ["reply-check", "3-7"], // With fast-search: on these moves of a game, re-rank the top 3 candidates by 2 sampled replies of
+    // the real AI each (go-search.js replyCheck). tools/go-fast analysis: losses came from one punishing AI reply on
+    // moves 3-7; this check won 93% vs 86% vs Illuminati 5x5 for ~0.3 s more CPU per game. "" = off
     ["fast-playouts", 1500], // Playouts per move (~0.03 s CPU on 5x5); 1000-2500 were about as good, 4000+ cost more than they won
     ["early-cheats", 2], // With fast-search: cheat (play two moves) on our first N moves of a game. tools/go-fast/match.mjs vs
     // Illuminati 5x5: 0 cheats 50% won, 1: 63%, 2: ~88% (80/80 on boards without offline nodes), 3: 89%; cheating only when
@@ -112,6 +115,9 @@ export async function main(ns) {
     let cheatTypes = ["twoMoves"];
     let lastStats = null; // ns.go.analysis.getStats() snapshot, to detect each game's result
     const GO_RESULTS_FILE = "/data/go-results.txt";
+    // Lost games (and 1 in 10 won ones) with our fast-search turns, for tools/go-fast/analyze.mjs
+    const GO_GAMES_FILE = "/data/go-games.txt";
+    let gameLog = [];
     let logtime = false;
     let runOnce = true;
     let silent = false;
@@ -199,6 +205,7 @@ export async function main(ns) {
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
         searchOptions = {
             fast: runOptions["fast-search"], fastSkip: String(runOptions["fast-search-skip"]).split(",").map((s) => s.trim()),
+            replyCheck: String(runOptions["reply-check"] || "").split("-").map(Number).filter((n) => n > 0),
             fastPlayouts: runOptions["fast-playouts"], earlyCheats: runOptions["early-cheats"],
             on: runOptions.search, verify: runOptions["search-verify"], verifyPlayouts: runOptions["verify-playouts"],
             playouts: runOptions["search-playouts"], maxSize: runOptions["search-max-size"],
@@ -324,8 +331,19 @@ export async function main(ns) {
         };
         const yieldFn = () => ns.sleep(0);
         const opts = { playouts: searchOptions.fastPlayouts, yieldFn };
-        const first = await fastSearch(board, komi, legalOf(board), opts);
+        const [rcFrom, rcTo] = searchOptions.replyCheck;
+        const willCheat = cheats && cheatsThisGame < searchOptions.earlyCheats && cheatsThisGame < maxCheatsPerGame;
+        const checkReplies = rcFrom && turn >= rcFrom && turn <= rcTo && !willCheat;
+        const first = await fastSearch(board, komi, legalOf(board), { ...opts, topK: checkReplies ? 3 : 0 });
+        if (checkReplies && first.top.length > 1) {
+            const checked = await replyCheck(ns, board, ns.go.getMoveHistory(), ns.go.getOpponent(), komi, first.top, 2, 500, fastSearch);
+            if (checked.move.x !== first.move?.x || checked.move.y !== first.move?.y)
+                ns.print(`Reply check: ${checked.move.x},${checked.move.y} instead of ${first.move?.x},${first.move?.y}`);
+            first.move = checked.move;
+            first.winRate = checked.value;
+        }
         if (!first.move) {
+            gameLog.push({ board, move: null, winRate: first.winRate });
             ns.print(`Fast search: pass (win ${(first.winRate * 100).toFixed(0)}%)`);
             return await ns.go.passTurn();
         }
@@ -336,12 +354,14 @@ export async function main(ns) {
                 cheatsThisGame++;
                 const results = await go_cheat_playTwoMoves(ns, first.move.x, first.move.y, second.move.x, second.move.y);
                 if (results) {
+                    gameLog.push({ board, move: first.move, second: second.move, winRate: second.winRate });
                     ns.print(`Fast search: cheat ${first.move.x},${first.move.y} + ${second.move.x},${second.move.y} (win ${(second.winRate * 100).toFixed(0)}%)`);
                     return results;
                 }
                 cheatsThisGame--; // no successful tick: play normally
             }
         }
+        gameLog.push({ board, move: first.move, winRate: first.winRate });
         ns.print(`Fast search: ${first.move.x},${first.move.y} (win ${(first.winRate * 100).toFixed(0)}%, ${first.playouts} playouts)`);
         return await go_makeMove(ns, first.move.x, first.move.y);
     }
@@ -1033,6 +1053,12 @@ export async function main(ns) {
                 ...searchStats, // heuristic moves checked, searched, overridden by the search this game
             };
             ns.write(GO_RESULTS_FILE, JSON.stringify(entry) + "\n", "a");
+            if (gameLog.length && (!won || Math.random() < 0.1)) {
+                const komi = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5 }[opp];
+                ns.write(GO_GAMES_FILE, JSON.stringify({ t: entry.t, opp, komi, won, turns: gameLog }) + "\n", "a");
+                const games = ns.read(GO_GAMES_FILE);
+                if (games.length > 1_000_000) ns.write(GO_GAMES_FILE, games.slice(games.indexOf("\n", games.length - 500_000) + 1), "w");
+            }
             const text = ns.read(GO_RESULTS_FILE);
             if (text.length > 200_000) ns.write(GO_RESULTS_FILE, text.slice(text.indexOf("\n", text.length - 100_000) + 1), "w");
             ns.print(`${won ? "WON" : "LOST"} vs ${opp} (streak ${after.winStreak}, record ${after.wins}-${after.losses})`);
@@ -1154,6 +1180,7 @@ export async function main(ns) {
             if (runOnce) ns.exit();
             cheatsThisGame = 0;
             searchStats = { verified: 0, searched: 0, overridden: 0 };
+            gameLog = [];
             try {
                 const next = chooseOpponent(ns, opponent2);
                 ns.go.resetBoardState(next, sizeFor(next));

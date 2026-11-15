@@ -105,3 +105,38 @@ export async function searchMove(ns, board, history, opponent, playouts = 4) {
     }
     return candidates[0].move;
 }
+
+/**
+ * Re-rank candidate moves by the real AI's replies: for each candidate, `samples` sampled AI replies (its moves are
+ * random), each position rated by the fast search. Losses analysed with tools/go-fast/analyze.mjs came from one
+ * punishing AI reply on our moves 3-7 that the fast search's light playouts underrate; this check on those moves
+ * (top 3, 2 replies, 500 playouts) won 93% vs 86% against Illuminati 5x5 (tools/go-fast/match.mjs replyCheck).
+ * @param {NS} ns @param {string[]} board @param {string[][]} history @param {string} opponent @param {number} komi
+ * @param {{x:number,y:number}[]} candidates @param {number} samples @param {number} playouts
+ * @param {Function} fastSearch go-fast.js fastSearch
+ * @returns {Promise<{move: {x:number,y:number}, value: number}>}
+ */
+export async function replyCheck(ns, board, history, opponent, komi, candidates, samples, playouts, fastSearch) {
+    const { root } = setup(ns, board, history, opponent);
+    const yieldFn = () => ns.sleep(0);
+    let best = null;
+    for (const c of candidates) {
+        let total = 0;
+        for (let k = 0; k < samples; k++) {
+            const state = Engine.getStateCopy(root);
+            state.previousBoards = [...root.previousBoards];
+            if (!Engine.makeMove(state, c.x, c.y, "Black")) {
+                total = -Infinity;
+                break;
+            }
+            const reply = await Engine.getMove(state, "White", opponent, false, seed());
+            if (reply.type === "move" && reply.x !== null) Engine.makeMove(state, reply.x, reply.y, "White");
+            else Engine.passTurn(state, "White", false);
+            const legal = Engine.getAllValidMoves(state, "Black").map((p) => ({ x: p.x, y: p.y }));
+            const rows = Engine.simpleBoardFromBoard(state.board);
+            total += (await fastSearch(rows, komi, legal, { playouts, yieldFn })).value;
+        }
+        if (!best || total > best.total) best = { move: c, total };
+    }
+    return { move: best.move, value: best.total / samples };
+}

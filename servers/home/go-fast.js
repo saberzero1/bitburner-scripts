@@ -379,6 +379,7 @@ export async function fastSearch(rows, komi, legal, opts = {}) {
     let best = null;
     for (const ch of root.children) if (!best || ch.n > best.n) best = ch;
     const value = root.w / Math.max(1, root.n); // black's win rate from this position (any side to move)
-    if (!best) return { move: null, winRate: 0, value, playouts: done };
-    return { move: best.move ? fromP(best.move) : null, winRate: best.w / Math.max(1, best.n), value, playouts: done };
+    const top = [...root.children].sort((a, b) => b.n - a.n).filter((c) => c.move).slice(0, opts.topK ?? 0).map((c) => fromP(c.move));
+    if (!best) return { move: null, winRate: 0, value, playouts: done, top };
+    return { move: best.move ? fromP(best.move) : null, winRate: best.w / Math.max(1, best.n), value, playouts: done, top };
 }

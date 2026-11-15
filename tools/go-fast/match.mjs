@@ -5,6 +5,7 @@
 // Node power per game ~ black score x 8 (Illuminati 5x5) x streak mult (3 for a win at full streak, 0.5 for a loss).
 import * as E from "../../servers/home/go-engine.js";
 import { fastSearch } from "../../servers/home/go-fast.js";
+import fs from "fs";
 const [opp = "Illuminati", games = "20", size = "5", optsJson = "{}"] = process.argv.slice(2);
 const opts = JSON.parse(optsJson);
 const KOMI = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5 };
@@ -14,12 +15,14 @@ const cheatChance = (c) => Math.max(Math.min(0.6 * (0.7 - 0.02 * c) ** c * crime
 const seed = () => 1 + Math.floor(Math.random() * 1e9);
 const byOffline = {};
 const kindCount = {};
+let streak = 8; // start at a full streak
 let wins = 0, cpu = 0, totalTime = 0, power = 0, cheatsTotal = 0;
 for (let g = 0; g < Number(games); g++) {
   E.EnginePlayer.totalPlaytime = seed();
   const s = E.getNewBoardState(Number(size), opp, !opts.fullBoard);
   const offline = E.simpleBoardFromBoard(s.board).join("").split("#").length - 1;
   let cheats = 0, time = 0, turn = 0, twoMoves = 0;
+  const gameLog = []; // our turns: {board (before our move), move, second (cheat), winRate}
   for (let ply = 0; ply < 200 && s.passCount < 2; ply++) {
     turn++;
     // repair:R: spend the first R turns repairing offline nodes (a cheat; uses the turn), centre-most first
@@ -44,11 +47,34 @@ for (let g = 0; g < Number(games); g++) {
       const rows = E.simpleBoardFromBoard(s.board);
       const legal = E.getAllValidMoves(s, "Black").map((p) => ({ x: p.x, y: p.y }));
       const t = performance.now();
-      const r = await fastSearch(rows, KOMI[opp], legal, opts);
+      // critical: [fromTurn, toTurn, playouts] spends more playouts on those turns (1-based, our moves)
+      const crit = opts.critical;
+      const o = crit && turn >= crit[0] && turn <= crit[1] ? { ...opts, playouts: crit[2] } : opts;
+      let r = await fastSearch(rows, KOMI[opp], legal, { ...o, topK: opts.replyCheck ? opts.replyCheck[2] : 0 });
+      // replyCheck: [fromTurn, toTurn, topK, samples, playouts]: re-rank the top candidates by the real AI's replies
+      const rc = opts.replyCheck;
+      if (rc && turn >= rc[0] && turn <= rc[1] && r.top.length > 1) {
+        let best = null;
+        for (const c of r.top) {
+          let total = 0;
+          for (let k = 0; k < rc[3]; k++) {
+            const st = E.getStateCopy(s);
+            st.previousBoards = [...s.previousBoards];
+            E.makeMove(st, c.x, c.y, "Black");
+            const m = await E.getMove(st, "White", opp, false, seed());
+            if (m.type === "move") E.makeMove(st, m.x, m.y, "White"); else E.passTurn(st, "White", false);
+            const v = await fastSearch(E.simpleBoardFromBoard(st.board), KOMI[opp], E.getAllValidMoves(st, "Black").map((p) => ({ x: p.x, y: p.y })), { ...opts, playouts: rc[4] });
+            total += v.value;
+          }
+          if (!best || total > best.total) best = { c, total };
+        }
+        r = { ...r, move: best.c, winRate: best.total / rc[3] };
+      }
       const dt = performance.now() - t; cpu += dt; time += dt / 1000;
       return r;
     };
     let r = await pick();
+    const boardBefore = E.simpleBoardFromBoard(s.board);
     let cheat = false;
     if (r.move && cheatKind === "early") cheat = twoMoves < Number(cheatA);
     // best:K:kinds: on our first K turns, value every option (normal move, two moves, remove a white stone, destroy an
@@ -105,11 +131,15 @@ for (let g = 0; g < Number(games); g++) {
       const r2 = await pick();
       if (r2.move) E.makeMove(s, r2.move.x, r2.move.y, "Black");
       else s.previousPlayer = "Black";
+      gameLog.push({ board: boardBefore, move: r.move, second: r2.move, winRate: r2.winRate });
       time += 0.2 / cheatChance(cheats);
       cheats++;
       twoMoves++;
-    } else if (r.move) E.makeMove(s, r.move.x, r.move.y, "Black");
-    else E.passTurn(s, "Black", false);
+    } else {
+      gameLog.push({ board: boardBefore, move: r.move, winRate: r.winRate });
+      if (r.move) E.makeMove(s, r.move.x, r.move.y, "Black");
+      else E.passTurn(s, "Black", false);
+    }
     if (s.passCount >= 2) break;
     const m = await E.getMove(s, "White", opp, false, seed());
     time += 0.16;
@@ -117,9 +147,14 @@ for (let g = 0; g < Number(games); g++) {
   }
   const sc = E.getScore(s); const won = sc.Black.sum > sc.White.sum;
   if (won) wins++;
+  if (opts.dump && (!won || Math.random() < (opts.dumpWins ?? 0)))
+    fs.appendFileSync(opts.dump, JSON.stringify({ opp, komi: KOMI[opp], won, final: E.simpleBoardFromBoard(s.board), score: [sc.Black.sum, sc.White.sum], turns: gameLog }) + "\n");
   (byOffline[offline] ??= [0, 0])[0] += won ? 1 : 0;
   byOffline[offline][1]++;
-  power += sc.Black.sum * (opp === "Illuminati" && Number(size) === 5 ? 8 : (KOMI[opp] + 0.5) * 0.25) * (won ? 3 : 0.5);
+  // Win streak like the game: a win counts 1 + 0.25 x min(streak, 8) (x3 cap), a loss 0.5 and resets the streak
+  // (breaking a losing streak gives a bonus; ignored)
+  streak = won ? Math.max(1, streak + 1) : 0;
+  power += sc.Black.sum * (opp === "Illuminati" && Number(size) === 5 ? 8 : (KOMI[opp] + 0.5) * 0.25) * (won ? 1 + 0.25 * Math.min(streak, 8) : 0.5);
   totalTime += time; cheatsTotal += cheats;
 }
 const n = Number(games);

@@ -22,7 +22,7 @@ import { Factions } from "../../src/Faction/Factions";
 import { Go } from "../../src/Go/Go";
 import { getMove } from "../../src/Go/boardAnalysis/goAI";
 import { makeMove, passTurn, getStateCopy, getNewBoardStateFromSimpleBoard } from "../../src/Go/boardState/boardState";
-import { getAllValidMoves } from "../../src/Go/boardAnalysis/boardAnalysis";
+import { getAllValidMoves, simpleBoardFromBoard } from "../../src/Go/boardAnalysis/boardAnalysis";
 import { getScore } from "../../src/Go/boardAnalysis/scoring";
 import { getNS, initGameEnvironment, setupBasicTestingEnvironment } from "./Utilities";
 
@@ -64,16 +64,21 @@ test(
     // go-search.js, with the engine's own modules in place of the bundled go-engine.js (same code)
     let searchSrc = fs.readFileSync(SCRIPT.replace(/go\.js$/, "go-search.js"), "utf8");
     searchSrc = searchSrc.replace(/^import .*$/m, "").replace(/^export\s+/gm, "");
-    const Engine = { getMove, makeMove, passTurn, getStateCopy, getNewBoardStateFromSimpleBoard, getAllValidMoves, getScore };
-    const searchFns = new Function("Engine", searchSrc + "\nreturn { searchMove, evaluateMove };")(Engine);
+    const Engine = { getMove, makeMove, passTurn, getStateCopy, getNewBoardStateFromSimpleBoard, getAllValidMoves, getScore, simpleBoardFromBoard };
+    const searchFns = new Function("Engine", searchSrc + "\nreturn { searchMove, evaluateMove, replyCheck };")(Engine);
     // Search CPU time counts as game time (live, it delays our move)
+    // Search CPU time counts as game time (live, it delays our move). Re-entrant: replyCheck calls fastSearch.
+    let searchDepth = 0;
     const timed = (fn: (...a: unknown[]) => Promise<unknown>) => async (...a: unknown[]) => {
+      if (searchDepth > 0) return fn(...a);
       const t0 = performance.now();
+      searchDepth++;
       inSearch = true;
       let r;
       try {
         r = await fn(...a);
       } finally {
+        searchDepth--;
         inSearch = false;
       }
       const ms = performance.now() - t0;
@@ -85,6 +90,7 @@ test(
     const fastSrc = fs.readFileSync(SCRIPT.replace(/go\.js$/, "go-fast.js"), "utf8").replace(/^export\s+/gm, "");
     const fastSearch = timed(new Function(fastSrc + "\nreturn fastSearch;")());
     const evaluateMove = timed(searchFns.evaluateMove);
+    const replyCheck = timed(searchFns.replyCheck);
     src = src.replace(/^export\s+/gm, "");
     const files: Record<string, string> = {};
     // Temp scripts share the simulated clock and the wrapped go API (overrides is defined below; read at call time)
@@ -113,6 +119,7 @@ test(
       "searchMove",
       "evaluateMove",
       "fastSearch",
+      "replyCheck",
       src + "\nreturn main;",
     )(
       getConfiguration,
@@ -125,6 +132,7 @@ test(
       searchMove,
       evaluateMove,
       fastSearch,
+      replyCheck,
     );
 
     // Per-game records: detect game ends from the stats (wins + losses) after each move/pass
