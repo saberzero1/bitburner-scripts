@@ -14,7 +14,7 @@ import {
 import {
     getDarknetPasswordSolver,
     tryFormatBruteforce,
-    parseDarknetLogs,
+    needsAuthFeedback,
     estimateCrackDifficulty,
 } from "./darknet-helpers.js";
 
@@ -134,7 +134,7 @@ const LAB_SOLVER_CONTENT = [
     `  (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 42;
+const PROBE_VERSION = 43;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1130,6 +1130,8 @@ function safeGetAuthDetails(ns, hostname) {
  * 2. Labyrinth solver (if model is The Labyrinth)
  * 3. Model-specific solver from darknet-helpers.js
  * 4. Format-based bruteforce fallback
+ * Feedback-based models are skipped: authenticate() returns no feedback outside labyrinths (it is only in
+ * the server log), so they are left to the probes, which read it with heartbleed.
  */
 async function authenticateServer(ns, state, hostname, serverInfo, options) {
     const verbose = options.verbose;
@@ -1185,6 +1187,16 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     if (safeHasRoot(ns, hostname)) {
         if (verbose) log(ns, `${hostname} already cracked by another agent`);
         return true;
+    }
+
+    // Feedback-based models: guessing blind from here would only burn attempts. Leave them to the probes.
+    if (needsAuthFeedback(serverInfo)) {
+        if (verbose)
+            log(
+                ns,
+                `${hostname} (${serverInfo.modelId}) needs auth feedback; leaving it to the probes`,
+            );
+        return false;
     }
 
     // Model-specific solver
@@ -2368,6 +2380,8 @@ async function scanAllClueFiles(ns, state, options) {
                 const cacheKey = `${hostname}:${clueFile}`;
                 if (state.scannedClueFiles.has(cacheKey)) continue;
 
+                // ns.read only reads files on home: copy the clue file here first.
+                if (!ns.scp(clueFile, "home", hostname)) continue;
                 const content = ns.read(clueFile);
                 if (!content) {
                     state.scannedClueFiles.add(cacheKey);
@@ -2437,18 +2451,23 @@ function parseClueFile(content) {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        // Match "hostname: X, password: Y" or "host: X password: Y" patterns
-        const fullMatch = trimmed.match(
-            /host(?:name)?[:\s]+([^\s,]+)[,\s]+password[:\s]+['"]?([^'"}\s,]+)/i,
-        );
+        // Match 'Server: X Password: "Y"' (the game's format) or "hostname: X, password: Y"
+        const fullMatch =
+            trimmed.match(
+                /(?:server|host(?:name)?)\s*:?\s*([^\s,]+)[,\s]+password\s*:\s*"([^"]*)"/i,
+            ) ||
+            trimmed.match(
+                /(?:server|host(?:name)?)\s*:?\s*([^\s,]+)[,\s]+password\s*:\s*'?([^'"}\s,]+)/i,
+            );
         if (fullMatch) {
             passwords.push({ hostname: fullMatch[1], password: fullMatch[2] });
             continue;
         }
 
-        // Match standalone "password: Y" or "pwd: Y"
+        // Match standalone "password: Y" or "pwd: Y" ("Remember this password: Y"). Needs a colon/equals,
+        // so "The password for X contains a and b" is a hint, not the password "for".
         const pwdMatch = trimmed.match(
-            /(?:password|pwd|pass)[:\s]+['"]?([^'"}\s,]+)/i,
+            /(?:password|pwd|pass)\s*[:=]\s*['"]?([^'"}\s,]+)/i,
         );
         if (pwdMatch) {
             passwords.push({ hostname: null, password: pwdMatch[1] });
@@ -2457,7 +2476,7 @@ function parseClueFile(content) {
 
         // Match "auth: Y" or "authenticate: Y"
         const authMatch = trimmed.match(
-            /auth(?:enticate)?[:\s]+['"]?([^'"}\s,]+)/i,
+            /auth(?:enticate)?\s*:\s*['"]?([^'"}\s,]+)/i,
         );
         if (authMatch) {
             passwords.push({ hostname: null, password: authMatch[1] });

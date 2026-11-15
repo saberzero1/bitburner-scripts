@@ -1,4 +1,4 @@
-const PROBE_VERSION = 42;
+const PROBE_VERSION = 43;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1570,32 +1570,49 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
         logError(ns, `Migration charging error`, err);
     }
 }
+// Clue files already read ("host:file"), so each one is copied and parsed once.
+const scannedClueFiles = new Set();
+// Passwords from clues that don't name their server ("Remember this password: X" is an unnamed neighbour's).
+// tryHintBasedAuth tries them as candidates.
+const unattributedCluePasswords = new Set();
+const MAX_UNATTRIBUTED_CLUES = 20;
+
 async function scanClueFiles(ns, hostname, passwords, passwordFile) {
     try {
         const dataFiles = await nsLs(ns, hostname, ".data.txt");
         if (!dataFiles.length) return;
+        const host = ns.getHostname();
+        let changed = false;
 
         for (const file of dataFiles) {
+            const key = `${hostname}:${file}`;
+            if (scannedClueFiles.has(key)) continue;
             try {
+                // ns.read only reads files on this script's own server, so copy a remote clue file here first.
+                if (hostname !== host) {
+                    const copied = await nsScpDirect(ns, file, host, hostname);
+                    if (!copied) continue;
+                }
                 const content = ns.read(file);
+                scannedClueFiles.add(key);
                 if (!content) continue;
-                const parsed = parseDarknetLogs(content);
-                const lines = String(content).split(/\r?\n/);
-                for (const line of lines) {
-                    const fullMatch = line.match(
-                        /host(?:name)?[:\s]+([^\s,]+)[,\s]+password[:\s]+['\"]?([^'"}\s,]+)/i,
-                    );
-                    if (fullMatch) {
-                        passwords.set(fullMatch[1], fullMatch[2]);
+                for (const clue of parseClueText(content)) {
+                    if (clue.hostname) {
+                        if (passwords.get(clue.hostname) !== clue.password) {
+                            passwords.set(clue.hostname, clue.password);
+                            changed = true;
+                        }
+                    } else {
+                        unattributedCluePasswords.add(clue.password);
+                        if (unattributedCluePasswords.size > MAX_UNATTRIBUTED_CLUES) {
+                            const oldest = unattributedCluePasswords.values().next().value;
+                            unattributedCluePasswords.delete(oldest);
+                        }
                     }
                 }
-                for (const pwd of parsed.passwords) {
-                    if (!pwd) continue;
-                    if (!passwords.has(hostname)) passwords.set(hostname, pwd);
-                }
-                savePasswords(ns, passwordFile, passwords);
             } catch {}
         }
+        if (changed) savePasswords(ns, passwordFile, passwords);
     } catch {}
 }
 
@@ -1641,6 +1658,11 @@ async function tryHintBasedAuth(ns, hostname, details) {
             }
         }
     } catch {}
+    // Unnamed clue passwords belong to some neighbour of the clue's server; try those that fit.
+    for (const p of unattributedCluePasswords) {
+        if (!(details.passwordLength > 0) || p.length === details.passwordLength)
+            candidates.add(p);
+    }
 
     for (const candidate of candidates) {
         if (!candidate) continue;
@@ -1855,6 +1877,21 @@ const SOLVER_MAP = {
     "BigMo%od": solveTripleModulo,
 };
 
+// ServerGenerator.ts: divisibility passwords are products of factors <= 97 (smallPrimes) and up to two
+// primes from the fixed largePrimes list.
+const DIVISIBILITY_SMALL_PRIMES = [
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+];
+const DIVISIBILITY_LARGE_PRIMES = [
+    1069, 1409, 1471, 1567, 1597, 1601, 1697, 1747, 1801, 1889, 1979, 1999, 2063, 2207, 2371, 2503, 2539, 2693,
+    2741, 2753, 2801, 2819, 2837, 2909, 2939, 3169, 3389, 3571, 3761, 3881, 4217, 4289, 4547, 4729, 4789, 4877,
+    4943, 4951, 4957, 5393, 5417, 5419, 5441, 5519, 5527, 5647, 5779, 5881, 6007, 6089, 6133, 6389, 6451, 6469,
+    6547, 6661, 6719, 6841, 7103, 7549, 7559, 7573, 7691, 7753, 7867, 8053, 8081, 8221, 8329, 8599, 8677, 8761,
+    8839, 8963, 9103, 9199, 9343, 9467, 9551, 9601, 9739, 9749, 9859,
+];
+// Pairwise coprime moduli <= 32 (guessing n <= 32 on BigMo%od returns P % n), largest first.
+const TRIPLE_MODULO_MODULI = [32, 31, 29, 27, 25, 23, 19, 17, 13, 11, 7];
+
 async function solveZeroLogon(ns, hostname) {
     const result = await runAuth(ns, hostname, "");
     return result.success ? "" : null;
@@ -1968,69 +2005,57 @@ async function solveSortedEchoVuln(ns, hostname, serverInfo) {
     if (!sorted || !/^\d+$/.test(sorted)) return null;
     const length = sorted.length;
 
-    if (length <= 7) {
-        const result = await solvePermutationByAuth(
-            ns,
-            hostname,
-            sorted.split(""),
-            10000,
+    // The game only reports an RMS deviation for passwords of 5+ digits; shorter ones have <= 24 orderings.
+    if (length < 5) {
+        return await solvePermutationByAuth(ns, hostname, sorted.split(""), 200);
+    }
+
+    // Feedback (authentication.ts SortedEchoVuln): rmsd = sqrt(Σ(guess_i - pw_i)² / L), printed with toFixed(3).
+    // Σpw_i² is known from the sorted digits. A guess with "1" at position i and "0" everywhere else scores
+    // Σpw² - 2·pw_i + 1, so each such guess reveals one digit: pw_i = (Σpw² - L·rmsd² + 1) / 2.
+    // (Rounding error of L·rmsd² is at most 9·L·0.001 < 0.5, so Math.round recovers the exact sum.)
+    const sumSq = sorted
+        .split("")
+        .reduce((sum, d) => sum + Number(d) * Number(d), 0);
+    const remaining = new Map();
+    for (const d of sorted) remaining.set(d, (remaining.get(d) || 0) + 1);
+    let prefix = "";
+    for (let i = 0; i < length; i++) {
+        // Digits still available for this position (no leading zeros in numeric passwords).
+        const options = [...remaining.keys()].filter(
+            (d) => remaining.get(d) > 0 && !(i === 0 && d === "0"),
         );
-        return result;
+        let digit = options.length === 1 ? options[0] : null;
+        if (digit === null) {
+            const guess = "0".repeat(i) + "1" + "0".repeat(length - i - 1);
+            const fb = await authWithLogFeedback(
+                ns,
+                hostname,
+                guess,
+                getRmsdFeedbackFromLogs,
+            );
+            if (fb?.success) return guess;
+            if (await isAlreadyCracked(ns, hostname)) return null;
+            if (fb) {
+                const squaredError = Math.round(fb.value * fb.value * length);
+                const value = (sumSq - squaredError + 1) / 2;
+                if (Number.isInteger(value) && remaining.get(String(value)) > 0)
+                    digit = String(value);
+            }
+        }
+        if (digit === null) break; // no usable feedback: brute-force the rest below
+        prefix += digit;
+        remaining.set(digit, remaining.get(digit) - 1);
     }
-
-    const attempts = 2500;
-    let bestCandidate = shuffleString(sorted);
-    let bestScore = Infinity;
-    let stagnation = 0;
-    let feedbackMisses = 0;
-
-    async function authWithFeedback(guess) {
-        const resp = await runAuth(ns, hostname, guess);
-        if (resp.success) return { success: true, rmsd: 0 };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
-        if (bleed?.logs) {
-            const rmsd = getRmsdFeedbackFromLogs(bleed.logs, guess);
-            if (Number.isFinite(rmsd)) return { success: false, rmsd };
-        }
-        return null;
+    if (prefix.length === length) {
+        const result = await runAuth(ns, hostname, prefix);
+        if (result.success) return prefix;
     }
-
-    for (let i = 0; i < attempts; i++) {
-        const fb = await authWithFeedback(bestCandidate);
-        if (fb?.success) return bestCandidate;
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (!fb) {
-            feedbackMisses++;
-            if (feedbackMisses > 4) return null;
-            continue;
-        }
-        const rmsd = fb.rmsd;
-        if (rmsd < bestScore) {
-            bestScore = rmsd;
-            stagnation = 0;
-        } else {
-            stagnation++;
-        }
-        const next = mutateSwap(bestCandidate);
-        const nextFb = await authWithFeedback(next);
-        if (nextFb?.success) return next;
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (!nextFb) {
-            feedbackMisses++;
-            if (feedbackMisses > 4) return null;
-            continue;
-        }
-        const nextRmsd = nextFb.rmsd;
-        if (nextRmsd <= bestScore) {
-            bestCandidate = next;
-            bestScore = nextRmsd;
-        }
-        if (stagnation > 50) {
-            bestCandidate = shuffleString(sorted);
-            stagnation = 0;
-        }
-    }
-    return null;
+    // Fallback: permute the digits not yet placed behind the solved prefix.
+    const rest = [];
+    for (const [d, count] of remaining)
+        for (let i = 0; i < count; i++) rest.push(d);
+    return await solvePermutationByAuth(ns, hostname, rest, 5000, prefix);
 }
 
 async function solveMastermind(ns, hostname, serverInfo) {
@@ -2042,93 +2067,66 @@ async function solveMastermind(ns, hostname, serverInfo) {
     // but correct), while the narrow charset causes permanent failures.
     const charset =
         getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
-    const constraints = [];
-    const counts = new Map();
+    // Numeric passwords never start with 0 (getPassword strips leading zeros).
+    const noLeadingZero = serverInfo?.passwordFormat === "numeric" && length > 1;
+    const stats = { auths: 0 };
+    const AUTH_LIMIT = 500; // real authentication attempts, not enumerated permutations
 
-    // Helper: make an auth attempt and retrieve Mastermind feedback via heartbleed.
-    // The authenticate() API does NOT return the exact/misplaced data for non-labyrinth
-    // models — it only returns {success, code, message:"Unauthorized"}.
-    // We must read the server logs via heartbleed to get the actual feedback.
-    async function authWithFeedback(guess) {
-        const resp = await runAuth(ns, hostname, guess);
-        if (resp.success) return { success: true, exact: length, misplaced: 0 };
-        // Read recent server logs to find our guess's feedback
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
-        if (bleed?.logs) {
-            const fb = getMastermindFeedbackFromLogs(bleed.logs, guess);
-            if (fb) return { success: false, ...fb };
-        }
-        return null; // Could not retrieve feedback
-    }
-
-    // Phase 1: Character counting — try each char repeated to determine how many
-    // of each character appear in the password.
-    let feedbackMisses = 0;
-    for (const ch of charset) {
-        const probe = ch.repeat(length);
-        const fb = await authWithFeedback(probe);
-        if (fb?.success) return probe;
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (fb) {
-            counts.set(ch, fb.exact + fb.misplaced);
-            constraints.push({
-                guess: probe,
-                exact: fb.exact,
-                misplaced: fb.misplaced,
-            });
-        } else {
-            feedbackMisses++;
-            // If heartbleed consistently fails, we can't solve this interactively
-            if (feedbackMisses > 5) {
-                return await bruteMastermind(
-                    ns,
-                    hostname,
-                    charset,
-                    length,
-                    constraints,
-                );
-            }
-        }
-    }
-
-    const multiset = [];
-    for (const [ch, count] of counts.entries()) {
-        for (let i = 0; i < count; i++) multiset.push(ch);
-    }
-
-    if (multiset.length !== length || multiset.length === 0) {
-        return await bruteMastermind(
+    // Feedback is "exact,misplaced" in the server log (authenticate() only returns data on labyrinths).
+    const guessWithFeedback = (guess) =>
+        authWithLogFeedback(
             ns,
             hostname,
-            charset,
+            guess,
+            getMastermindFeedbackFromLogs,
+            3,
+            stats,
+        );
+
+    // Phase 1: count each symbol with a repeated-symbol guess ("aaaa" scores exact = count of 'a').
+    // Stop as soon as the counts add up to the length; the last symbol's count can be inferred.
+    const counts = new Map();
+    let found = 0;
+    for (let i = 0; i < charset.length && found < length; i++) {
+        const ch = charset[i];
+        if (i === charset.length - 1) {
+            counts.set(ch, length - found);
+            found = length;
+            break;
+        }
+        const guess = ch.repeat(length);
+        const fb = await guessWithFeedback(guess);
+        if (fb?.success) return guess;
+        if (!fb) return null; // no feedback readable — retry on a later pass
+        const n = fb.value.exact + fb.value.misplaced;
+        if (n > 0) counts.set(ch, n);
+        found += n;
+        if (stats.auths >= AUTH_LIMIT || (await isAlreadyCracked(ns, hostname)))
+            return null;
+    }
+    if (found !== length) return null;
+
+    // Phase 2: every candidate is a permutation of the known multiset, so "misplaced" is implied by
+    // "exact". Guess any permutation consistent with all exact-position counts seen so far.
+    const constraints = [];
+    const tried = new Set();
+    while (stats.auths < AUTH_LIMIT) {
+        const candidate = findMastermindCandidate(
+            counts,
             length,
             constraints,
+            tried,
+            noLeadingZero,
         );
-    }
-
-    const tries = { count: 0, limit: 6000 };
-    const checkCandidate = async (candidate) => {
-        for (const c of constraints) {
-            const feedback = compareMastermind(candidate, c.guess);
-            if (
-                feedback.exact !== c.exact ||
-                feedback.misplaced !== c.misplaced
-            )
-                return false;
-        }
-        const fb = await authWithFeedback(candidate);
+        if (!candidate) return null;
+        tried.add(candidate);
+        const fb = await guessWithFeedback(candidate);
         if (fb?.success) return candidate;
+        if (fb) constraints.push({ guess: candidate, exact: fb.value.exact });
         if (await isAlreadyCracked(ns, hostname)) return null;
-        if (fb)
-            constraints.push({
-                guess: candidate,
-                exact: fb.exact,
-                misplaced: fb.misplaced,
-            });
-        return false;
-    };
-
-    return await permuteWithConstraints(multiset, tries, checkCandidate);
+        await ns.sleep(0);
+    }
+    return null;
 }
 
 async function solveRomanNumeral(ns, hostname, serverInfo) {
@@ -2260,38 +2258,56 @@ async function solveConvertToBase10(ns, hostname, serverInfo) {
 
 async function solveDivisibilityTest(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
-    const length = getPasswordLength(serverInfo, 6);
-    const maxValue = Math.pow(10, length) - 1;
-    const primes = generatePrimes(Math.min(9999, maxValue));
-    let product = 1n;
-    for (const prime of primes) {
-        const primeValue = BigInt(prime);
-        const divisible = await isDivisibleBy(ns, hostname, primeValue);
-        if (!divisible) continue;
-        let power = primeValue;
-        while (true) {
-            const nextPower = power * primeValue;
-            const divisiblePower = await isDivisibleBy(ns, hostname, nextPower);
-            if (!divisiblePower) break;
-            power = nextPower;
+    // ServerGenerator getPasswordMadeUpOfPrimesProduct: a product of factors <= 97, times up to two primes
+    // from the fixed largePrimes list. Test "divisible by (factors found so far) × p": that checks one more
+    // factor p, handles repeated factors, and is itself a guess — it succeeds when it equals the password.
+    const length = getPasswordLength(serverInfo, 0);
+    const maxValue = length ? Math.pow(10, length) - 1 : Number.MAX_SAFE_INTEGER;
+    const minValue = length > 1 ? Math.pow(10, length - 1) : 1;
+    const stats = { auths: 0 };
+    let product = 1;
+
+    // true = divides, false = doesn't, "found" = it was the password, null = no feedback.
+    const dividesWithFactor = async (p) => {
+        const divisor = product * p;
+        const result = await isDivisibleBy(ns, hostname, divisor, stats);
+        if (result === null) return null;
+        if (result.success) return "found";
+        return result.divisible;
+    };
+
+    for (const p of DIVISIBILITY_SMALL_PRIMES) {
+        while (product * p <= maxValue) {
+            const r = await dividesWithFactor(p);
+            if (r === null) return null;
+            if (r === "found") return String(product * p);
+            if (!r) break;
+            product *= p;
         }
-        let temp = power;
-        while (temp > 1n) {
-            product *= primeValue;
-            temp /= primeValue;
-        }
-        // Early exit: if product already has the expected digit count, try it now
-        if (length && product.toString().length >= length) {
-            const earlyCandidate = product.toString();
-            const earlyResult = await runAuth(ns, hostname, earlyCandidate);
-            if (earlyResult.success) return earlyCandidate;
-            if (await isAlreadyCracked(ns, hostname)) return null;
-        }
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
-    if (product <= 1n) return null;
-    const candidate = product.toString();
-    const result = await runAuth(ns, hostname, candidate);
-    return result.success ? candidate : null;
+    if (product === 1) {
+        const one = await runAuth(ns, hostname, "1");
+        if (one.success) return "1";
+    }
+
+    // What is left is one or two large primes (the same one may appear twice).
+    for (let i = 0; i < DIVISIBILITY_LARGE_PRIMES.length; i++) {
+        const q = DIVISIBILITY_LARGE_PRIMES[i];
+        if (product * q > maxValue) break;
+        // When two more large primes no longer fit, the last one must bring the product to L digits.
+        const roomForTwo = product * q * q <= maxValue;
+        if (!roomForTwo && product * q < minValue) continue;
+        const r = await dividesWithFactor(q);
+        if (r === null) return null;
+        if (r === "found") return String(product * q);
+        if (r) {
+            product *= q;
+            i--; // the same large prime may appear twice
+        }
+        if (await isAlreadyCracked(ns, hostname)) return null;
+    }
+    return null;
 }
 
 /**
@@ -2387,85 +2403,113 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
 async function solveGlobalMaxima(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 3);
-    const domainHigh = Math.pow(10, length) - 1;
+    // Numeric passwords have no leading zeros: an L-digit password lies in [10^(L-1), 10^L - 1].
+    const lo = length > 1 ? Math.pow(10, length - 1) : 0;
+    const hi = Math.pow(10, length) - 1;
     const width = Math.pow(10, Math.max(length - 2, 0)) + 1;
-    const step = Math.max(1, Math.floor(3 * width));
+    const stats = { auths: 0 };
     const cache = new Map();
-    let feedbackMisses = 0;
-
-    async function authWithFeedback(guess) {
-        const resp = await runAuth(ns, hostname, guess);
-        if (resp.success) return { success: true, altitude: Infinity };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
-        if (bleed?.logs) {
-            const altitude = getAltitudeFeedbackFromLogs(bleed.logs, guess);
-            if (Number.isFinite(altitude)) return { success: false, altitude };
-        }
-        return null;
-    }
 
     const altitudeAt = async (x) => {
         if (cache.has(x)) return cache.get(x);
-        const value = await authWithFeedback(String(x));
-        if (!value) {
-            feedbackMisses++;
-            if (feedbackMisses > 4) return null;
-            return null;
-        }
+        const fb = await authWithLogFeedback(
+            ns,
+            hostname,
+            String(x),
+            getAltitudeFeedbackFromLogs,
+            3,
+            stats,
+        );
+        if (!fb) return null;
+        const value = fb.success
+            ? { success: true, altitude: Infinity }
+            : { success: false, altitude: fb.value };
         cache.set(x, value);
         return value;
     };
 
-    // Phase 1: Coarse scan across entire domain
-    let bestX = 0;
-    let bestA = -Infinity;
-    for (let x = 0; x <= domainHigh; x += step) {
-        const result = await altitudeAt(x);
-        if (!result) return null;
-        if (result.success) return String(x);
+    // authentication.ts getKingOfTheHillAltitude: within 3% of the password only the main hill counts,
+    // altitude = 10000·exp(-((x-P)/w)²) with w = 10^(L-2)+1, so |x-P| = w·sqrt(ln(10000/altitude)).
+    // Further out the side hills (spaced ~3w apart, each 2600 m lower) add to it, so the estimate is
+    // approximate there, but the next sample lands close enough to be exact.
+    const climb = async (x, altitude) => {
+        let curX = x;
+        let curA = altitude;
+        for (let iter = 0; iter < 8; iter++) {
+            const d = width * Math.sqrt(Math.max(0, Math.log(10000 / curA)));
+            const candidates = new Set([
+                Math.round(curX + d),
+                Math.round(curX - d),
+            ]);
+            if (d < 2) {
+                candidates.add(curX + 1);
+                candidates.add(curX - 1);
+            }
+            let best = null;
+            for (const c of candidates) {
+                if (c < lo || c > hi || c === curX) continue;
+                const r = await altitudeAt(c);
+                if (!r) return null;
+                if (r.success) return String(c);
+                if (!best || r.altitude > best.altitude)
+                    best = { x: c, altitude: r.altitude };
+            }
+            if (!best || best.altitude <= curA) return null; // not climbing: wrong hill
+            curX = best.x;
+            curA = best.altitude;
+        }
+        return null;
+    };
+
+    // Coarse scan every 3w (the hill spacing). The sample nearest the password is within 1.5w of it, and
+    // climbing from the best few samples reaches the main peak; a side hill fails to climb past its own top.
+    const step = Math.max(1, Math.floor(3 * width));
+    const samples = [];
+    const sampleAt = async (x) => {
+        if (x < lo || x > hi || cache.has(x)) return null;
+        const r = await altitudeAt(x);
+        if (!r) return false;
+        if (r.success) return String(x);
+        samples.push({ x, altitude: r.altitude });
+        return null;
+    };
+    const climbBest = async (count, climbed) => {
+        samples.sort((a, b) => b.altitude - a.altitude);
+        for (const s of samples.slice(0, count)) {
+            if (s.altitude <= 0) break;
+            if (climbed.has(s.x)) continue;
+            climbed.add(s.x);
+            const found = await climb(s.x, s.altitude);
+            if (found !== null) return found;
+            if (await isAlreadyCracked(ns, hostname)) return false;
+        }
+        return null;
+    };
+    for (let x = lo; x <= hi; x += step) {
+        const r = await sampleAt(x);
+        if (r !== null) return r || null;
         if (await isAlreadyCracked(ns, hostname)) return null;
-        if (result.altitude > bestA) {
-            bestA = result.altitude;
-            bestX = x;
+    }
+    const climbed = new Set();
+    let found = await climbBest(6, climbed);
+    if (found !== null) return found || null;
+    // Second pass: sample halfway between the best coarse samples and their neighbours, then climb again.
+    for (const s of samples.slice(0, 3)) {
+        for (const x of [s.x - Math.floor(step / 2), s.x + Math.floor(step / 2)]) {
+            const r = await sampleAt(x);
+            if (r !== null) return r || null;
         }
     }
-
-    // Phase 2: Ternary search in local window around best coarse point
-    let low = Math.max(0, bestX - 3 * step);
-    let high = Math.min(domainHigh, bestX + 3 * step);
-
-    while (high - low > 20) {
-        const m1 = Math.floor(low + (high - low) / 3);
-        const m2 = Math.floor(high - (high - low) / 3);
-        const a1 = await altitudeAt(m1);
-        if (!a1) return null;
-        if (a1.success) return String(m1);
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        const a2 = await altitudeAt(m2);
-        if (!a2) return null;
-        if (a2.success) return String(m2);
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (a1.altitude < a2.altitude) low = m1 + 1;
-        else high = m2 - 1;
-    }
-
-    // Phase 3: Linear scan of final candidates
-    bestX = low;
-    bestA = -Infinity;
-    for (let x = low; x <= high; x++) {
-        const result = await altitudeAt(x);
-        if (!result) return null;
-        if (result.success) return String(x);
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (result.altitude > bestA) {
-            bestA = result.altitude;
-            bestX = x;
+    found = await climbBest(6, climbed);
+    if (found !== null) return found || null;
+    // Small domains (1-2 digit passwords): just try what is left.
+    if (hi - lo <= 200) {
+        for (let x = lo; x <= hi; x++) {
+            const r = await sampleAt(x);
+            if (r !== null) return r || null;
         }
     }
-
-    // Final attempt with best candidate
-    const finalResp = await runAuth(ns, hostname, String(bestX));
-    return finalResp.success ? String(bestX) : null;
+    return null;
 }
 
 async function solveSpiceLevel(ns, hostname, serverInfo) {
@@ -2639,46 +2683,43 @@ async function solveTripleModulo(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, null);
     if (!length) return null;
-    const max = BigInt(Math.pow(10, length) - 1);
-    const moduli = [31, 29, 27, 25, 23];
-    const residues = [];
-    let feedbackMisses = 0;
+    // Feedback: (P % n) % (((n - 1) % 32) + 1). For n <= 32 that is simply P % n, so guessing n gives a
+    // residue directly. Pairwise coprime moduli up to 32 have a product of ~1.44e14, enough to pin down
+    // any password; stop asking once at most two candidates remain and try those.
+    const lo = length > 1 ? 10n ** BigInt(length - 1) : 0n;
+    const hi = 10n ** BigInt(length) - 1n;
+    const stats = { auths: 0 };
+    let residue = 0n;
+    let modulus = 1n;
+    const firstCandidate = () => lo + ((((residue - lo) % modulus) + modulus) % modulus);
+    const candidateCount = () => {
+        const first = firstCandidate();
+        return first > hi ? 0n : (hi - first) / modulus + 1n;
+    };
 
-    async function authWithFeedback(guess) {
-        const resp = await runAuth(ns, hostname, guess);
-        if (resp.success) return { success: true, result: null };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
-        if (bleed?.logs) {
-            const result = getModuloResultFeedbackFromLogs(bleed.logs, guess);
-            if (Number.isFinite(result)) return { success: false, result };
-        }
-        return null;
-    }
-    for (const mod of moduli) {
-        const n = nextAlignedGreater(max, mod);
-        const fb = await authWithFeedback(n.toString());
-        if (fb?.success) return n.toString();
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (!fb) {
-            feedbackMisses++;
-            if (feedbackMisses > 4) return null;
+    for (const m of TRIPLE_MODULO_MODULI) {
+        if (candidateCount() <= 2n) break;
+        const guess = String(m);
+        const fb = await authWithLogFeedback(
+            ns,
+            hostname,
+            guess,
+            getModuloResultFeedbackFromLogs,
+            3,
+            stats,
+        );
+        if (fb?.success) return guess;
+        if (!fb) return null;
+        if (!Number.isInteger(fb.value) || fb.value < 0 || fb.value >= m)
             return null;
-        }
-        const result = fb.result;
-        if (!Number.isFinite(result)) return null;
-        residues.push(BigInt(result));
+        residue = crt([residue, BigInt(fb.value)], [modulus, BigInt(m)]);
+        modulus *= BigInt(m);
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
-    const modulus = moduli.reduce((acc, m) => acc * BigInt(m), 1n);
-    let candidate = crt(
-        residues,
-        moduli.map((m) => BigInt(m)),
-    );
-    if (candidate < 0n) candidate = ((candidate % modulus) + modulus) % modulus;
-    while (candidate > max) candidate -= modulus;
-    for (let k = 0n; candidate + k * modulus <= max; k++) {
-        const trial = candidate + k * modulus;
-        const result = await runAuth(ns, hostname, trial.toString());
-        if (result.success) return trial.toString();
+    if (candidateCount() > 500n) return null;
+    for (let x = firstCandidate(); x <= hi; x += modulus) {
+        const result = await runAuth(ns, hostname, x.toString());
+        if (result.success) return x.toString();
         if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
@@ -2810,112 +2851,75 @@ function parseMismatchIndex(resp) {
     return match ? Number(match[1]) : NaN;
 }
 
-function parseMastermindData(resp) {
-    const data = String(resp?.data ?? resp?.message ?? "");
-    const match = data.match(/(\d+)\s*,\s*(\d+)/);
-    if (!match) return null;
-    return { exact: Number(match[1]), misplaced: Number(match[2]) };
-}
+/**
+ * Find a permutation of the multiset `counts` (symbol -> count) that matches every constraint's exact-position
+ * count and hasn't been tried. Depth-first, pruning a prefix as soon as a constraint can no longer be met.
+ */
+function findMastermindCandidate(
+    counts,
+    length,
+    constraints,
+    tried,
+    noLeadingZero,
+    nodeBudget = 3000000,
+) {
+    const keys = [...counts.keys()];
+    const keyIndex = new Map(keys.map((k, i) => [k, i]));
+    const left = keys.map((k) => counts.get(k));
+    const guesses = constraints.map((c) => c.guess);
+    const targets = constraints.map((c) => c.exact);
+    const matched = new Array(constraints.length).fill(0);
+    const buffer = new Array(length);
+    let nodes = 0;
 
-function compareMastermind(candidate, guess) {
-    let exact = 0;
-    const remainingCandidate = [];
-    const remainingGuess = [];
-    for (let i = 0; i < candidate.length; i++) {
-        if (candidate[i] === guess[i]) exact++;
-        else {
-            remainingCandidate.push(candidate[i]);
-            remainingGuess.push(guess[i]);
-        }
-    }
-    const counts = new Map();
-    for (const ch of remainingCandidate)
-        counts.set(ch, (counts.get(ch) || 0) + 1);
-    let misplaced = 0;
-    for (const ch of remainingGuess) {
-        const count = counts.get(ch) || 0;
-        if (count > 0) {
-            misplaced++;
-            counts.set(ch, count - 1);
-        }
-    }
-    return { exact, misplaced };
-}
-
-async function bruteMastermind(ns, hostname, charset, length, constraints) {
-    resetCrackedCheck(hostname);
-    const total = Math.pow(charset.length, length);
-    if (!Number.isFinite(total) || total > 300000) return null;
-    for (let i = 0; i < total; i++) {
-        const candidate = buildCandidate(i, charset, length);
-        let ok = true;
-        for (const c of constraints) {
-            const feedback = compareMastermind(candidate, c.guess);
-            if (
-                feedback.exact !== c.exact ||
-                feedback.misplaced !== c.misplaced
-            ) {
-                ok = false;
-                break;
+    const feasible = (idx) => {
+        for (let c = 0; c < guesses.length; c++) {
+            if (matched[c] > targets[c]) return false;
+            // Upper bound on further matches: later positions whose guessed symbol is still available.
+            let possible = 0;
+            const g = guesses[c];
+            for (let j = idx + 1; j < length; j++) {
+                const k = keyIndex.get(g[j]);
+                if (k !== undefined && left[k] > 0) possible++;
             }
+            if (matched[c] + possible < targets[c]) return false;
         }
-        if (!ok) continue;
-        const resp = await runAuth(ns, hostname, candidate);
-        if (resp.success) return candidate;
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        // Try to get feedback from heartbleed for constraint tightening
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
-        if (bleed?.logs) {
-            const feedback = getMastermindFeedbackFromLogs(
-                bleed.logs,
-                candidate,
-            );
-            if (feedback)
-                constraints.push({
-                    guess: candidate,
-                    exact: feedback.exact,
-                    misplaced: feedback.misplaced,
-                });
-        }
-    }
-    return null;
-}
+        return true;
+    };
 
-async function permuteWithConstraints(multiset, tries, checkCandidate) {
-    const counts = new Map();
-    for (const d of multiset) counts.set(d, (counts.get(d) || 0) + 1);
-    const keys = Array.from(counts.keys());
-    const targetLen = multiset.length;
-    const buffer = new Array(targetLen);
-
-    const backtrack = async (idx) => {
-        if (tries.count >= tries.limit) return null;
-        if (idx === targetLen) {
-            tries.count++;
+    const dfs = (idx) => {
+        if (++nodes > nodeBudget) return null;
+        if (idx === length) {
             const candidate = buffer.join("");
-            const match = await checkCandidate(candidate);
-            return match || null;
+            return tried.has(candidate) ? null : candidate;
         }
-        for (const key of keys) {
-            const count = counts.get(key);
-            if (!count) continue;
-            counts.set(key, count - 1);
-            buffer[idx] = key;
-            const result = await backtrack(idx + 1);
+        for (let k = 0; k < keys.length; k++) {
+            if (!left[k]) continue;
+            const ch = keys[k];
+            if (idx === 0 && noLeadingZero && ch === "0") continue;
+            left[k]--;
+            buffer[idx] = ch;
+            for (let c = 0; c < guesses.length; c++)
+                if (guesses[c][idx] === ch) matched[c]++;
+            const result = feasible(idx) ? dfs(idx + 1) : null;
+            for (let c = 0; c < guesses.length; c++)
+                if (guesses[c][idx] === ch) matched[c]--;
+            left[k]++;
             if (result) return result;
-            counts.set(key, count);
         }
         return null;
     };
-
-    return await backtrack(0);
+    return dfs(0);
 }
 
-async function solvePermutationByAuth(ns, hostname, digits, limit) {
+async function solvePermutationByAuth(ns, hostname, digits, limit, prefix = "") {
     resetCrackedCheck(hostname);
     let attempts = 0;
     let found = null;
-    await permuteDigits(digits, async (candidate) => {
+    await permuteDigits(digits, async (rest) => {
+        const candidate = prefix + rest;
+        // Numeric passwords never start with 0.
+        if (candidate.length > 1 && candidate[0] === "0") return false;
         if (attempts >= limit) return true;
         attempts++;
         const resp = await runAuth(ns, hostname, candidate);
@@ -2933,25 +2937,6 @@ function parseRmsd(resp) {
     const text = String(resp?.data ?? resp?.message ?? "");
     const match = text.match(/RMS\s*Deviation\s*:?\s*([0-9.]+)/i);
     return match ? Number(match[1]) : NaN;
-}
-
-function shuffleString(value) {
-    const chars = value.split("");
-    for (let i = chars.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [chars[i], chars[j]] = [chars[j], chars[i]];
-    }
-    return chars.join("");
-}
-
-function mutateSwap(value) {
-    if (value.length < 2) return value;
-    const chars = value.split("");
-    const i = Math.floor(Math.random() * chars.length);
-    let j = Math.floor(Math.random() * chars.length);
-    if (i === j) j = (j + 1) % chars.length;
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-    return chars.join("");
 }
 
 function parsePepperCount(resp) {
@@ -3120,50 +3105,28 @@ function buildExpressionCandidates(value) {
     return Array.from(new Set(candidates));
 }
 
-function generatePrimes(limit) {
-    const sieve = new Array(limit + 1).fill(true);
-    sieve[0] = false;
-    sieve[1] = false;
-    for (let i = 2; i * i <= limit; i++) {
-        if (!sieve[i]) continue;
-        for (let j = i * i; j <= limit; j += i) sieve[j] = false;
-    }
-    const primes = [];
-    for (let i = 2; i <= limit; i++) if (sieve[i]) primes.push(i);
-    return primes;
-}
-
-async function isDivisibleBy(ns, hostname, divisor) {
-    const resp = await runAuth(ns, hostname, divisor.toString());
-    if (resp.success) return true;
-    const bleed = await runHeartbleedMulti(ns, hostname, 5);
-    if (bleed?.logs) {
-        const fb = getDivisibilityFeedbackFromLogs(
-            bleed.logs,
-            divisor.toString(),
-        );
-        if (fb !== null) return fb;
-    }
-    const data = String(resp?.data ?? "").toLowerCase();
-    if (data === "true") return true;
-    if (data === "false") return false;
-    const msg = String(resp?.message ?? "").toLowerCase();
-    if (msg.includes("is divisible")) return true;
-    if (msg.includes("not divisible")) return false;
-    return false;
+/**
+ * Divisibility-test feedback for `divisor`: {success: true} if it was the password,
+ * {success: false, divisible} otherwise, or null when the log entry could not be read (retry later).
+ */
+async function isDivisibleBy(ns, hostname, divisor, stats) {
+    const fb = await authWithLogFeedback(
+        ns,
+        hostname,
+        divisor.toString(),
+        getDivisibilityFeedbackFromLogs,
+        3,
+        stats,
+    );
+    if (!fb) return null;
+    if (fb.success) return { success: true, divisible: true };
+    return { success: false, divisible: fb.value === true };
 }
 
 function parseModuloResult(resp) {
     const data = resp?.data ?? resp?.message ?? "";
     const match = String(data).match(/(-?\d+)/);
     return match ? Number(match[1]) : NaN;
-}
-
-function nextAlignedGreater(max, mod) {
-    const maxMod = Number(max % 32n);
-    let delta = (mod - maxMod + 32) % 32;
-    if (delta === 0) delta = 32;
-    return max + BigInt(delta);
 }
 
 function crt(residues, moduli) {
@@ -3233,6 +3196,10 @@ function reverseDirection(dir) {
     return "west";
 }
 
+/**
+ * Password-like tokens and hints from server logs or clue text. Only "password: X" / "password = X" counts:
+ * free text such as "The password for X contains a and b" or "Password is not divisible by 7" does not.
+ */
 function parseDarknetLogs(logs) {
     const passwords = [];
     const hints = [];
@@ -3241,16 +3208,38 @@ function parseDarknetLogs(logs) {
         : String(logs || "").split(/\r?\n/);
     for (const log of entries) {
         const line = String(log || "");
-        const pwdMatch = line.match(/password[:\s]+['\"]?([^'"}\s]+)/i);
+        const pwdMatch = line.match(/password\s*[:=]\s*['"]?([^'"}\s,]+)/i);
         if (pwdMatch) passwords.push(pwdMatch[1]);
-        const authMatch = line.match(
-            /auth(?:enticate)?[:\s]+['\"]?([^'"}\s]+)/i,
-        );
+        const authMatch = line.match(/auth(?:enticate)?\s*:\s*['"]?([^'"}\s,]+)/i);
         if (authMatch) passwords.push(authMatch[1]);
         const hintMatch = line.match(/hint[:\s]+(.+)/i);
         if (hintMatch) hints.push(hintMatch[1].trim());
     }
     return { passwords, hints };
+}
+
+/**
+ * Passwords in a .data.txt clue file (effects.ts generateDarknetClueFiles):
+ * - `Server: <host> Password: "<pw>"`     -> {hostname, password}
+ * - `Remember this password: <pw>`        -> {hostname: null, password} (an unnamed neighbour)
+ * "The password for <host> contains a and b" and "Some common passwords include ..." are not passwords.
+ */
+function parseClueText(content) {
+    const clues = [];
+    for (const raw of String(content || "").split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        const named =
+            line.match(/(?:server|host(?:name)?)\s*:?\s*([^\s,]+)[,\s]+password\s*:\s*"([^"]*)"/i) ||
+            line.match(/(?:server|host(?:name)?)\s*:?\s*([^\s,]+)[,\s]+password\s*:\s*'?([^'"}\s,]+)/i);
+        if (named) {
+            clues.push({ hostname: named[1], password: named[2] });
+            continue;
+        }
+        for (const password of parseDarknetLogs([line]).passwords)
+            clues.push({ hostname: null, password });
+    }
+    return clues;
 }
 
 const nsToken = ["n", "s"].join("");
@@ -3526,7 +3515,19 @@ function nsGetServerUsedRam(ns, hostname) {
 
 // nsGetScriptName removed — hardcoded script name used instead
 
+// Darknet instability makes some attempts time out (code 408) without checking the password at all,
+// which would silently lose a correct guess: retry those.
+const AUTH_TIMEOUT_CODE = 408;
 async function runAuth(ns, hostname, password) {
+    let result = null;
+    for (let i = 0; i < 4; i++) {
+        result = await runAuthOnce(ns, hostname, password);
+        if (result?.code !== AUTH_TIMEOUT_CODE) break;
+    }
+    return result;
+}
+
+async function runAuthOnce(ns, hostname, password) {
     try {
         const result = await dnetCall(
             ns,
@@ -3644,6 +3645,35 @@ async function runHeartbleedMulti(ns, hostname, logsToCapture) {
             [hostname, logsToCapture],
         );
     } catch {}
+    return null;
+}
+
+/**
+ * Authenticate with `guess` and read that attempt's feedback back from the server log.
+ * authenticate() only returns `data` on labyrinth servers; elsewhere the response is logged as JSON and
+ * read with heartbleed. An attempt that times out leaves no log entry, so retry up to `maxTries` times.
+ * Returns {success: true} for the right password, {success: false, value} with the parsed feedback,
+ * or null when no feedback could be read. `stats.auths` (optional) counts real authentication attempts.
+ */
+async function authWithLogFeedback(
+    ns,
+    hostname,
+    guess,
+    parseLogs,
+    maxTries = 3,
+    stats = null,
+) {
+    for (let t = 0; t < maxTries; t++) {
+        if (stats) stats.auths++;
+        const resp = await runAuth(ns, hostname, guess);
+        if (resp?.success) return { success: true, value: null };
+        // Noise lines keep arriving (every 1-31 s) during the heartbleed delay, and other scripts may be
+        // authenticating too: capture plenty of lines. More lines cost nothing extra.
+        const bleed = await runHeartbleedMulti(ns, hostname, 40);
+        const value = bleed?.logs ? parseLogs(bleed.logs, guess) : null;
+        if (value !== null && value !== undefined && !Number.isNaN(value))
+            return { success: false, value };
+    }
     return null;
 }
 
