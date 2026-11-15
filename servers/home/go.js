@@ -19,7 +19,7 @@ import {
     getNsDataThroughFile,
     formatTime,
 } from "./helpers.js";
-import { searchMove } from "./go-search.js";
+import { evaluateMove, searchMove } from "./go-search.js";
 
 const argsSchema = [
     ["cheats", true], // (Now true by default - but still an option for backwards compatibility) This is only possible if you have BN14.2
@@ -41,7 +41,10 @@ const argsSchema = [
     // speeds up earning The Red Pill's rep, the long final wait of BN12 runs (tools/favor-model). "" = off.
     ["search", false], // Choose moves by Monte Carlo search on the game's own rules and AI (go-search.js). Off: live it won 28/28 but took
     // 39s per game against 4s for the heuristics (93% won), so node power per hour fell ~5x. Use with a small --search-playouts
-    ["search-playouts", 16], // Playouts per candidate move (tools/go-sim/search.sh: 16 won 117/118 random 5x5 games, no cheats)
+    ["search-verify", false], // Check each heuristic move with a few playouts (go-search.js); if any is lost, search instead
+    ["verify-playouts", 6], // Playouts to check a heuristic move (stops at the first loss)
+    ["search-playouts", 4], // Playouts per candidate move in a search (tools/go-sim/search.sh vs Illuminati 5x5, no cheats:
+    // 2: 20/30 won, 4: 29/30, 8: 29/30, 16: 30/30)
     ["search-max-size", 7], // Only search on boards up to this size (playout cost grows fast with the board)
     ["silent", false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
 ];
@@ -85,7 +88,8 @@ export async function main(ns) {
     let cheats = false;
     let cheatChanceThreshold = 1.0;
     let cheatsThisGame = 0;
-    let searchOptions = { on: false, playouts: 16, maxSize: 7 };
+    let searchOptions = { on: false, verify: false, verifyPlayouts: 6, playouts: 4, maxSize: 7 };
+    let searchStats = { verified: 0, searched: 0, overridden: 0 };
     let maxCheatsPerGame = 1;
     let boardSize = 13;
     let randomOpponents = false;
@@ -184,7 +188,10 @@ export async function main(ns) {
         cheats = !runOptions["disable-cheats"] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
-        searchOptions = { on: runOptions.search, playouts: runOptions["search-playouts"], maxSize: runOptions["search-max-size"] };
+        searchOptions = {
+            on: runOptions.search, verify: runOptions["search-verify"], verifyPlayouts: runOptions["verify-playouts"],
+            playouts: runOptions["search-playouts"], maxSize: runOptions["search-max-size"],
+        };
         cheatMinCapture = runOptions["cheat-min-capture"];
         cheatTypes = String(runOptions["cheat-types"]).split(",").map((t) => t.trim()).filter(Boolean);
         boardSize = [5, 7, 9, 13].includes(runOptions["board-size"]) ? runOptions["board-size"] : 0;
@@ -966,6 +973,7 @@ export async function main(ns) {
                 won,
                 streak: after.winStreak,
                 cheats: cheatsThisGame,
+                ...searchStats, // heuristic moves checked, searched, overridden by the search this game
             };
             ns.write(GO_RESULTS_FILE, JSON.stringify(entry) + "\n", "a");
             const text = ns.read(GO_RESULTS_FILE);
@@ -1088,6 +1096,7 @@ export async function main(ns) {
             recordGameResult(ns);
             if (runOnce) ns.exit();
             cheatsThisGame = 0;
+            searchStats = { verified: 0, searched: 0, overridden: 0 };
             try {
                 const next = chooseOpponent(ns, opponent2);
                 ns.go.resetBoardState(next, sizeFor(next));
@@ -2506,6 +2515,28 @@ export async function main(ns) {
         if (x === undefined) return false;
         let mid = performance.now();
         ns.printf("%s", attack.msg);
+        // Check the heuristic move with a few playouts on the game's own rules and AI; if one is lost, search instead
+        if (searchOptions.verify && board.length <= searchOptions.maxSize) {
+            try {
+                const history = ns.go.getMoveHistory();
+                const opponent = ns.go.getOpponent();
+                searchStats.verified++;
+                const safe = await evaluateMove(ns, board, history, opponent, { x, y }, searchOptions.verifyPlayouts);
+                if (safe < 1) {
+                    searchStats.searched++;
+                    const best = await searchMove(ns, board, history, opponent, searchOptions.playouts);
+                    if (best === null || best.x !== x || best.y !== y) {
+                        searchStats.overridden++;
+                        ns.printf("Search overrides %s,%s with %s", x, y, best ? `${best.x},${best.y}` : "pass");
+                        const results = best ? await go_makeMove(ns, best.x, best.y) : await ns.go.passTurn();
+                        START = performance.now();
+                        return results;
+                    }
+                }
+            } catch (err) {
+                log(ns, `WARNING: Go move check failed, playing the heuristic move: ${getErrorInfo(err)}`);
+            }
+        }
         const results = await go_makeMove(ns, x, y);
         let END = performance.now();
         if (logtime)

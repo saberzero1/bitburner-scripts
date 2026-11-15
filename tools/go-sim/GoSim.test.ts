@@ -28,13 +28,17 @@ import { getNS, initGameEnvironment, setupBasicTestingEnvironment } from "./Util
 
 initGameEnvironment();
 let simulatedMs = 0;
+let searchCpuMs = 0;
 // Simulated time also advances the player's playtime: the Go AI seeds its RNG from Player.totalPlaytime, so a
 // frozen clock replays the same game every time.
 const advance = (ms: number) => {
   simulatedMs += ms;
   Player.totalPlaytime += ms;
 };
-(globalThis as unknown as { __simSleep?: (ms: number) => void }).__simSleep = advance;
+let inSearch = false; // the search's playouts call the engine AI, whose UI waits aren't game time
+(globalThis as unknown as { __simSleep?: (ms: number) => void }).__simSleep = (ms: number) => {
+  if (!inSearch) advance(ms);
+};
 
 const env = process.env;
 const SCRIPT = env.SIM_SCRIPT ?? "";
@@ -48,6 +52,8 @@ test(
   async () => {
     setupBasicTestingEnvironment();
     Player.sourceFiles.set(14, Number(env.SIM_SF14 ?? 3));
+    // Bonus time: the AI waits 40 ms instead of 200 ms per step (live games ran ~4 s on 5x5)
+    if (env.SIM_BONUS) Go.storedCycles = 1e12;
     Player.mults.crime_success = Number(env.SIM_CRIME ?? 1.6);
     // Factions joined (Go win streaks only give favour with factions we're in), e.g. SIM_FACTIONS=Daedalus
     for (const f of (env.SIM_FACTIONS ?? "").split(",").filter(Boolean)) Player.factions.push(f as never);
@@ -59,7 +65,24 @@ test(
     let searchSrc = fs.readFileSync(SCRIPT.replace(/go\.js$/, "go-search.js"), "utf8");
     searchSrc = searchSrc.replace(/^import .*$/m, "").replace(/^export\s+/gm, "");
     const Engine = { getMove, makeMove, passTurn, getStateCopy, getNewBoardStateFromSimpleBoard, getAllValidMoves, getScore };
-    const searchMove = new Function("Engine", searchSrc + "\nreturn searchMove;")(Engine);
+    const searchFns = new Function("Engine", searchSrc + "\nreturn { searchMove, evaluateMove };")(Engine);
+    // Search CPU time counts as game time (live, it delays our move)
+    const timed = (fn: (...a: unknown[]) => Promise<unknown>) => async (...a: unknown[]) => {
+      const t0 = performance.now();
+      inSearch = true;
+      let r;
+      try {
+        r = await fn(...a);
+      } finally {
+        inSearch = false;
+      }
+      const ms = performance.now() - t0;
+      advance(ms);
+      searchCpuMs += ms;
+      return r;
+    };
+    const searchMove = timed(searchFns.searchMove);
+    const evaluateMove = timed(searchFns.evaluateMove);
     src = src.replace(/^export\s+/gm, "");
     const files: Record<string, string> = {};
     // Temp scripts share the simulated clock and the wrapped go API (overrides is defined below; read at call time)
@@ -86,6 +109,7 @@ test(
       "getNsDataThroughFile",
       "formatTime",
       "searchMove",
+      "evaluateMove",
       src + "\nreturn main;",
     )(
       getConfiguration,
@@ -96,6 +120,7 @@ test(
       getNsDataThroughFile,
       (ms: number) => `${ms}ms`,
       searchMove,
+      evaluateMove,
     );
 
     // Per-game records: detect game ends from the stats (wins + losses) after each move/pass
@@ -120,6 +145,7 @@ test(
             streak: s.winStreak,
             ms: simulatedMs - lastMs,
             cheats: Go.previousGame?.cheatCount ?? null,
+            searchMs: Math.round(searchCpuMs),
           });
           lastMs = simulatedMs;
         }
