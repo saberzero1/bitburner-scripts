@@ -1,0 +1,9 @@
+default {}
+budget95 {"buy-4s-budget":0.95}
+budget60 {"buy-4s-budget":0.6}
+prob10 {"pre-4s-buy-threshold-probability":0.1}
+prob20 {"pre-4s-buy-threshold-probability":0.2}
+ret10 {"pre-4s-buy-threshold-return":0.001}
+ret25 {"pre-4s-buy-threshold-return":0.0025}
+fracH10 {"fracH":0.1}
+divers50 {"diversification":0.5}

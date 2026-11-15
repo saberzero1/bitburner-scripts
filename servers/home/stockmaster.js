@@ -52,7 +52,8 @@ const argsSchema = [
     ["fracH", 0.2], // Fraction of assets to retain as cash in hand when buying
     ["buy-threshold", 0.0001], // Buy only stocks forecasted to earn better than a 0.01% return (1 Basis Point)
     ["sell-threshold", 0], // Sell stocks forecasted to earn less than this return (default 0% - which happens when prob hits 50% or worse)
-    ["diversification", 0.34], // Before we have 4S data, we will not hold more than this fraction of our portfolio as a single stock
+    ["diversification", 0.5], // Before we have 4S data, we will not hold more than this fraction of our portfolio as a single stock
+    // (Was 0.34. tools/stock-sim, BN12 from $1b, 6 seeds: 0.5 bought 4S ~3h sooner and doubled net worth at 12h and 24h.)
     ["disableHud", false], // Disable showing stock value in the HUD panel
     ["disable-purchase-tix-api", false], // Disable purchasing the TIX API if you do not already have it.
     // The following settings are related only to tweaking pre-4s stock-market logic
