@@ -1,4 +1,4 @@
-const PROBE_VERSION = 50;
+const PROBE_VERSION = 51;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -421,7 +421,6 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         if (result.success) return knownPassword ?? "";
     }
 
-    await pauseWorkerForHelpers(ns);
     const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
     if (hintCandidate !== null) {
         ns.print(`SUCCESS: Cracked ${hostname}`);
@@ -810,7 +809,6 @@ async function deployProbe(
                 const blockedRam = await runGetBlockedRam(ns, hostname);
                 if (blockedRam > 0) {
                     // Free it with a threaded job from here; the deploy is retried once there's room
-                    await pauseWorkerForHelpers(ns);
                     spawnRamFreeJob(ns, host, hostname, true);
                 }
             } catch {}
@@ -927,6 +925,8 @@ function buildRamFreeScript(isRemote) {
         `  const target = String(ns.args[0]);`,
         `  const rf = String(ns.args[1]);`,
         `  let totalFreed = 0;`,
+        `  let startBlocked = 0;`,
+        `  try { startBlocked = ${blockedCall}; } catch {}`,
         `  let iterations = 0;`,
         `  const maxIter = 200;`,
         `  for (let i = 0; i < maxIter; i++) {`,
@@ -936,14 +936,14 @@ function buildRamFreeScript(isRemote) {
         `    if (blocked <= 0) break;`,
         `    try {`,
         `      const r = await (${memCall});`,
-        `      if (r && r.success) {`,
-        `        const freed = parseFloat((r.message || "").match(/([\d.]+)gb/i)?.[1] || "0");`,
-        `        totalFreed += freed;`,
-        `      } else { break; }`,
+        `      if (!r || !r.success) break;`,
         `    } catch { break; }`,
         `    await ns.sleep(50);`,
         `  }`,
-        `  ns.write(rf, JSON.stringify({ totalFreed, iterations }), "w");`,
+        `  let endBlocked = startBlocked;`,
+        `  try { endBlocked = ${blockedCall}; } catch {}`,
+        `  totalFreed = startBlocked - endBlocked;`,
+        `  ns.write(rf, JSON.stringify({ target, totalFreed, startBlocked, endBlocked, iterations, threads: ns.getRunningScript().threads }), "w");`,
         `}`,
     ].join("\n");
 }
@@ -1051,8 +1051,18 @@ async function freeBlockedRam(ns) {
         const usedRam = await nsGetServerUsedRam(ns, host);
         const freeRam = Math.max(0, maxRam - usedRam);
 
-        if (freeRam < RAM_FREE_SCRIPT_COST) {
-            // Not enough free RAM to run the script locally — neighbors will help
+        if (freeRam < RAM_FREE_SCRIPT_COST + HELPER_HEADROOM_GB) {
+            // Too little free RAM for the helper (a mostly blocked server: neighbours rarely got to it). Free it from
+            // this process until the threaded helper fits; it then speeds up as more RAM comes free.
+            for (let i = 0; i < 20; i++) {
+                let r = null;
+                try {
+                    r = await ns.dnet.memoryReallocation();
+                } catch {}
+                if (!r?.success) break;
+                if (nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) >= RAM_FREE_SCRIPT_COST + HELPER_HEADROOM_GB) break;
+            }
+            ramFreeLastCheck.set(host, 0); // start the helper on the next pass
             return;
         }
 
@@ -1089,8 +1099,7 @@ async function freeNeighborBlockedRam(ns, neighborHost) {
         const usedRam = await nsGetServerUsedRam(ns, host);
         const freeRam = Math.max(0, maxRam - usedRam);
 
-        await pauseWorkerForHelpers(ns);
-        if (freeRam < RAM_FREE_SCRIPT_COST && nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) < RAM_FREE_SCRIPT_COST) return;
+        if (freeRam < RAM_FREE_SCRIPT_COST) return;
 
         // We have enough free RAM on our host — spawn a remote freeing job
         spawnRamFreeJob(ns, host, neighborHost, true);
@@ -1130,7 +1139,8 @@ const WORKER_SOURCES = {
     money: `export async function main(ns){const d=ns.dnet;while(true){try{await d.${["phishing", "Attack"].join("")}();}catch{await ns.sleep(5000);}}}`,
 };
 const WORKER_THREAD_RAM = 3.6; // 1.6 base + 2.0 for the dnet call
-const WORKER_RESERVE_GB = 8; // left free for the probe's temp scripts (anchoring pauses the worker: setStasisLink needs 13.6 GB)
+const WORKER_RESERVE_GB = 8;
+const WORKER_RESERVE_FRACTION = 0.25; // also left free: threaded cracking and RAM freeing run in it (anchoring pauses the worker: setStasisLink needs 13.6 GB)
 
 async function manageWorker(ns, optionsFile, host) {
     if (host === "home") return; // phishingAttack and promoteStock only work on darknet servers
@@ -1138,14 +1148,13 @@ async function manageWorker(ns, optionsFile, host) {
     const mode = options.workerMode === "cha" && options.workerStock ? "cha" : options.workerMode === "money" ? "money" : "off";
     const procs = (await nsPs(ns, host)) || [];
     if (procs.some((p) => /dnet-migrate/.test(p.filename))) return; // migration charging has the RAM for now
-    if (Date.now() < helperDemandUntil) return; // cracking / RAM freeing has the RAM for now
     const workers = procs.filter((p) => /darknet-worker-/.test(p.filename));
     const wantedScript = mode === "off" ? null : WORKER_SCRIPTS[mode];
     const wantedArgs = mode === "cha" ? [options.workerStock] : [];
     const keepFree = options.labNeighbors.includes(host);
     const workerRam = workers.reduce((total, p) => total + p.threads * WORKER_THREAD_RAM, 0);
     const maxRam = nsGetServerMaxRam(ns, host);
-    const spare = maxRam - nsGetServerUsedRam(ns, host) + workerRam - Math.max(WORKER_RESERVE_GB, 0.1 * maxRam);
+    const spare = maxRam - nsGetServerUsedRam(ns, host) + workerRam - Math.max(WORKER_RESERVE_GB, WORKER_RESERVE_FRACTION * maxRam);
     const threads = keepFree || !wantedScript ? 0 : Math.max(0, Math.floor(spare / WORKER_THREAD_RAM));
     const current = workers.find((p) => normalizeScriptName(p.filename) === normalizeScriptName(wantedScript ?? "") &&
         JSON.stringify(p.args) === JSON.stringify(wantedArgs));
@@ -3602,23 +3611,14 @@ const AUTH_TIMEOUT_CODE = 408;
 
 // Authentication and heartbleed take 1/(1+0.2(t-1)) as long with t threads, and memoryReallocation frees t times as
 // much per call, so they run in temp scripts with the host's spare RAM (tools/dnet-sim/CrossSim: at low charisma,
-// 1-thread cracking never reached the Eternal labyrinth in 24h). Workers pause while this is going on.
+// 1-thread cracking never reached the Eternal labyrinth in 24h). They use the RAM workers leave free (WORKER_RESERVE_*):
+// pausing workers for them stopped the workers for good, since a probe nearly always has something to crack.
 const HELPER_HEADROOM_GB = 3; // left for the probe's other temp scripts (ps, kill, scp: up to ~2.3 GB each)
 const HELPER_MAX_THREADS = 64;
-const HELPER_PAUSE_MS = 90_000;
-let helperDemandUntil = 0;
 function helperThreads(ns, ramPerThread) {
     const host = ns.getHostname();
     const free = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) - HELPER_HEADROOM_GB;
     return Math.max(1, Math.min(HELPER_MAX_THREADS, Math.floor(free / ramPerThread)));
-}
-/** Free the worker's RAM for cracking / RAM freeing; manageWorker restarts it HELPER_PAUSE_MS after the last call. */
-async function pauseWorkerForHelpers(ns) {
-    const wasPaused = Date.now() < helperDemandUntil;
-    helperDemandUntil = Date.now() + HELPER_PAUSE_MS;
-    if (wasPaused || ns.getHostname() === "home") return;
-    for (const p of ((await nsPs(ns, ns.getHostname())) || []).filter((p) => /darknet-worker-/.test(p.filename)))
-        await nsKill(ns, p.pid);
 }
 
 async function runAuth(ns, hostname, password) {

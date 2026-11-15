@@ -141,7 +141,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 50;
+const PROBE_VERSION = 51;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
