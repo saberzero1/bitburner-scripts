@@ -682,7 +682,7 @@ async function optimizeGangCrime(ns, myGangInfo) {
         const oldGangInfo = myGangInfo;
         await updateMemberActivities(ns, dictMembers);
         const [optWanted, optRespect, optMoney] = myGangMembers
-            .map((m) => assignedTasks[m])
+            .map((m) => bestTaskAssignments[m]) // task objects (assignedTasks holds names)
             .reduce(
                 ([w, r, m], t) => [w + t.wanted, r + t.respect, m + t.money],
                 [0, 0, 0],

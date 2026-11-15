@@ -1001,34 +1001,17 @@ async function liquidate(ns) {
 
 /** @param {NS} ns **/
 /** @param {Player} playerStats **/
+let last4SApiFailure = 0; // Back off after a failed purchase, so we don't liquidate every loop
 async function tryGet4SApi(ns, playerStats, budget) {
     if (await checkAccess(ns, "has4SDataTixApi")) return false; // Only return true if we just bought it
-    const cost4sData = 1e9 * bitNodeMults.FourSigmaMarketDataCost;
+    if (Date.now() - last4SApiFailure < 10 * 60 * 1000) return false;
+    // The TIX API version of 4S data doesn't require the (UI) 4S Market Data, so don't buy that
     const cost4sApi = 25e9 * bitNodeMults.FourSigmaMarketDataApiCost;
-    const has4S = await checkAccess(ns, "has4SData");
-    const totalCost = (has4S ? 0 : cost4sData) + cost4sApi;
-    // Liquidate shares if it would allow us to afford 4S API data
-    if (totalCost > budget)
+    if (cost4sApi > budget)
         /* Need to reserve some money to invest */
         return false;
-    if (playerStats.money < totalCost) await liquidate(ns);
-    if (!has4S) {
-        if (await tryBuy(ns, "purchase4SMarketData"))
-            log(
-                ns,
-                `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} ` +
-                    `(At ${formatDuration(getTimeInBitnode())} into BitNode)`,
-                true,
-                "success",
-            );
-        else
-            log(
-                ns,
-                "ERROR attempting to purchase 4SMarketData!",
-                false,
-                "error",
-            );
-    }
+    // Liquidate shares if it would allow us to afford 4S API data
+    if (playerStats.money < cost4sApi) await liquidate(ns);
     if (await tryBuy(ns, "purchase4SMarketDataTixApi")) {
         log(
             ns,
@@ -1038,14 +1021,15 @@ async function tryGet4SApi(ns, playerStats, budget) {
             "success",
         );
         return true;
-    } else {
-        log(
-            ns,
-            "ERROR attempting to purchase 4SMarketDataTixApi!",
-            false,
-            "error",
-        );
     }
+    last4SApiFailure = Date.now();
+    log(
+        ns,
+        "ERROR attempting to purchase 4SMarketDataTixApi (e.g. 4S data disabled in this BitNode, or the cost estimate " +
+            "was off). Retrying in 10 minutes.",
+        false,
+        "error",
+    );
     return false;
 }
 

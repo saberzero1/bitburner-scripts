@@ -505,9 +505,10 @@ export async function main(ns) {
         );
     else {
         log(ns, "Joining available factions...");
-        let forceJoinFactions = options["force-join"] || [];
+        const userForceJoin = options["force-join"];
+        let forceJoinFactions = [...(userForceJoin ?? [])];
         // If the user didn't set the 'force-join' option, there are some defaults we should apply
-        if (!forceJoinFactions) {
+        if (userForceJoin == null || userForceJoin.length === 0) {
             // If we're in BN 10, we can purchase special Sleeve-related things from the Covenant, so we should always join it
             if (bitNode == 10) forceJoinFactions.push("The Covenant");
             // If gangs are an available feature, we should by default want to join any available gang factions
@@ -516,7 +517,7 @@ export async function main(ns) {
                 2 in ownedSourceFiles &&
                 ns.heart.break() <= -53000
             ) {
-                forceJoinFactions.push(potentialGangFactions); // Try to join all gang factions as we near unlocking gangs, regardless of their augmentations
+                forceJoinFactions.push(...potentialGangFactions); // Try to join all gang factions as we near unlocking gangs, regardless of their augmentations
                 log(
                     ns,
                     `INFO: Will join any gang faction because Karma is at ${formatNumberShort(ns.heart.break())}`,

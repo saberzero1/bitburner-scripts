@@ -1266,11 +1266,15 @@ async function trainCombatStats(ns, reqStats) {
             physicalStats[0],
         );
         const currentWork = await getCurrentWorkInfo(ns);
+        // Gym class types are "str"/"def"/"dex"/"agi" (GymType), and getCurrentWork() has no focus field
         const isGym =
-            currentWork.classType &&
-            currentWork.classType.toLowerCase().includes("gym");
+            currentWork.type === "CLASS" &&
+            currentWork.classType === targetStat.slice(0, 3);
         if (await isValidInterruption(ns, currentWork)) return false;
-        if (!isGym || currentWork.focus !== focusArg) {
+        const isFocused = isGym
+            ? await getNsDataThroughFile(ns, "ns.singularity.isFocused()")
+            : null;
+        if (!isGym || isFocused !== focusArg) {
             await getNsDataThroughFile(
                 ns,
                 "ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])",

@@ -67,7 +67,7 @@ export async function main(ns) {
 
     // STEP 1: Liquidate Stocks and (SF9) Hacknet Hashes
     log(ns, "Sell stocks and hashes...", true, "info");
-    ns.run(getFilePath("spend-hacknet-hashes.js"), 1, "--liquidate");
+    ns.run(getFilePath("spend-hacknet-hashes.js"), 1, "--liquidate", "--no-corp-priority"); // all hashes to money before buying augs
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
     const hasTixApiAccess = await getNsDataThroughFile(

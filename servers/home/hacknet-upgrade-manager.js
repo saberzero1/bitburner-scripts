@@ -40,6 +40,8 @@ export async function main(ns) {
             Number.parseFloat(maxPayoffTime.replace("h", "")) * 3600;
     else maxPayoffTime = Number.parseFloat(maxPayoffTime);
     disableLogs(ns, ["sleep", "getServerUsedRam", "getServerMoneyAvailable"]);
+    // Module state persists between runs, so re-detect each run (hash capacity is 0 for plain hacknet nodes)
+    haveHacknetServers = ns.hacknet.numNodes() === 0 || ns.hacknet.hashCapacity() > 0;
     setStatus(
         ns,
         `Starting hacknet-upgrade-manager with purchase payoff time limit of ${formatDuration(maxPayoffTime * 1000)} and ` +
@@ -49,8 +51,9 @@ export async function main(ns) {
             `. Current fleet: ${ns.hacknet.numNodes()} nodes...`,
     );
     do {
+        let moneySpent = 0; // declared outside the try so the sleep below can see it
         try {
-            const moneySpent = upgradeHacknet(
+            moneySpent = upgradeHacknet(
                 ns,
                 maxSpend,
                 maxPayoffTime,
@@ -79,7 +82,8 @@ export async function main(ns) {
                 "warning",
             );
         }
-        if (continuous) await ns.sleep(interval);
+        // When nothing was affordable, don't poll faster than once a second (daemon runs this with --interval 0)
+        if (continuous) await ns.sleep(moneySpent ? interval : Math.max(interval, 1000));
     } while (continuous);
 }
 
@@ -119,16 +123,22 @@ export function upgradeHacknet(
             upgrade: ns.hacknet.upgradeRam,
             cost: (i) => ns.hacknet.getRamUpgradeCost(i, 1),
             nextValue: (nodeStats) => nodeStats.ram * 2,
-            addedProduction: (nodeStats) => nodeStats.production * 0.07,
+            // Hacknet servers: x1.07 per RAM doubling; hacknet nodes: production scales with 1.035^(ram-1)
+            addedProduction: (nodeStats) =>
+                nodeStats.production *
+                (haveHacknetServers ? 0.07 : Math.pow(1.035, nodeStats.ram) - 1),
         },
         {
             name: "cores",
             upgrade: ns.hacknet.upgradeCore,
             cost: (i) => ns.hacknet.getCoreUpgradeCost(i, 1),
             nextValue: (nodeStats) => nodeStats.cores + 1,
+            // Hacknet servers: 1 + (cores-1)/5; hacknet nodes: (cores+5)/6
             addedProduction: (nodeStats) =>
                 nodeStats.production *
-                ((nodeStats.cores + 5) / (nodeStats.cores + 4) - 1),
+                (haveHacknetServers
+                    ? (nodeStats.cores + 5) / (nodeStats.cores + 4) - 1
+                    : (nodeStats.cores + 6) / (nodeStats.cores + 5) - 1),
         },
         {
             name: "cache",

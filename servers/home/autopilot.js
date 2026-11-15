@@ -286,7 +286,7 @@ export async function main(ns) {
                 playerInstalledAugCount = installedAugmentations.length;
             }
         } catch (err) {
-            if (unlockedSFs[4] || 0 == 3) throw err; // No idea why this failed, treat as temporary and allow auto-retry.
+            if ((unlockedSFs[4] || 0) == 3) throw err; // No idea why this failed, treat as temporary and allow auto-retry.
             log(
                 ns,
                 `WARNING: You only have SF4 level ${unlockedSFs[4]}. Without level 3, some singularity functions will be ` +
@@ -1424,7 +1424,7 @@ export async function main(ns) {
         // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
         if (4 in unlockedSFs)
             // No big deal if we can't, casino.js has logic to find the stop button and click it.
-            _ = await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
+            await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
 
         const pid = launchScriptHelper(ns, "casino.js", [
             "--kill-all-scripts",
@@ -1608,7 +1608,7 @@ export async function main(ns) {
                 // If we were already reserving for a purchase and the number went up, log a notice of the timer being reset.
                 let purchaseChangeLog = `INFO: The augmentation purchase we can afford has increased from ${formatMoney(reservedPurchase)} to ${formatMoney(totalCost)}.`;
                 // First, check if we're ready to install TRP - if so, don't delay the install for any additional augmentations.
-                if (!augsToInstall.includes(augTRP)) {
+                if (!options["install-for-augs"].some((a) => augsToInstall.includes(a))) {
                     // Otherwise, each time we can afford more augs, reset the install delay timer to take advantage of "momentum"
                     // and potentially purchase many more augmentations in this reset. To avoid delaying an install indefinitely,
                     // we reduce the additional time we're willing to wait a little bit each time this happens.
@@ -1681,6 +1681,7 @@ export async function main(ns) {
      *           affordable_augs: string[], affordable_count: number, affordable_count_nf: number, affordable_count_ex_nf: number,
      *           total_rep_cost: number, total_aug_cost: number, unowned_count: number }} facmanOutput
      */
+    const lastFactionRep = {}; // faction -> rep at the previous install check
     async function shouldDelayInstall(ns, player, facmanOutput) {
         // Don't install if we're currently grafting an augmentation
         if (await checkIfGrafting(ns)) return true;
@@ -1804,7 +1805,7 @@ export async function main(ns) {
                 ns,
                 "ns.bladeburner.getCurrentAction()",
             );
-            if (currentAction?.type == "BlackOp") {
+            if (currentAction?.type == "Black Operations") {
                 setStatus(
                     ns,
                     `Not installing because a Bladeburner BlackOp is in progress (${currentAction.name}).`,
@@ -1812,6 +1813,15 @@ export async function main(ns) {
                 return true;
             }
         }
+        // Never let the donation heuristic below block an install for a priority aug (Red Pill, darknet lab augs)
+        if (
+            options["install-for-augs"].some(
+                (a) =>
+                    facmanOutput.affordable_augs?.includes(a) ||
+                    facmanOutput.awaiting_install_augs?.includes(a),
+            )
+        )
+            return false;
         const favorToDonate = await getNsDataThroughFile(
             ns,
             "ns.getFavorToDonate()",
@@ -1832,18 +1842,25 @@ export async function main(ns) {
             );
             const repToFavour = (rep) =>
                 Math.ceil(25500 * 1.02 ** (rep - 1) - 25000);
+            // These factions never accept donations, so getting close to the favor threshold doesn't matter
+            const noDonationFactions = ["Shadows of Anarchy", "Bladeburners", "Church of the Machine God"];
             for (const fac of factions) {
+                if (noDonationFactions.includes(fac)) continue;
                 const currentFavor = dictFavors[fac] ?? 0;
                 const repRequired = Math.max(
                     0,
                     repToFavour(favorToDonate) - repToFavour(currentFavor),
                 );
                 const currentRep = dictReps[fac] ?? 0;
+                // Only wait if we're actually gaining rep with this faction (otherwise we'd wait forever)
+                const gainingRep = currentRep > (lastFactionRep[fac] ?? Infinity);
+                lastFactionRep[fac] = currentRep;
                 if (
                     repRequired > 0 &&
                     repRequired <= 200000 &&
                     currentRep >= repRequired * 0.5 &&
-                    currentRep < repRequired
+                    currentRep < repRequired &&
+                    gainingRep
                 ) {
                     setStatus(
                         ns,

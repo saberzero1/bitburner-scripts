@@ -74,9 +74,6 @@ export async function main(ns) {
         1,
         Math.max(0, Number(options["corp-priority-share"]) || 0),
     );
-    // Corp actions we add automatically (as opposed to ones the user listed) get a capped budget
-    const isAutoCorpAction = (action) =>
-        corpSpendActions.includes(action) && !baseToBuy.includes(action);
     // Helper to check if the player currently has a corporation (returns false if SF3/Corp API unavailable)
     const hasCorporation = () => {
         try {
@@ -85,14 +82,45 @@ export async function main(ns) {
             return false;
         }
     };
-    // Build the effective spend list, prepending corp actions when a corporation exists
-    const getEffectiveToBuy = () => {
-        if (noCorpPriority || !hasCorporation()) return baseToBuy;
-        // Prepend corp actions that aren't already in the list
-        const corpPrepend = corpSpendActions.filter(
-            (a) => !baseToBuy.includes(a),
+    // Corporation research only helps if the corp has divisions (otherwise the hashes are wasted).
+    // corporation.js writes a snapshot each cycle; reading it is free.
+    const corpHasDivisions = () => {
+        try {
+            const snap = JSON.parse(ns.read("/Temp/corp-op-snapA.txt") || "null");
+            return (snap?.$value?.corp?.divisions?.length ?? 0) > 0;
+        } catch {
+            return false;
+        }
+    };
+    // Corp actions added automatically (not listed in --spend-on) when a corporation exists
+    const getAutoCorpActions = () => {
+        if (noCorpPriority || !hasCorporation()) return [];
+        return corpSpendActions.filter(
+            (a) => !baseToBuy.includes(a) && (a !== corpResearch || corpHasDivisions()),
         );
-        return corpPrepend.concat(baseToBuy);
+    };
+    /** Spend up to `corpPriorityShare` of the current balance on auto corp actions (one combined budget).
+     *  Corp funds are worth far more per hash than "Sell for Money", so this spends from the whole balance,
+     *  not just the hashes that would overflow capacity. */
+    const spendOnAutoCorpActions = () => {
+        const actions = getAutoCorpActions();
+        if (!actions.length) return 0;
+        let budget = ns.hacknet.numHashes() * corpPriorityShare;
+        let purchases = 0;
+        for (let guard = 0; guard < 10000; guard++) {
+            let bought = false;
+            for (const action of actions) {
+                const cost = ns.hacknet.hashCost(action);
+                if (cost > budget) continue;
+                if (!ns.hacknet.spendHashes(action)) continue;
+                budget -= cost;
+                purchases++;
+                bought = true;
+            }
+            if (!bought) break;
+        }
+        if (purchases) log(ns, `INFO: Spent hashes on ${purchases} corporation purchase(s) (${actions.join(", ")})`);
+        return purchases;
     };
     // Validate arguments
     if (baseToBuy.length == 0)
@@ -168,9 +196,10 @@ export async function main(ns) {
             let globalProduction = Array.from({ length: nodes }, (_, i) =>
                 ns.hacknet.getNodeStats(i),
             ).reduce((total, node) => total + node.production, 0);
+            // If we are this far from our capacity, start spending. The game adds production*0.2s per cycle
+            // (several cycles per update with bonus time), so keep at least 2s of production as headroom.
             const hashesEarnedNextTick =
-                (globalProduction * interval) / 1000 +
-                options["reserve-buffer"]; // If we are this far from our capacity, start spending
+                globalProduction * Math.max(interval / 1000, 2) + options["reserve-buffer"];
             let purchasesThisLoop = 0;
             // Define the spend hash loop as a local function, since we may need to call it twice.
             const fnSpendHashes = async (purchases, spendAllHashes) => {
@@ -192,11 +221,7 @@ export async function main(ns) {
                     lastPurchaseSucceeded = false; // Safety mechanism to avoid looping if we don't enter the for-loop below for some reason
                     for (const spendAction of purchases) {
                         const cost = ns.hacknet.hashCost(spendAction); // What's the cost of making this purchase
-                        // Every purchase takes as much of the budget as it can, so cap auto-added corp actions
-                        // to a share of it; otherwise they would starve the user's --spend-on purchases.
-                        const budget = isAutoCorpAction(spendAction)
-                            ? maxHashSpend() * corpPriorityShare
-                            : maxHashSpend();
+                        const budget = maxHashSpend();
                         if (cost > budget) continue; // Skip this purchase if if costs more than we have left
                         let quantity = Math.max(1, Math.floor(budget / cost));
                         const serverTarget = parameterizedSpendOptions.includes(
@@ -266,9 +291,9 @@ export async function main(ns) {
                             `while earning ${formatHashes(globalProduction)} hashes per second.`,
                     );
             };
-            // Build the effective spend list (may include corp actions prepended)
-            const toBuy = getEffectiveToBuy();
-            // Spend hashes normally on any/all user-specified purchases (with corp priority if applicable)
+            // Corporation priority first (capped share of the balance), then the user-specified purchases
+            spendOnAutoCorpActions();
+            const toBuy = baseToBuy;
             await fnSpendHashes(toBuy, liquidate);
             currentHashes = lastHashBalance = ns.hacknet.numHashes();
 

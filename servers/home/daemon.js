@@ -480,7 +480,7 @@ export async function main(ns) {
         // Helper to decide whether we should launch one of the hacknet upgrade manager scripts.
         const shouldUpgradeHacknet = () =>
             bitNodeMults.HacknetNodeMoney > 0 && // Ensure hacknet is not disabled in this BN
-            reqRam(Math.min(64, homeReservedRam + 6.1)) && // These scripts consume 6.1 GB and keep running a long time, so we want to ensure we have more than the home reservered RAM amount available if home reserved RAM is a small number
+            reqRam(Math.min(64, homeReservedRam + 9.1)) && // These scripts consume ~9.1 GB (hacknet calls are 0.5 GB each since 3.0) and keep running a long time, so we want to ensure we have more than the home reservered RAM amount available if home reserved RAM is a small number
             getPlayerMoney(ns) > reservedMoney(ns); // Player money exceeds the reserve (otherwise it will sit there buying nothing)
 
         // ASYNCHRONOUS HELPERS
@@ -1884,7 +1884,7 @@ export async function main(ns) {
         getExpPerSecond() {
             return dictServerProfitInfo
                 ? (dictServerProfitInfo[this.name]?.expRate ?? 0)
-                : (1 / dictServerMinSecurityLevels[this.name] ?? 0);
+                : 1 / (dictServerMinSecurityLevels[this.name] ?? Infinity); // 0 when unknown
         }
         getMoney() {
             return ns.getServerMoneyAvailable(this.name);
@@ -2329,7 +2329,11 @@ export async function main(ns) {
         if (percentPerHackThread >= 1) {
             currentTarget.percentageToSteal = percentPerHackThread;
             currentTarget.percentageToSteal = 1;
-            return getPerformanceSnapshot(currentTarget, networkStats);
+            return getPerformanceSnapshot(
+                currentTarget,
+                networkStats,
+                getOptimalPacedCycles(currentTarget),
+            );
         }
 
         let lastAdjustmentSign = 1;
@@ -2522,7 +2526,7 @@ export async function main(ns) {
                 // Can't start anything after this first hack completes (until back at min security), or we risk throwing off timing
                 firstEnding = new Date(newBatch.hackEnd.valueOf());
             }
-            if (lastStart === null || lastStart < newBatch.firstFire) {
+            if (lastStart === null || lastStart < newBatch.lastFire) {
                 lastStart = new Date(newBatch.lastFire.valueOf());
             }
             if (cyclesScheduled > 0 && lastStart >= firstEnding) {
@@ -2820,7 +2824,7 @@ export async function main(ns) {
         let hnNodeIndex;
         while (
             -1 !==
-            (hnNodeIndex = preferredServerOrder.indexOf(
+            (hnNodeIndex = preferredServerOrder.findIndex(
                 (s) =>
                     s.name.startsWith("hacknet-server-") ||
                     s.name.startsWith("hacknet-node-"),
@@ -2942,7 +2946,9 @@ export async function main(ns) {
                     "/Temp/copy-scripts.txt",
                     [targetServer.name, daemonHost, ...missing_scripts],
                 );
-                missing_scripts.forEach((s) => (targetServer._files[s] = true)); // Make note that these files now exist on the target server
+                missing_scripts.forEach((s) =>
+                    targetServer._files?.add(s.startsWith("/") ? s.substring(1) : s),
+                ); // Make note that these files now exist on the target server
                 //await ns.sleep(5); // Workaround for Bitburner bug https://github.com/danielyxie/bitburner/issues/1714 - newly created/copied files sometimes need a bit more time, even if awaited
             }
             // By default, tools executed in this way will be marked as "temporary" (not to be included in the save file or recent scripts history)
@@ -3181,15 +3187,24 @@ export async function main(ns) {
         verbose = false,
         numTargets = undefined,
     ) {
-        if (!xpOnly)
-            // Only use basic single-target hacking unless we're in XP mode
+        if (!xpOnly) {
+            // Only use basic single-target hacking unless we're in XP mode. Never farm a server that is being
+            // batched or prepped: unsynchronised grow/hack threads there raise security and wreck batch timing.
+            let xpTarget = null;
+            for (const t of getXPFarmTargetsByExp())
+                if (!(await t.isTargeting()) && !(await t.isPrepping())) {
+                    xpTarget = t;
+                    break;
+                }
+            if (!xpTarget) return false;
             return await scheduleHackExpCycle(
                 ns,
-                getBestXPFarmTarget(),
+                xpTarget,
                 fractionOfFreeRamToConsume,
                 verbose,
                 false,
             ); // Grind some XP from the single best target for farming XP
+        }
         // Otherwise, target multiple servers until we can't schedule any more. Each next best host should get the next best (biggest) server
         getTool("grow").isThreadSpreadingAllowed = true; // Only true when in XP mode - where each grow thread is expected to give 1$. "weak" can always spread.
         const serversByMaxRam = getAllServersByMaxRam().filter((s) =>
@@ -3238,7 +3253,10 @@ export async function main(ns) {
             for (let target of targetsByExp)
                 if (!(target.name in jobHostMappings))
                     jobHostMappings[target.name] = jobHosts.filter(
-                        (h) => !(h.name in Object.values(jobHostMappings)),
+                        (h) =>
+                            !Object.values(jobHostMappings).some(
+                                (m) => m?.name === h.name,
+                            ),
                     )[0];
             if (verbose) {
                 log(
@@ -3277,7 +3295,9 @@ export async function main(ns) {
             // By defaults we match the host with the highest ram to the target with the largest exp-potential
             // but in looping-mode, targets are "locked" to a host once started.
             let selectedTarget = targetsByExp[i];
-            let selectedHost = loopingMode ? jobHostMappings[i] : jobHosts[i];
+            let selectedHost = loopingMode
+                ? jobHostMappings[selectedTarget.name]
+                : jobHosts[i];
             // If we aren't already configured for singleServerMode, switch to single-server mode if running out of hosts with high ram
             singleServerMode =
                 singleServerMode ||
@@ -3325,7 +3345,7 @@ export async function main(ns) {
                 ns,
                 `Waiting for last ${server.name} FarmXP process to complete... (ETA ${eta ? formatDuration(activeCycleTimeLeft) : "unknown"})`,
             );
-        while ((stillBusy = server.isXpFarming(false) && maxWaitTime > 0)) {
+        while ((stillBusy = await server.isXpFarming(false)) && maxWaitTime > 0) {
             await ns.sleep(waitInterval); // Sleep a very short while, then get a fresh process list to check again whether the process is done
             maxWaitTime -= waitInterval;
         }
