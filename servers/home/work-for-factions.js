@@ -1679,6 +1679,61 @@ async function measureFactionRepGainRate(ns, factionName) {
     );
 }
 
+/** If Formulas.exe is available, compute the rep gained per game cycle for each work type this faction supports.
+ * @param {NS} ns
+ * @returns {Promise<Record<string, number>|null>} map of work type to rep per cycle, or null if formulas are unavailable */
+async function getFormulasFactionRepRates(ns, factionName) {
+    return await getNsDataThroughFile(
+        ns,
+        `(() => { try { if (!ns.fileExists("Formulas.exe", "home")) return null; ` +
+            `const p = ns.getPlayer(), fav = ns.singularity.getFactionFavor(ns.args[0]); ` +
+            `return Object.fromEntries(ns.singularity.getFactionWorkTypes(ns.args[0])` +
+            `.map(t => [t, ns.formulas.work.factionGains(p, t, fav).reputation])); } catch { return null; } })()`,
+        "/Temp/faction-work-rep-rates.txt",
+        [factionName],
+    );
+}
+
+/** A less noisy measurement of faction rep gain rate than measureFactionRepGainRate, used to pick the best work type.
+ * Waits for a first rep change (so the timer starts aligned to a game update), then times the next few changes.
+ * @param {NS} ns */
+async function measureFactionRepGainRateAccurately(
+    ns,
+    factionName,
+    changes = 3,
+) {
+    const sample = async () => await getFactionReputation(ns, factionName);
+    let last = await sample();
+    // Sync up with the game's update loop by waiting for the first change
+    const syncDeadline = Date.now() + 2000;
+    let synced = false;
+    while (Date.now() < syncDeadline) {
+        await ns.sleep(20);
+        const current = await sample();
+        if (current !== last) {
+            last = current;
+            synced = true;
+            break;
+        }
+    }
+    if (!synced) return 0; // Rep isn't changing - this work gives no rep (or we aren't working)
+    const initial = last;
+    const start = Date.now();
+    let count = 0,
+        lastChangeTime = start;
+    while (count < changes && Date.now() - start < 2000 * changes) {
+        await ns.sleep(20);
+        const current = await sample();
+        if (current !== last) {
+            last = current;
+            lastChangeTime = Date.now();
+            count++;
+        }
+    }
+    const elapsed = (lastChangeTime - start) / 1000;
+    return count > 0 && elapsed > 0 ? (last - initial) / elapsed : 0;
+}
+
 async function measureCompanyRepGainRate(ns, companyName) {
     return await measureRepGainRate(
         ns,
@@ -2094,12 +2149,23 @@ async function startWorkForFaction(ns, factionName, work, focus) {
 async function detectBestFactionWork(ns, factionName) {
     let bestWork,
         bestRepRate = 0;
+    // Preferred: If we have Formulas.exe, compute the exact rep gain of each supported work type (no measurement noise)
+    const formulaRates = await getFormulasFactionRepRates(ns, factionName);
+    if (formulaRates) {
+        for (const [work, repRate] of Object.entries(formulaRates))
+            if (repRate > bestRepRate) {
+                bestRepRate = repRate;
+                bestWork = work;
+            }
+        if (bestWork !== undefined) return bestWork;
+        // Otherwise (e.g. no supported work types, or all zero), fall back to the measurement approach below
+    }
     for (const work of Object.values(ns.enums.FactionWorkType)) {
         if (!(await startWorkForFaction(ns, factionName, work, shouldFocus))) {
             //ns.print(`"${factionName}": "${work}"" work not supported.`);
             continue; // This type of faction work must not be supported
         }
-        const currentRepGainRate = await measureFactionRepGainRate(
+        const currentRepGainRate = await measureFactionRepGainRateAccurately(
             ns,
             factionName,
         );

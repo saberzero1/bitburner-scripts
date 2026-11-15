@@ -140,6 +140,9 @@ export async function main(ns) {
         options["show-pre-4s-forecast"] || options["show-market-summary"];
     // Other global values must be reset at start lest they be left in memory from a prior run
     ((lastTick = 0),
+        (forceMarketRefresh = true),
+        (earliestNextMarketTick = 0),
+        (lastSnapshotStart = 0),
         (totalProfit = 0),
         (lastLog = ""),
         (marketCycleDetected = false),
@@ -231,9 +234,13 @@ export async function main(ns) {
                 options["reserve"] != null
                     ? options["reserve"]
                     : Number(ns.read("reserve.txt") || 0);
+            // Get all market data in one temp script - unless the market cannot have ticked since our last fetch and we haven't traded since
+            const snapshot = await getMarketSnapshot(ns, allStocks);
             // Check whether we have 4s access yes (once we do, we can stop checking)
-            if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
-            const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
+            if (pre4s && snapshot) pre4s = !snapshot.has4sApi;
+            const holdings = snapshot
+                ? await refresh(ns, !pre4s, allStocks, myStocks, snapshot) // Returns total stock value
+                : allStocks.reduce((sum, stk) => sum + stk.positionValue(), 0); // Nothing changed, so this is what refresh would return
             const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
             const maxHoldings = (1 - fracH) * corpus; // The largest value of stock we could hold without violiating fracH (Fraction to keep as cash)
             if (
@@ -489,22 +496,55 @@ async function initAllStocks(ns) {
     }));
 }
 
+const minMsBetweenMarketTicks = 4000; // The game never processes two market ticks less than this far apart (src/StockMarket/data/Constants.ts msPerStockUpdateMin)
+let forceMarketRefresh = true; // Set whenever we transact, since our own trades change positions (and can move prices)
+let earliestNextMarketTick = 0; // Until this time (Date.now()), the market cannot have ticked again
+let lastSnapshotStart = 0;
+let lastHas4SData = false;
+
+/** Fetch ask/bid/volatility/forecast/position for every symbol (plus 4S access flags) in a single temp script.
+ * Returns null (skips the fetch) if the market cannot have ticked since our last fetch and we haven't transacted since.
+ * @param {NS} ns
+ * @returns {Promise<{has4sApi: boolean, has4sData: boolean, stocks: {[sym: string]: {ask: number, bid: number, vol: number|null, prob: number|null, pos: number[]}}}|null>} */
+async function getMarketSnapshot(ns, allStocks) {
+    if (!forceMarketRefresh && Date.now() < earliestNextMarketTick) return null;
+    const wasForced = forceMarketRefresh;
+    forceMarketRefresh = false;
+    const fetchStart = Date.now();
+    const snapshot = await getNsDataThroughFile(
+        ns,
+        `(() => { const a = ns.stock.has4SDataTixApi(); return { has4sApi: a, has4sData: ns.stock.has4SData(), ` +
+            `stocks: Object.fromEntries(ns.args.map(s => [s, { ask: ns.stock.getAskPrice(s), bid: ns.stock.getBidPrice(s), ` +
+            `vol: a ? ns.stock.getVolatility(s) : null, prob: a ? ns.stock.getForecast(s) : null, pos: ns.stock.getPosition(s) }])) }; })()`,
+        "/Temp/stock-market-snapshot.txt",
+        allStockSymbols,
+    );
+    // If prices changed (and not because of our own trades), the tick happened after our previous fetch started,
+    // so the next tick can be no sooner than minMsBetweenMarketTicks after that.
+    const pricesChanged = allStocks.some(
+        (stk) => stk.ask_price != snapshot.stocks[stk.sym].ask,
+    );
+    if (pricesChanged && !wasForced && lastSnapshotStart > 0)
+        earliestNextMarketTick = lastSnapshotStart + minMsBetweenMarketTicks;
+    lastSnapshotStart = fetchStart;
+    lastHas4SData = snapshot.has4sData;
+    return snapshot;
+}
+
 /** @param {NS} ns **/
-async function refresh(ns, has4s, allStocks, myStocks) {
+async function refresh(ns, has4s, allStocks, myStocks, snapshot) {
     let holdings = 0;
 
-    // Dodge hefty RAM requirements by spawning a sequence of temporary scripts to collect info for us one function at a time
-    const dictAskPrices = await getStockInfoDict(ns, "getAskPrice");
-    const dictBidPrices = await getStockInfoDict(ns, "getBidPrice");
-    const dictVolatilities = !has4s
-        ? null
-        : await getStockInfoDict(ns, "getVolatility");
-    const dictForecasts = !has4s
-        ? null
-        : await getStockInfoDict(ns, "getForecast");
-    const dictPositions = mock
-        ? null
-        : await getStockInfoDict(ns, "getPosition");
+    // All data was collected in a single ram-dodging temp script (see getMarketSnapshot)
+    const pick = (field) =>
+        Object.fromEntries(
+            Object.entries(snapshot.stocks).map(([sym, d]) => [sym, d[field]]),
+        );
+    const dictAskPrices = pick("ask");
+    const dictBidPrices = pick("bid");
+    const dictVolatilities = !has4s ? null : pick("vol");
+    const dictForecasts = !has4s ? null : pick("prob");
+    const dictPositions = mock ? null : pick("pos");
     const ticked = allStocks.some(
         (stk) => stk.ask_price != dictAskPrices[stk.sym],
     ); // If any price has changed since our last update, the stock market has "ticked"
@@ -787,13 +827,15 @@ let sellStockWrapper = async (ns, sym, numShares) =>
     await transactStock(ns, sym, numShares, "sellStock"); // ns.stock.sellStock(sym, numShares);
 let sellShortWrapper = async (ns, sym, numShares) =>
     await transactStock(ns, sym, numShares, "sellShort"); // ns.stock.sellShort(sym, numShares);
-let transactStock = async (ns, sym, numShares, action) =>
-    await getNsDataThroughFile(
+let transactStock = async (ns, sym, numShares, action) => {
+    forceMarketRefresh = true; // Our positions (and possibly prices) change, so refresh market data next loop
+    return await getNsDataThroughFile(
         ns,
         `ns.stock.${action}(ns.args[0], ns.args[1])`,
         null,
         [sym, numShares],
     );
+};
 
 /** @param {NS} ns
  * Automatically buys either a short or long position depending on the outlook of the stock. */
@@ -1003,7 +1045,7 @@ async function liquidate(ns) {
 /** @param {Player} playerStats **/
 let last4SApiFailure = 0; // Back off after a failed purchase, so we don't liquidate every loop
 async function tryGet4SApi(ns, playerStats, budget) {
-    if (await checkAccess(ns, "has4SDataTixApi")) return false; // Only return true if we just bought it
+    // Only called while pre-4S (the latest market snapshot reported no 4S TIX API access), so no need to re-check that here
     if (Date.now() - last4SApiFailure < 10 * 60 * 1000) return false;
     // The TIX API version of 4S data doesn't require the (UI) 4S Market Data, so don't buy that
     const cost4sApi = 25e9 * bitNodeMults.FourSigmaMarketDataApiCost;
@@ -1044,6 +1086,7 @@ async function checkAccess(ns, stockFn) {
  * @param {"purchaseWseAccount"|"purchaseTixApi"|"purchase4SMarketData"|"purchase4SMarketDataTixApi"} stockFn
  * Helper to try and buy a stock access. Yes, the code is the same as above, but I wanted to be explicit. */
 async function tryBuy(ns, stockFn) {
+    forceMarketRefresh = true; // Access may have changed, refresh market data next loop
     return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`);
 }
 
