@@ -322,7 +322,12 @@ export async function main(ns) {
     disableLogs(ns, ["sleep", "read", "write", "run", "getServerMoneyAvailable"]);
 
     const st = { ...newState(), ...loadJson(ns, STATE_FILE, {}) };
-    let staticData = loadJson(ns, STATIC_FILE, null);
+    // The state file outlives the corporation (a BitNode reset deletes it), so state saved in an earlier BitNode
+    // must not carry over: its budget savings would hold back funds for divisions that don't exist yet.
+    const nodeReset = (await getNsDataThroughFile(ns, "ns.getResetInfo()")).lastNodeReset;
+    const staleState = st.nodeReset !== nodeReset;
+    if (staleState) resetState(st, nodeReset);
+    let staticData = staleState ? null : loadJson(ns, STATIC_FILE, null); // division limits differ per BitNode
     let meta = null;
     let lastStatus = 0;
     let pricing = null; // custom Market-TA2 payload, rebuilt every cycle by planCycle
@@ -331,7 +336,10 @@ export async function main(ns) {
     while (true) {
         try {
             if (!ns.corporation.hasCorporation()) {
-                await tryCreateCorporation(ns, options);
+                if (await tryCreateCorporation(ns, options)) {
+                    resetState(st, nodeReset);
+                    staticData = null;
+                }
                 await ns.sleep(10000);
                 continue;
             }
@@ -407,9 +415,15 @@ async function tryCreateCorporation(ns, options) {
     const result = await runOp(ns, "finance2", [["createCorporation", options["corp-name"], selfFund]]);
     if (result?.[0] === true) {
         log(ns, `SUCCESS: Created corporation ${options["corp-name"]}`, true, "success");
-        ns.write(STATE_FILE, JSON.stringify(newState()), "w");
-        ns.write(STATIC_FILE, "", "w"); // a new corporation may be in a different BitNode (division limit)
+        return true;
     }
+    return false;
+}
+
+/** Replace the state in place (the main loop keeps a reference to it and saves it every cycle). */
+function resetState(st, nodeReset) {
+    for (const key of Object.keys(st)) delete st[key];
+    Object.assign(st, newState(), { nodeReset });
 }
 
 async function takeSnapshot(ns, staticData) {
