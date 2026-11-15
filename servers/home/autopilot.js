@@ -985,6 +985,7 @@ export async function main(ns) {
                             bestServer,
                             "--spend-on",
                             "Increase_Maximum_Money",
+                            "--no-corp-priority", // Server boosting shouldn't divert hashes to the corporation
                         ];
                         if (shouldReduceMinSecurity)
                             spendHashesArgs.push(
