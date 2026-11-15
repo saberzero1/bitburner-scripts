@@ -1,4 +1,4 @@
-const PROBE_VERSION = 43;
+const PROBE_VERSION = 44;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1664,9 +1664,17 @@ async function tryHintBasedAuth(ns, hostname, details) {
             candidates.add(p);
     }
 
+    // The server details give the exact password length: skip candidates that can't match (an empty password
+    // is tried first, so ZeroLogon takes one attempt instead of several hint variants).
+    const exactLength = Number.isFinite(details.passwordLength) ? details.passwordLength : null;
+    if (exactLength === 0) {
+        const result = await runAuth(ns, hostname, "");
+        return result.success ? "" : null;
+    }
     for (const candidate of candidates) {
         if (!candidate) continue;
         if (candidate.length > maxLen) continue;
+        if (exactLength && candidate.length !== exactLength) continue;
         try {
             const result = await runAuth(ns, hostname, candidate);
             if (result.success) return candidate;
@@ -2261,22 +2269,23 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
     // ServerGenerator getPasswordMadeUpOfPrimesProduct: a product of factors <= 97, times up to two primes
     // from the fixed largePrimes list. Test "divisible by (factors found so far) × p": that checks one more
     // factor p, handles repeated factors, and is itself a guess — it succeeds when it equals the password.
+    // BigInt: passwords can exceed 2^53 (the game only requires them to survive a round trip through a float).
     const length = getPasswordLength(serverInfo, 0);
-    const maxValue = length ? Math.pow(10, length) - 1 : Number.MAX_SAFE_INTEGER;
-    const minValue = length > 1 ? Math.pow(10, length - 1) : 1;
+    const maxValue = length ? 10n ** BigInt(length) - 1n : BigInt(Number.MAX_SAFE_INTEGER) * 1024n;
+    const minValue = length > 1 ? 10n ** BigInt(length - 1) : 1n;
     const stats = { auths: 0 };
-    let product = 1;
+    let product = 1n;
 
     // true = divides, false = doesn't, "found" = it was the password, null = no feedback.
     const dividesWithFactor = async (p) => {
-        const divisor = product * p;
-        const result = await isDivisibleBy(ns, hostname, divisor, stats);
+        const result = await isDivisibleBy(ns, hostname, product * p, stats);
         if (result === null) return null;
         if (result.success) return "found";
         return result.divisible;
     };
 
-    for (const p of DIVISIBILITY_SMALL_PRIMES) {
+    for (const prime of DIVISIBILITY_SMALL_PRIMES) {
+        const p = BigInt(prime);
         while (product * p <= maxValue) {
             const r = await dividesWithFactor(p);
             if (r === null) return null;
@@ -2286,14 +2295,14 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
         }
         if (await isAlreadyCracked(ns, hostname)) return null;
     }
-    if (product === 1) {
+    if (product === 1n) {
         const one = await runAuth(ns, hostname, "1");
         if (one.success) return "1";
     }
 
     // What is left is one or two large primes (the same one may appear twice).
     for (let i = 0; i < DIVISIBILITY_LARGE_PRIMES.length; i++) {
-        const q = DIVISIBILITY_LARGE_PRIMES[i];
+        const q = BigInt(DIVISIBILITY_LARGE_PRIMES[i]);
         if (product * q > maxValue) break;
         // When two more large primes no longer fit, the last one must bring the product to L digits.
         const roomForTwo = product * q * q <= maxValue;
@@ -2531,44 +2540,60 @@ async function solveSpiceLevel(ns, hostname, serverInfo) {
         return null;
     }
 
-    let guess = charset[0].repeat(length);
-    const baseFeedback = await authWithFeedback(guess);
-    if (baseFeedback?.success) return guess;
-    if (!baseFeedback) {
-        feedbackMisses++;
-        if (feedbackMisses > 4) return null;
+    // The feedback is the number of exactly-right positions. (1) Count each character with "cccc..." guesses
+    // (stop once the counts add up to the length); (2) locate each character by halving its candidate positions,
+    // with a zero-count filler character everywhere else. ~|charset| + L*log2(L) attempts instead of up to |charset|*L.
+    async function feedback(guess) {
+        for (let tries = 0; tries < 3; tries++) {
+            const fb = await authWithFeedback(guess);
+            if (fb) return fb;
+            if (await isAlreadyCracked(ns, hostname)) return null;
+        }
         return null;
     }
-    let currentCount = baseFeedback.count;
-    if (!Number.isFinite(currentCount)) return null;
-
-    for (let i = 0; i < length; i++) {
-        let found = false;
-        for (const ch of charset) {
-            if (ch === guess[i]) continue; // skip current char
-            const trial = guess.substring(0, i) + ch + guess.substring(i + 1);
-            const fb = await authWithFeedback(trial);
-            if (fb?.success) return trial;
-            if (await isAlreadyCracked(ns, hostname)) return null;
-            if (!fb) {
-                feedbackMisses++;
-                if (feedbackMisses > 4) return null;
-                continue;
-            }
-            // Changing this position lowered the count: the original character was already correct
-            if (Number.isFinite(fb.count) && fb.count < currentCount) break;
-            if (Number.isFinite(fb.count) && fb.count > currentCount) {
-                // This char increased the pepper count — it's correct for this position
-                guess = guess.substring(0, i) + ch + guess.substring(i + 1);
-                currentCount = fb.count;
-                found = true;
-                break;
-            }
+    const freq = new Map();
+    let counted = 0;
+    let filler = null;
+    for (const ch of charset) {
+        if (counted >= length) {
+            if (filler === null) filler = ch; // untested characters can't occur
+            break;
         }
-        // If no char improved count, the initial char was already correct
+        const fb = await feedback(ch.repeat(length));
+        if (!fb) return null;
+        if (fb.success) return ch.repeat(length);
+        freq.set(ch, fb.count);
+        counted += fb.count;
+        if (fb.count === 0 && filler === null) filler = ch;
     }
+    if (filler === null || counted !== length) return null; // unexpected feedback (charset mismatch)
 
-    const finalResp = await authWithFeedback(guess);
+    const positions = new Array(length).fill(null);
+    async function locate(ch, candidates, count) {
+        if (count === 0) return [];
+        if (count === candidates.length) return candidates;
+        const half = candidates.slice(0, Math.ceil(candidates.length / 2));
+        const rest = candidates.slice(half.length);
+        const guess = Array.from({ length }, (_, i) => (half.includes(i) ? ch : filler)).join("");
+        const fb = await feedback(guess);
+        if (!fb) throw new Error("no feedback");
+        if (fb.success) return null;
+        return [...(await locate(ch, half, fb.count)), ...(await locate(ch, rest, count - fb.count))];
+    }
+    const present = [...freq.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    try {
+        for (let k = 0; k < present.length; k++) {
+            const [ch, n] = present[k];
+            const open = positions.map((v, i) => (v === null ? i : -1)).filter((i) => i >= 0);
+            const found = k === present.length - 1 ? open : await locate(ch, open, n);
+            if (found === null) return null;
+            for (const i of found) positions[i] = ch;
+        }
+    } catch {
+        return null;
+    }
+    const guess = positions.join("");
+    const finalResp = await runAuth(ns, hostname, guess);
     return finalResp?.success ? guess : null;
 }
 
@@ -2582,12 +2607,13 @@ async function solveLargestPrimeFactor(ns, hostname, serverInfo) {
     return result.success ? candidate : null;
 }
 
-async function solveTopPass(ns, hostname) {
-    return await tryDictionary(ns, hostname, commonPasswordDictionary);
+// serverInfo lets tryDictionary skip words of the wrong length/format (it wasn't passed before: every word was tried)
+async function solveTopPass(ns, hostname, serverInfo) {
+    return await tryDictionary(ns, hostname, commonPasswordDictionary, serverInfo);
 }
 
-async function solveEuroZone(ns, hostname) {
-    return await tryDictionary(ns, hostname, euCountries);
+async function solveEuroZone(ns, hostname, serverInfo) {
+    return await tryDictionary(ns, hostname, euCountries, serverInfo);
 }
 
 async function solveTimingAttack(ns, hostname, serverInfo) {
@@ -2626,7 +2652,9 @@ async function solveTimingAttack(ns, hostname, serverInfo) {
             }
             const idx = fb.mismatchIndex;
             if (Number.isFinite(idx) && idx > i) {
-                prefix += ch;
+                // Everything before the mismatch is right, including any padding characters that happened to match
+                prefix = guess.slice(0, idx);
+                i = idx - 1;
                 found = true;
                 break;
             }
@@ -2994,8 +3022,9 @@ function cleanExpression(expression) {
         .replaceAll("➕", "+")
         .replaceAll("➖", "-")
         .replaceAll("×", "*");
-    if (cleaned.includes("ns.exit(),"))
-        cleaned = cleaned.split("ns.exit(),")[0];
+    // Same as the game's cleanArithmeticExpression: drop injected "ns.exit()," (it can sit right after a "("),
+    // then ignore everything after the first comma (appended fake code injection).
+    cleaned = cleaned.replaceAll("ns.exit(),", "");
     if (cleaned.includes(",")) cleaned = cleaned.split(",")[0];
     return cleaned.trim();
 }

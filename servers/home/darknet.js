@@ -140,7 +140,7 @@ const LAB_SOLVER_CONTENT = [
     `  (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 43;
+const PROBE_VERSION = 44;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
