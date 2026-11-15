@@ -141,7 +141,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 49;
+const PROBE_VERSION = 50;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1811,11 +1811,11 @@ async function ensureHomeProbe(ns, state, options) {
 // 1-4 of them (+1 each for The W1ngs of Icarus, The H4mmer of Daedalus, The St4ff of Asclepius).
 //
 // Phases:
-//  - push:   while the current labyrinth is unsolved (and our charisma meets its requirement), anchors serve
+//  - push:   while the current labyrinth is unsolved (also while charisma is still short of it), anchors serve
 //            depth: one labyrinth neighbour (to host the solver), then footholds in the deepest air-gap segment
 //            reached (deeper is better, so they can't drift back across the gap), with a bonus for a charger 4 rows
 //            before the gap being crossed (it charges its neighbours' migrations and is itself out of range).
-//  - stable: once the labyrinth is solved (or out of reach), anchors keep high-RAM servers stable.
+//  - stable: once the labyrinth is solved, anchors keep high-RAM servers stable.
 //
 // Swaps are conservative: an anchor is held at least ANCHOR_MIN_HOLD_MS, a candidate must beat the weakest
 // anchor by ANCHOR_REPLACE_MARGIN points, must be verified ready (authenticated, online, enough RAM, reachable or running a probe)
@@ -1846,8 +1846,11 @@ async function getAnchorPhase(ns, state) {
             state.labCharismaRequired = ns.dnet.getServerRequiredCharismaLevel(lab);
         } catch {}
     }
+    // Keep pushing while charisma is short: reaching the labyrinth takes hours, charisma grows meanwhile, and deep
+    // anchors are what keep the progress (tools/dnet-sim/CrossSim: at 300 charisma, anchoring the deepest probe
+    // hosts reached the Eternal labyrinth in 3.4h, against 11h+ for anchors next to the labyrinth only)
     if (state.playerCharisma !== undefined && state.labCharismaRequired > state.playerCharisma)
-        return { phase: "stable", lab, reason: `charisma ${state.playerCharisma} < ${state.labCharismaRequired} required` };
+        return { phase: "push", lab, reason: `labyrinth unsolved (charisma ${state.playerCharisma} < ${state.labCharismaRequired}, reaching it first)` };
     return { phase: "push", lab, reason: "labyrinth unsolved" };
 }
 
