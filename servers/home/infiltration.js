@@ -75,8 +75,8 @@ export async function main(ns) {
         print("Stopping automated infiltration...");
         clearInterval(wnd.tmrAutoInf);
         delete wnd.tmrAutoInf;
-        ns.clearPort(30);
-        ns.writePort(1, 1);
+        ns.port.clear(30);
+        ns.port.write(1, 1);
     }
 
     // --stop: just stop and exit
@@ -102,7 +102,7 @@ export async function main(ns) {
     );
 
     // IPC: write PID to port 30
-    ns.writePort(30, ns.pid);
+    ns.port.write(30, ns.pid);
 
     // Wrap event listeners for trusted synthetic keyboard events (needed for fallback solvers)
     wrapEventListeners();

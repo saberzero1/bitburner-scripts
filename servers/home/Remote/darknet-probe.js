@@ -1,4 +1,4 @@
-const PROBE_VERSION = 37;
+const PROBE_VERSION = 38;
 
 export async function main(ns) {
     // NOTE: ns.getScriptName() via runDnetCommand returns the TEMP script's name,
@@ -227,7 +227,7 @@ function reportPasswordToOrchestrator(ns, hostname, password) {
     try {
         const pwd = password ?? "";
         const pwdData = JSON.stringify({ [hostname]: pwd });
-        ns.writePort(19, JSON.stringify({ host: hostname, data: pwdData }));
+        ns.port.write(19, JSON.stringify({ host: hostname, data: pwdData }));
     } catch {}
 }
 
@@ -280,7 +280,7 @@ async function processServer(
                 neighbor: probeHost,
                 neighborPwd: passwords.get(probeHost) ?? null,
             });
-            ns.writePort(17, reportData);
+            ns.port.write(17, reportData);
         } catch {}
         // Signal that THIS probe host is adjacent to a labyrinth
         foundLabyrinthNeighbor = true;
@@ -297,7 +297,11 @@ async function processServer(
         }
         await scanClueFiles(ns, hostname, passwords, passwordFile);
 
-        if (!effectiveDetails.hasAdminRights) {
+        let hasRoot = false;
+        try {
+            hasRoot = ns.hasRootAccess(hostname);
+        } catch {}
+        if (!hasRoot) {
             const password = await tryAccessServer(
                 ns,
                 hostname,
@@ -412,8 +416,7 @@ async function tryAccessServer(ns, hostname, details, passwords) {
     }
 
     // Re-check: another agent may have cracked this while we tried hints
-    const preCheck = await getAuthDetails(ns, hostname);
-    if (preCheck?.hasAdminRights) return "";
+    if (await isAlreadyCracked(ns, hostname, true)) return "";
 
     const solver = getSolver(details.modelId);
     if (solver) {
@@ -431,29 +434,8 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         }
     }
 
-    // Re-check before packetCapture: another agent may have cracked this
-    const preCap = await getAuthDetails(ns, hostname);
-    if (preCap?.hasAdminRights) return "";
-
-    // RAM-aware packetCapture gating: only attempt if enough RAM available
-    // packetCapture temp script costs 7.6GB (1.6 base + 6.0 ns.dnet.packetCapture)
-    const HOST = ns.getHostname();
-    const captureCost = 7.6;
-    const freeRam =
-        (await nsGetServerMaxRam(ns, HOST)) -
-        (await nsGetServerUsedRam(ns, HOST));
-    if (freeRam >= captureCost) {
-        try {
-            const captured = await runCapture(ns, hostname);
-            if (captured?.password) {
-                const result = await runAuth(ns, hostname, captured.password);
-                if (result.success) {
-                    ns.print(`SUCCESS: Captured password for ${hostname}`);
-                    return captured.password;
-                }
-            }
-        } catch {}
-    }
+    // Re-check: another agent may have cracked this
+    if (await isAlreadyCracked(ns, hostname, true)) return "";
 
     return null;
 }
@@ -468,7 +450,9 @@ async function solveLabyrinth(ns, hostname) {
     const host = ns.getHostname();
     const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const resultFile = `/Temp/lab-result-${id}.txt`;
-    const scriptFile = `/Temp/lab-solver-${id}.js`;
+    // Code must be constant (no hostnames/ids inlined): the game caches every distinct
+    // script source forever, so per-call values go through ns.args instead.
+    const scriptFile = `/Temp/lab-solver.js`;
 
     // The exec'd solver declares its own RAM via ramOverride (both in RunOptions
     // and as the first statement in main) so authenticate's 0.4 GB is covered.
@@ -481,8 +465,8 @@ async function solveLabyrinth(ns, hostname) {
     const solverScript = [
         `export async function main(ns) {`,
         `  ns.ramOverride(2);`,
-        `  const host = "${hostname}";`,
-        `  const rf = "${resultFile}";`,
+        `  const host = String(ns.args[0]);`,
+        `  const rf = String(ns.args[1]);`,
         `  const visited = new Set();`,
         `  const stack = [];`,
         `  let px = 1, py = 1;`,
@@ -559,7 +543,13 @@ async function solveLabyrinth(ns, hostname) {
     ns.write(scriptFile, solverScript, "w");
     ns.write(resultFile, "<pending>", "w");
 
-    const pid = ns.exec(scriptFile, host, { threads: 1, ramOverride: 2 });
+    const pid = ns.exec(
+        scriptFile,
+        host,
+        { threads: 1, ramOverride: 2 },
+        hostname,
+        resultFile,
+    );
     if (!pid) {
         ns.print(
             `WARN: Failed to exec labyrinth solver for ${hostname} on ${host}; running inline solver`,
@@ -782,8 +772,9 @@ async function deployProbe(
         const targetUsedRam = await nsGetServerUsedRam(ns, hostname);
         const targetFreeRam = Math.max(0, targetMaxRam - targetUsedRam);
 
-        // The probe script needs ~13.75 GB RAM to run (13.65 base + 0.1 direct NS calls)
-        const PROBE_RAM_COST = 14.0;
+        // Use the probe's actual RAM cost (was hardcoded to 14 GB from an older, heavier probe,
+        // which kept probes off every host with less than 14 GB free).
+        const PROBE_RAM_COST = getProbeRamCost(ns);
 
         // If target is tight on RAM, try freeing blocked RAM remotely
         if (targetFreeRam < PROBE_RAM_COST && targetMaxRam >= PROBE_RAM_COST) {
@@ -894,17 +885,18 @@ const ramFreeLastCheck = new Map(); // target hostname -> last check timestamp
  * @param {string} resultFile - File path to write the result to.
  * @param {boolean} isRemote - Whether the script runs on a different host than the target.
  */
-function buildRamFreeScript(targetHost, resultFile, isRemote) {
-    // The script uses ns.dnet.memoryReallocation directly.
-    // For remote: pass targetHost as argument. For local: no argument (defaults to self).
+function buildRamFreeScript(isRemote) {
+    // The script uses ns.dnet.memoryReallocation directly. Args: [targetHost, resultFile].
+    // Code is constant per variant so the game's (never-freed) module cache doesn't grow.
     const memCall = isRemote
-        ? `ns.dnet.memoryReallocation("${targetHost}")`
+        ? `ns.dnet.memoryReallocation(target)`
         : `ns.dnet.memoryReallocation()`;
-    const blockedCall = `ns.dnet.getBlockedRam("${targetHost}")`;
+    const blockedCall = `ns.dnet.getBlockedRam(target)`;
     return [
         `export async function main(ns) {`,
         `  ns.ramOverride(${RAM_FREE_SCRIPT_COST});`,
-        `  const rf = "${resultFile}";`,
+        `  const target = String(ns.args[0]);`,
+        `  const rf = String(ns.args[1]);`,
         `  let totalFreed = 0;`,
         `  let iterations = 0;`,
         `  const maxIter = 200;`,
@@ -940,16 +932,19 @@ function spawnRamFreeJob(ns, execHost, targetHost, isRemote) {
 
     const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const resultFile = `/Temp/ram-free-${id}.txt`;
-    const scriptFile = `/Temp/ram-free-${id}.js`;
-    const script = buildRamFreeScript(targetHost, resultFile, isRemote);
+    const scriptFile = `/Temp/ram-free-${isRemote ? "remote" : "local"}.js`;
+    const script = buildRamFreeScript(isRemote);
 
     ns.write(scriptFile, script, "w");
     ns.write(resultFile, "<pending>", "w");
 
-    const pid = ns.exec(scriptFile, execHost, {
-        threads: 1,
-        ramOverride: RAM_FREE_SCRIPT_COST,
-    });
+    const pid = ns.exec(
+        scriptFile,
+        execHost,
+        { threads: 1, ramOverride: RAM_FREE_SCRIPT_COST },
+        targetHost,
+        resultFile,
+    );
     if (!pid) return 0;
 
     activeRamFreeJobs.set(targetHost, {
@@ -1343,7 +1338,7 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
                         myScore,
                         weakestScore,
                     });
-                    ns.writePort(21, swapRequest);
+                    ns.port.write(21, swapRequest);
                     ns.print(
                         `Stasis: wrote swap request to port 21 (remove ${weakestHost} for ${hostname})`,
                     );
@@ -1419,10 +1414,22 @@ async function scoreServerForStasis(ns, hostname) {
  * If there isn't enough free RAM, the bootstrap kills the probe first,
  * sets stasis, then re-launches the probe.
  */
+/** RAM per thread of this probe script (measured once; falls back to a safe estimate). */
+let _probeRamCost = 0;
+function getProbeRamCost(ns) {
+    if (!_probeRamCost) {
+        try {
+            _probeRamCost = ns.getScriptRam(ns.getScriptName(), ns.getHostname());
+        } catch {}
+        if (!_probeRamCost) _probeRamCost = 4.5;
+    }
+    return _probeRamCost;
+}
+
 async function execStasisBootstrap(ns, hostname, enable) {
     const host = ns.getHostname();
     const STASIS_SCRIPT_RAM = 13.6; // 1.6 base + 12.0 setStasisLink
-    const PROBE_RAM_COST = 3.0;
+    const PROBE_RAM_COST = getProbeRamCost(ns);
 
     // Check if we have enough free RAM alongside the probe
     const maxRam = await nsGetServerMaxRam(ns, host);
@@ -2098,7 +2105,7 @@ async function solveMastermind(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
     const length = getPasswordLength(serverInfo, 4);
     // Default to full alphanumeric if format is unknown — the offline fallback
-    // from getServerAuthDetails returns passwordFormat: "numeric" even for
+    // from getServerDetails returns passwordFormat: "numeric" even for
     // alphanumeric passwords. Using the wider charset is always safe (slower
     // but correct), while the narrow charset causes permanent failures.
     const charset =
@@ -2355,6 +2362,49 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
     return result.success ? candidate : null;
 }
 
+/**
+ * OpenWebAccessPoint (packet sniffer) servers return captured traffic in the `data` field of a
+ * FAILED authenticate() response (ns.dnet.packetCapture was removed in #2594).
+ * - Easy servers (difficulty <= 16): traffic contains " <hostname>:<password> ".
+ * - Hard servers: the bare password is embedded in random noise at a random offset, so the
+ *   only length-L substring present in every capture is the password.
+ */
+async function sniffPacketPassword(ns, hostname, serverInfo, maxCaptures = 12) {
+    const expectedLength = serverInfo?.passwordLength || 0;
+    const tried = new Set();
+    let common = null;
+    const tryCandidate = async (candidate) => {
+        if (!candidate || tried.has(candidate)) return false;
+        if (expectedLength && candidate.length !== expectedLength) return false;
+        tried.add(candidate);
+        const r = await runAuth(ns, hostname, candidate);
+        return !!r?.success;
+    };
+    for (let i = 0; i < maxCaptures; i++) {
+        const probeGuess = "0".repeat(Math.max(1, expectedLength || 1));
+        const r = await runAuth(ns, hostname, probeGuess);
+        if (r?.success) return probeGuess;
+        tried.add(probeGuess);
+        const text = String(r?.data ?? "");
+        if (!text) continue;
+        for (const m of text.matchAll(/(\S+):(\S+)/g)) {
+            if (m[1] === hostname && (await tryCandidate(m[2]))) return m[2];
+        }
+        if (!expectedLength || text.length < expectedLength) continue;
+        const subs = new Set();
+        for (let j = 0; j + expectedLength <= text.length; j++)
+            subs.add(text.slice(j, j + expectedLength));
+        common = common ? new Set([...common].filter((s) => subs.has(s))) : subs;
+        if (common.size === 0) common = null; // capture didn't contain it; start over
+        else if (common.size <= 3 && i > 0) {
+            for (const c of common) if (await tryCandidate(c)) return c;
+            common = null;
+        }
+        if (await isAlreadyCracked(ns, hostname)) return null;
+    }
+    return null;
+}
+
 async function solvePacketSniffer(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
     const candidates = new Set();
@@ -2366,52 +2416,13 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
     for (const value of defaultSettingsDictionary) candidates.add(value);
     for (const value of commonPasswordDictionary) candidates.add(value);
 
-    const host = serverInfo?.currentHost || hostname;
-    const maxRam = await nsGetServerMaxRam(ns, host);
-    const usedRam = await nsGetServerUsedRam(ns, host);
-    const freeRam = Math.max(0, maxRam - usedRam);
-    const capturedCandidates = new Set();
 
     const expectedLength = serverInfo?.passwordLength;
     const format = serverInfo?.passwordFormat;
 
-    if (freeRam >= 6) {
-        for (let attempt = 0; attempt < 20; attempt++) {
-            const traffic = await runCapture(ns, hostname);
-            const text = String(traffic ?? "");
-            if (!text) continue;
-            const matches = text.matchAll(/(\S+):(\S+)/g);
-            for (const match of matches) {
-                const capturedHost = match[1];
-                const capturedPassword = match[2];
-                if (!capturedHost || !capturedPassword) continue;
-                if (capturedHost === hostname) {
-                    const result = await runAuth(
-                        ns,
-                        hostname,
-                        capturedPassword,
-                    );
-                    if (result.success) return capturedPassword;
-                    if (await isAlreadyCracked(ns, hostname)) return null;
-                } else {
-                    capturedCandidates.add(capturedPassword);
-                }
-            }
-        }
-        for (const candidate of capturedCandidates) {
-            if (!candidate) continue;
-            if (expectedLength && candidate.length !== expectedLength) continue;
-            if (format === "numeric" && !/^\d+$/.test(candidate)) continue;
-            if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate))
-                continue;
-            if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate))
-                continue;
-            const result = await runAuth(ns, hostname, candidate);
-            if (result.success) return candidate;
-            if (await isAlreadyCracked(ns, hostname)) return null;
-        }
-        return null;
-    }
+    const sniffed = await sniffPacketPassword(ns, hostname, serverInfo);
+    if (sniffed !== null) return sniffed;
+    if (await isAlreadyCracked(ns, hostname)) return null;
 
     for (const candidate of candidates) {
         if (!candidate) continue;
@@ -3321,8 +3332,7 @@ const commandNames = {
         111,
         110,
     ),
-    details: ["get", "Server", "Auth", "Details"].join(""),
-    capture: ["packet", "Capture"].join(""),
+    details: ["get", "Server", "Details"].join(""),
     open: ["open", "Cache"].join(""),
     phish: ["phishing", "Attack"].join(""),
     promote: ["promote", "Stock"].join(""),
@@ -3356,7 +3366,15 @@ const commandArgs = {
 let commandCounter = 0;
 // Reduced wrap limit: fewer temp files on disk at any time (was 100000 -> now 1000)
 // Files are overwritten on reuse via ns.write(..., 'w'), so smaller wrap is safe
-const COMMAND_COUNTER_WRAP = 1000;
+// Only result files are numbered now; scripts are one file per distinct command.
+const COMMAND_COUNTER_WRAP = 100;
+
+/** Small stable string hash, used to name one temp script per distinct command. */
+function hashCommand(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+}
 
 function buildDnetCommand(name, args = "") {
     return `${dnetPrefix}${name}(${args})`;
@@ -3407,17 +3425,19 @@ async function runDnetCommand(ns, command, args = []) {
     const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const host = ns.getHostname();
     const resultFile = `/Temp/dnet-task-${id}.txt`;
-    const scriptFile = `/Temp/dnet-task-${id}.js`;
+    // The script source must be identical for every call of the same command: the game caches
+    // each distinct source forever, so the result file is passed as the last argument.
+    const scriptFile = `/Temp/dnet-cmd-${hashCommand(command)}.js`;
     const script =
-        `export async function main(ns){let r;try{const v=await (${command});` +
+        `export async function main(ns){const f=ns.args[ns.args.length-1];let r;try{const v=await (${command});` +
         `const w=v===undefined?{$type:'undefined'}:v===null?{$type:'null'}:v;` +
         `r=JSON.stringify({$type:'result',$value:w});}catch(e){r="ERROR: "+(typeof e==='string'?e:e?.message??JSON.stringify(e));}` +
-        `const f="${resultFile}";ns.write(f,r,'w');}`;
-    // NOTE: ns.rm removed from temp script to save 1.0GB RAM per invocation.
-    // Script files are overwritten on reuse (counter wraps at 100000).
+        `ns.write(f,r,'w');}`;
+    // NOTE: ns.rm omitted from temp script to save 1.0GB RAM per invocation.
+    // Writing identical content is a no-op for the game, so this doesn't recompile.
     ns.write(scriptFile, script, "w");
     ns.write(resultFile, "<pending>", "w");
-    const pid = ns.exec(scriptFile, host, 1, ...args);
+    const pid = ns.exec(scriptFile, host, 1, ...args, resultFile);
     if (!pid) return null;
     for (let i = 0; i < 50; i++) {
         const data = ns.read(resultFile);
@@ -3462,18 +3482,26 @@ async function nsScpWithSession(ns, source, destination, password) {
     const id = commandCounter++ % COMMAND_COUNTER_WRAP;
     const host = ns.getHostname();
     const resultFile = `/Temp/dnet-task-${id}.txt`;
-    const scriptFile = `/Temp/dnet-task-${id}.js`;
-    const pwd = (password ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    // Password and result file go through args so the script source is constant.
+    const scriptFile = `/Temp/dnet-scp-session.js`;
     const script =
         `export async function main(ns){let r;try{` +
-        `${dnetPrefix}${commandNames.link}(${nsPrefix}args[1],'${pwd}');` +
+        `${dnetPrefix}${commandNames.link}(${nsPrefix}args[1],String(${nsPrefix}args[2]));` +
         `const v=await (${nsPrefix}${commandNames.copyFile}(${nsPrefix}args[0],${nsPrefix}args[1]));` +
         `const w=v===undefined?{$type:'undefined'}:v===null?{$type:'null'}:v;` +
         `r=JSON.stringify({$type:'result',$value:w});}catch(e){r="ERROR: "+(typeof e==='string'?e:e?.message??JSON.stringify(e));}` +
-        `const f="${resultFile}";ns.write(f,r,'w');}`;
+        `ns.write(String(${nsPrefix}args[3]),r,'w');}`;
     ns.write(scriptFile, script, "w");
     ns.write(resultFile, "<pending>", "w");
-    const pid = ns.exec(scriptFile, host, 1, source, destination);
+    const pid = ns.exec(
+        scriptFile,
+        host,
+        1,
+        source,
+        destination,
+        password ?? "",
+        resultFile,
+    );
     if (!pid) return null;
     for (let i = 0; i < 50; i++) {
         const data = ns.read(resultFile);
@@ -3603,13 +3631,13 @@ const _CRACKED_CHECK_INTERVAL = 25;
  * Only actually queries every _CRACKED_CHECK_INTERVAL calls per hostname.
  * Returns true if server already has admin rights (cracked by someone else).
  */
-async function isAlreadyCracked(ns, hostname) {
+async function isAlreadyCracked(ns, hostname, force = false) {
     const count = (_crackedCheckCounters.get(hostname) || 0) + 1;
     _crackedCheckCounters.set(hostname, count);
-    if (count % _CRACKED_CHECK_INTERVAL !== 0) return false;
+    if (!force && count % _CRACKED_CHECK_INTERVAL !== 0) return false;
     try {
-        const details = await getAuthDetails(ns, hostname);
-        return details?.hasAdminRights === true;
+        // getServerDetails() has no admin flag; hasRootAccess is 0.05 GB and works on darknet servers
+        return ns.hasRootAccess(hostname) === true;
     } catch {
         return false;
     }
@@ -3618,17 +3646,6 @@ async function isAlreadyCracked(ns, hostname) {
 /** Reset the cracked-check counter for a hostname (call at start of each solver). */
 function resetCrackedCheck(hostname) {
     _crackedCheckCounters.delete(hostname);
-}
-
-async function runCapture(ns, hostname) {
-    try {
-        return await runDnetCommand(
-            ns,
-            buildDnetCommand(commandNames.capture, commandArgs.singleArg),
-            [hostname],
-        );
-    } catch {}
-    return null;
 }
 
 async function runHeartbleed(ns, hostname) {
@@ -3645,11 +3662,11 @@ async function runHeartbleed(ns, hostname) {
 async function runHeartbleedMulti(ns, hostname, logsToCapture) {
     try {
         // Build custom heartbleed command with multi-log capture and peek
-        const args = `${nsPrefix}args[0], { peek: true, logsToCapture: ${logsToCapture} }`;
+        const args = `${nsPrefix}args[0], { peek: true, logsToCapture: Number(${nsPrefix}args[1]) }`;
         return await runDnetCommand(
             ns,
             buildDnetCommand(commandNames.bleed, args),
-            [hostname],
+            [hostname, logsToCapture],
         );
     } catch {}
     return null;

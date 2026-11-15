@@ -314,7 +314,7 @@ async function mainLoop(ns) {
         // Detect the first territory tick by watching for other gang's territory power to update.
         const otherGangInfo = await getNsDataThroughFile(
             ns,
-            "ns.gang.getOtherGangInformation()",
+            "ns.gang.getAllGangInformation()",
         ); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
         if (
             lastOtherGangInfo != null &&
@@ -1049,7 +1049,7 @@ async function enableOrDisableWarfare(ns, myGangInfo) {
     if (warfareFinished && !myGangInfo.territoryWarfareEngaged) return; // No need to engage once we hit 100%
     const otherGangs = await getNsDataThroughFile(
         ns,
-        "ns.gang.getOtherGangInformation()",
+        "ns.gang.getAllGangInformation()",
     ); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
     let lowestWinChance = 1,
         totalWinChance = 0,

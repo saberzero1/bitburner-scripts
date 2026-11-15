@@ -775,28 +775,53 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
     return result.success ? candidate : null;
 }
 
+/**
+ * OpenWebAccessPoint (packet sniffer) servers return captured traffic in the `data` field of a
+ * FAILED authenticate() response (ns.dnet.packetCapture was removed in #2594).
+ * - Easy servers (difficulty <= 16): traffic contains " <hostname>:<password> ".
+ * - Hard servers: the bare password is embedded in random noise at a random offset, so the
+ *   only length-L substring present in every capture is the password.
+ */
+async function sniffPacketPassword(ns, hostname, serverInfo, maxCaptures = 12) {
+    const expectedLength = serverInfo?.passwordLength || 0;
+    const tried = new Set();
+    let common = null;
+    const tryCandidate = async (candidate) => {
+        if (!candidate || tried.has(candidate)) return false;
+        if (expectedLength && candidate.length !== expectedLength) return false;
+        tried.add(candidate);
+        const r = await safeAuthenticate(ns, hostname, candidate);
+        return !!r?.success;
+    };
+    for (let i = 0; i < maxCaptures; i++) {
+        const probeGuess = "0".repeat(Math.max(1, expectedLength || 1));
+        const r = await safeAuthenticate(ns, hostname, probeGuess);
+        if (r?.success) return probeGuess;
+        tried.add(probeGuess);
+        const text = String(r?.data ?? "");
+        if (!text) continue;
+        for (const m of text.matchAll(/(\S+):(\S+)/g)) {
+            if (m[1] === hostname && (await tryCandidate(m[2]))) return m[2];
+        }
+        if (!expectedLength || text.length < expectedLength) continue;
+        const subs = new Set();
+        for (let j = 0; j + expectedLength <= text.length; j++)
+            subs.add(text.slice(j, j + expectedLength));
+        common = common ? new Set([...common].filter((s) => subs.has(s))) : subs;
+        if (common.size === 0) common = null; // capture didn't contain it; start over
+        else if (common.size <= 3 && i > 0) {
+            for (const c of common) if (await tryCandidate(c)) return c;
+            common = null;
+        }
+        if (await isAlreadyCracked(ns, hostname)) return null;
+    }
+    return null;
+}
+
 async function solvePacketSniffer(ns, hostname, serverInfo) {
     resetCrackedCheck(hostname);
-    try {
-        const maxAttempts = 20;
-        const seen = new Set();
-        for (let i = 0; i < maxAttempts; i++) {
-            const traffic = await ns.dnet.packetCapture(hostname);
-            if (!traffic) continue;
-            const lines = String(traffic).split("\n");
-            for (const line of lines) {
-                const matches = line.matchAll(/(\S+):(\S+)/g);
-                for (const m of matches) {
-                    const captured = m[2];
-                    if (seen.has(captured)) continue;
-                    seen.add(captured);
-                    const resp = await safeAuthenticate(ns, hostname, captured);
-                    if (resp.success) return captured;
-                    if (await isAlreadyCracked(ns, hostname)) return null;
-                }
-            }
-        }
-    } catch (err) {}
+    const sniffed = await sniffPacketPassword(ns, hostname, serverInfo);
+    if (sniffed !== null) return sniffed;
 
     const candidates = new Set();
     const hint = getHint(serverInfo);
@@ -1094,8 +1119,7 @@ async function isAlreadyCracked(ns, hostname) {
     _crackedCheckCounters.set(hostname, count);
     if (count % _CRACKED_CHECK_INTERVAL !== 0) return false;
     try {
-        const details = await ns.dnet.getServerAuthDetails(hostname);
-        return details?.hasAdminRights === true;
+        return ns.hasRootAccess(hostname) === true;
     } catch {
         return false;
     }

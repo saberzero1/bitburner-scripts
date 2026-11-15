@@ -1901,8 +1901,8 @@ export async function main(ns) {
             print("Stopping automated infiltration...");
             clearInterval(wnd.tmrAutoInf);
             delete wnd.tmrAutoInf;
-            ns.clearPort(30);
-            ns.writePort(1, 1);
+            ns.port.clear(30);
+            ns.port.write(1, 1);
         }
         restoreEventListeners();
         setTimeout(() => {
@@ -1970,7 +1970,7 @@ export async function main(ns) {
                 (targetCompany ? ` | Target: ${targetCompany}` : ""),
         );
 
-        ns.writePort(30, ns.pid);
+        ns.port.write(30, ns.pid);
 
         if (targetCompany) {
             let navigated = false;
@@ -2035,7 +2035,7 @@ export async function main(ns) {
 
     // Signal other scripts (e.g. work-for-factions.js) that infiltration is active.
     // The --auto path writes port 30 separately; this covers the orchestrator path.
-    ns.writePort(30, ns.pid);
+    ns.port.write(30, ns.pid);
     if (!options["getMoney"]) {
         // Load augmentation data (refreshed each iteration at end of loop)
         await updateAugmentationData(ns, player, ignoreFaction);
@@ -2053,9 +2053,9 @@ export async function main(ns) {
         ) {
             if (!options["no-tail"]) ns.ui.openTail();
             if (options["sleep-Between-Infiltration-Time"]) {
-                ns.clearPort(30); // Release lock so faction worker can run during downtime
+                ns.port.clear(30); // Release lock so faction worker can run during downtime
                 await ns.sleep(options["sleep-Between-Infiltration-Time"]);
-                ns.writePort(30, ns.pid); // Re-acquire lock before next infiltration
+                ns.port.write(30, ns.pid); // Re-acquire lock before next infiltration
             }
 
             const marketMultiplier = getMarketDemandMultiplier();
@@ -2114,9 +2114,9 @@ export async function main(ns) {
                         ns,
                         `Infiltration timed out or failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
                     );
-                    ns.clearPort(30);
+                    ns.port.clear(30);
                     await ns.sleep(2000);
-                    ns.writePort(30, ns.pid);
+                    ns.port.write(30, ns.pid);
                 } else {
                     log(
                         ns,
@@ -2134,9 +2134,9 @@ export async function main(ns) {
                         `Market demand low \u2014 waiting ${(delay / 1000).toFixed(1)}s for recovery`,
                         verbose,
                     );
-                    ns.clearPort(30); // Release lock during market demand wait
+                    ns.port.clear(30); // Release lock during market demand wait
                     await ns.sleep(delay);
-                    ns.writePort(30, ns.pid); // Re-acquire lock
+                    ns.port.write(30, ns.pid); // Re-acquire lock
                 }
             }
 
@@ -2171,7 +2171,7 @@ export async function main(ns) {
         await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
     }
     // Clear the infiltration-active signal so other scripts can resume.
-    ns.clearPort(30);
+    ns.port.clear(30);
 }
 
 /**
@@ -3107,12 +3107,16 @@ async function updateAugmentationData(ns, player, ignoreFaction) {
         (name) => !simulatedOwnedAugmentations.includes(name),
     );
 
+    // ns.getPlayer().bitNodeN was removed in 3.0.0; the current node comes from getResetInfo()
+    const currentNode = (
+        await getNsDataThroughFile(ns, "ns.getResetInfo()", "/Temp/reset-info.txt")
+    )?.currentNode;
     if ((desiredStatsFilters?.length ?? 0) === 0)
         desiredStatsFilters =
             ownedAugmentations.length > 40
                 ? ["_"]
-                : player.bitNodeN === 6 ||
-                    player.bitNodeN === 7 ||
+                : currentNode === 6 ||
+                    currentNode === 7 ||
                     player.factions.includes("Bladeburners")
                   ? ["_"]
                   : [

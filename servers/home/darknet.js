@@ -100,7 +100,7 @@ const LAB_SOLVER_CONTENT = [
     `      if (visited.has(nk)) continue;`,
     `      const r = await ns.dnet.authenticate(hostname, "go " + d);`,
     `      if (r.success) {`,
-    `        ns.writePort(port, JSON.stringify({ host: hostname, password: r.data ?? r.message }));`,
+    `        ns.port.write(port, JSON.stringify({ host: hostname, password: r.data ?? r.message }));`,
     `        return;`,
     `      }`,
     `      const mm = (r.message || "").match(/moved to (\\d+),(\\d+)/);`,
@@ -112,23 +112,23 @@ const LAB_SOLVER_CONTENT = [
     `      }`,
     `    }`,
     `    if (!moved) {`,
-    `      if (stack.length === 0) { ns.writePort(port, JSON.stringify({ host: hostname, error: "stuck" })); return; }`,
+    `      if (stack.length === 0) { ns.port.write(port, JSON.stringify({ host: hostname, error: "stuck" })); return; }`,
     `      const back = stack.pop();`,
     `      const br = await ns.dnet.authenticate(hostname, "go " + rev[back.dir]);`,
     `      if (br.success) {`,
-    `        ns.writePort(port, JSON.stringify({ host: hostname, password: br.data ?? br.message }));`,
+    `        ns.port.write(port, JSON.stringify({ host: hostname, password: br.data ?? br.message }));`,
     `        return;`,
     `      }`,
     `      const bm = (br.message || "").match(/moved to (\\d+),(\\d+)/);`,
     `      if (bm) { pos = [parseInt(bm[1],10), parseInt(bm[2],10)]; }`,
-    `      else { ns.writePort(port, JSON.stringify({ host: hostname, error: "backtrack failed" })); return; }`,
+    `      else { ns.port.write(port, JSON.stringify({ host: hostname, error: "backtrack failed" })); return; }`,
     `    }`,
     `    await ns.sleep(50);`,
     `  }`,
-    `  ns.writePort(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
+    `  ns.port.write(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 37;
+const PROBE_VERSION = 38;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -460,12 +460,12 @@ class DarknetServerInfo {
         this.hostname = hostname;
         this.modelId = authDetails.modelId;
         this.passwordHint = authDetails.passwordHint;
-        this.staticPasswordHint = authDetails.staticPasswordHint;
-        this.passwordHintData = authDetails.passwordHintData;
+        this.staticPasswordHint = authDetails.passwordHint;
+        this.passwordHintData = authDetails.data;
         this.isOnline = authDetails.isOnline;
         this.isConnected = authDetails.isConnectedToCurrentServer;
         this.hasSession = authDetails.hasSession;
-        this.hasAdmin = false; // NOTE: getServerAuthDetails does NOT return hasAdminRights; use isServerAuthenticated() instead
+        this.hasAdmin = false; // NOTE: getServerDetails does NOT return hasAdminRights; use ns.hasRootAccess() / isServerAuthenticated() instead
         this.passwordFormat = authDetails.passwordFormat;
         this.passwordLength = authDetails.passwordLength;
         this.depth = authDetails.depth ?? null;
@@ -496,8 +496,8 @@ async function orchestrateDarknet(ns, state, options) {
         neighbors.clear();
     }
 
-    while (ns.peek(LAB_NEIGHBOR_REPORT_PORT) !== "NULL PORT DATA") {
-        const raw = ns.readPort(LAB_NEIGHBOR_REPORT_PORT);
+    while (ns.port.peek(LAB_NEIGHBOR_REPORT_PORT) !== "NULL PORT DATA") {
+        const raw = ns.port.read(LAB_NEIGHBOR_REPORT_PORT);
         try {
             const msg = JSON.parse(String(raw));
             if (msg.labHost && msg.neighbor) {
@@ -549,8 +549,8 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 1c: Collect stasis server passwords reported by probes (port 19).
     // When a probe sets stasis on itself, it writes its password here so the orchestrator
     // always has credentials for stasis servers — preventing future 'zombie stasis' situations.
-    while (ns.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
-        const raw = ns.readPort(STASIS_PWD_PORT);
+    while (ns.port.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
+        const raw = ns.port.read(STASIS_PWD_PORT);
         try {
             const msg = JSON.parse(String(raw));
             if (msg.data) {
@@ -620,7 +620,7 @@ async function orchestrateDarknet(ns, state, options) {
         const pwd = state.getPassword(stasisHost);
         if (
             pwd === undefined &&
-            (!zombieCheck || zombieCheck.hasAdminRights === undefined)
+            (!zombieCheck || !zombieCheck.isOnline)
         ) {
             const existing = state.zombieStasisServers.get(stasisHost);
             const now = Date.now();
@@ -662,11 +662,11 @@ async function orchestrateDarknet(ns, state, options) {
             // Alternative approach: exec a tiny helper on the stasis server that writes
             // its password file contents to a Netscript port. This avoids overwriting
             // home's password file.
-            const helperScript = `/Temp/stasis-pwd-helper-${stasisHost.replace(/[^a-zA-Z0-9]/g, "_")}.js`;
+            const helperScript = `/Temp/stasis-pwd-helper.js`; // one file: content is host-independent
             const helperContent =
                 `/** @param {NS} ns */ export async function main(ns) {` +
                 ` const data = ns.read("${PASSWORD_FILE}");` +
-                ` if (data) ns.writePort(${STASIS_PWD_PORT}, JSON.stringify({host: ns.getHostname(), data}));` +
+                ` if (data) ns.port.write(${STASIS_PWD_PORT}, JSON.stringify({host: ns.getHostname(), data}));` +
                 `}`;
 
             // Check if stasis server has enough RAM for the helper (~1.6 GB base)
@@ -694,8 +694,8 @@ async function orchestrateDarknet(ns, state, options) {
                             break;
                     }
                     // Read result from port
-                    while (ns.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
-                        const raw = ns.readPort(STASIS_PWD_PORT);
+                    while (ns.port.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
+                        const raw = ns.port.read(STASIS_PWD_PORT);
                         try {
                             const msg = JSON.parse(String(raw));
                             if (msg.data) {
@@ -765,8 +765,8 @@ async function orchestrateDarknet(ns, state, options) {
     {
         // Collect all swap requests, then process the best one
         const swapRequests = [];
-        while (ns.peek(STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") {
-            const raw = ns.readPort(STASIS_SWAP_REQUEST_PORT);
+        while (ns.port.peek(STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") {
+            const raw = ns.port.read(STASIS_SWAP_REQUEST_PORT);
             try {
                 const req = JSON.parse(String(raw));
                 if (req.removeHost && req.requestor) swapRequests.push(req);
@@ -848,8 +848,8 @@ async function orchestrateDarknet(ns, state, options) {
     cleanupOrphanedProbes(ns, state);
 
     // Step 8b: Collect labyrinth solver results from port
-    while (ns.peek(LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
-        const raw = ns.readPort(LAB_SOLVER_RESULT_PORT);
+    while (ns.port.peek(LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
+        const raw = ns.port.read(LAB_SOLVER_RESULT_PORT);
         try {
             const msg = JSON.parse(String(raw));
             if (msg.password && msg.host) {
@@ -957,9 +957,8 @@ async function discoverFromAuthedServers(ns, state) {
     // Port 20 is reserved for darknet discovery (helpers.js uses ports 1-20 round-robin,
     // but only briefly; we clear before and after use).
     const DISCOVERY_PORT = 20;
-    ns.clearPort(DISCOVERY_PORT);
+    ns.port.clear(DISCOVERY_PORT);
 
-    let probeCounter = 0;
 
     for (const target of probeTargets) {
         try {
@@ -969,8 +968,7 @@ async function discoverFromAuthedServers(ns, state) {
             const freeRam = Math.max(0, maxRam - usedRam);
             if (freeRam < 1.8) continue;
 
-            const probeId = probeCounter++;
-            const helperScript = `/Temp/darknet-probe-helper-${probeId}.js`;
+            const helperScript = `/Temp/darknet-probe-helper.js`; // one file: content is constant
 
             // The temp script runs probe() on the remote server and writes result to a port.
             // This avoids scp back to home which may be unreachable from the darknet.
@@ -978,7 +976,7 @@ async function discoverFromAuthedServers(ns, state) {
                 `/** @param {NS} ns */ export async function main(ns) {` +
                 ` const result = ns.dnet.probe();` +
                 ` const data = JSON.stringify({ source: ns.getHostname(), servers: result ?? [] });` +
-                ` ns.writePort(${DISCOVERY_PORT}, data);` +
+                ` ns.port.write(${DISCOVERY_PORT}, data);` +
                 `}`;
 
             ns.write(helperScript, helperContent, "w");
@@ -996,8 +994,8 @@ async function discoverFromAuthedServers(ns, state) {
             }
 
             // Read all results from the port (the script wrote one JSON object with source + servers)
-            while (ns.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
-                const raw = ns.readPort(DISCOVERY_PORT);
+            while (ns.port.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
+                const raw = ns.port.read(DISCOVERY_PORT);
                 try {
                     const parsed = JSON.parse(String(raw));
                     const source = parsed?.source;
@@ -1030,8 +1028,8 @@ async function discoverFromAuthedServers(ns, state) {
     }
 
     // Final cleanup: drain any leftover port data
-    while (ns.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
-        ns.readPort(DISCOVERY_PORT);
+    while (ns.port.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
+        ns.port.read(DISCOVERY_PORT);
     }
 
     return discovered;
@@ -1047,7 +1045,7 @@ function buildWorkQueue(ns, state, nearbyServers, options) {
     for (const hostname of nearbyServers) {
         let details;
         try {
-            details = ns.dnet.getServerAuthDetails(hostname);
+            details = ns.dnet.getServerDetails(hostname);
         } catch {
             continue;
         }
@@ -1161,9 +1159,17 @@ async function processServer(ns, state, hostname, options) {
     }
 }
 
+function safeHasRoot(ns, hostname) {
+    try {
+        return ns.hasRootAccess(hostname);
+    } catch {
+        return false;
+    }
+}
+
 function safeGetAuthDetails(ns, hostname) {
     try {
-        return ns.dnet.getServerAuthDetails(hostname);
+        return ns.dnet.getServerDetails(hostname);
     } catch {
         return null;
     }
@@ -1229,8 +1235,7 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     }
 
     // Re-check: another agent (probe) may have cracked this while we waited
-    const preCheck = safeGetAuthDetails(ns, hostname);
-    if (preCheck?.hasAdminRights) {
+    if (safeHasRoot(ns, hostname)) {
         if (verbose) log(ns, `${hostname} already cracked by another agent`);
         return true;
     }
@@ -1258,8 +1263,7 @@ async function authenticateServer(ns, state, hostname, serverInfo, options) {
     }
 
     // Re-check before bruteforce: another agent may have cracked this
-    const preBrute = safeGetAuthDetails(ns, hostname);
-    if (preBrute?.hasAdminRights) {
+    if (safeHasRoot(ns, hostname)) {
         if (verbose) log(ns, `${hostname} already cracked by another agent`);
         return true;
     }
@@ -1333,7 +1337,7 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
         let isConnected = false;
         try {
             isConnected =
-                !!ns.dnet.getServerAuthDetails(neighbor)
+                !!ns.dnet.getServerDetails(neighbor)
                     ?.isConnectedToCurrentServer;
         } catch {}
         if (isDarkweb || isStasis || isConnected) {
@@ -1696,7 +1700,7 @@ async function deployProbe(ns, state, hostname, options) {
                     ns,
                     `WARN: Failed to launch probe on ${hostname}. ` +
                         `Connected: ${details?.isConnectedToCurrentServer}, Session: ${details?.hasSession}, ` +
-                        `Admin: ${details?.hasAdminRights}, RAM: ${formatRam(usedRam)}/${formatRam(maxRam)}`,
+                        `Admin: ${safeHasRoot(ns, hostname)}, RAM: ${formatRam(usedRam)}/${formatRam(maxRam)}`,
                     false,
                     "warning",
                 );
@@ -2031,9 +2035,9 @@ async function execStasisLink(ns, state, hostname, enable, options) {
             log(
                 ns,
                 `Stasis exec diagnostics for ${hostname}: ` +
-                    `hasAdmin=${authDetails?.hasAdminRights}, ` +
-                    `backdoor=${authDetails?.backdoorInstalled}, ` +
-                    `stasis=${authDetails?.hasStasisLink}, ` +
+                    `hasAdmin=${safeHasRoot(ns, hostname)}, ` +
+                    `online=${authDetails?.isOnline}, ` +
+                    `stasis=${state.stasisServers.has(hostname)}, ` +
                     `connected=${authDetails?.isConnectedToCurrentServer}, ` +
                     `password=${pwd !== undefined ? "known" : "UNKNOWN"}`,
             );
@@ -2042,7 +2046,7 @@ async function execStasisLink(ns, state, hostname, enable, options) {
         // Uses grace period: only give up after sustained failures.
         if (
             pwd === undefined &&
-            (!authDetails || authDetails.hasAdminRights === undefined)
+            (!authDetails || !authDetails.isOnline)
         ) {
             const now = Date.now();
             const existing = state.zombieStasisServers.get(hostname);
@@ -2474,7 +2478,7 @@ function cleanupOrphanedProbes(ns, state) {
     for (const [hostname] of state.activeProbes) {
         if (hostname === "home") continue;
         try {
-            const details = ns.dnet.getServerAuthDetails(hostname);
+            const details = ns.dnet.getServerDetails(hostname);
             if (!details.isOnline) toRemove.push(hostname);
         } catch {
             toRemove.push(hostname);

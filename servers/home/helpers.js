@@ -33,7 +33,29 @@ const symbols = [
     "e36",
     "e39",
 ];
-let nextCompletionPort = 1;
+// Completion ports for temp scripts. Kept well away from low port numbers, which other scripts use
+// (darknet: 17-21, infiltration: 1 and 30). Module state is shared by every script importing helpers.js.
+const COMPLETION_PORT_BASE = 9000;
+const COMPLETION_PORT_COUNT = 20;
+let nextCompletionPort = 0;
+
+/** Port helpers: use the ns.port namespace (dev/v3+) and fall back to the deprecated top-level functions.
+ * @param {NS} ns */
+export function portPeek(ns, port) {
+    return ns.port ? ns.port.peek(port) : ns.peek(port);
+}
+/** @param {NS} ns */
+export function portRead(ns, port) {
+    return ns.port ? ns.port.read(port) : ns.readPort(port);
+}
+/** @param {NS} ns */
+export function portWrite(ns, port, data) {
+    return ns.port ? ns.port.write(port, data) : ns.writePort(port, data);
+}
+/** @param {NS} ns */
+export function portClear(ns, port) {
+    return ns.port ? ns.port.clear(port) : ns.clearPort(port);
+}
 
 /**
  * Return a formatted representation of the monetary amount using scale sympols (e.g. 6.50M)
@@ -316,7 +338,9 @@ function checkBackwardsCompatibility(ns, command) {
         .replaceAll(
             "corporation.setJobAssignment",
             "corporation.setAutoJobAssignment",
-        );
+        )
+        .replaceAll("gang.getAllGangInformation", "gang.getOtherGangInformation")
+        .replaceAll("singularity.hasExportGameBonus", "singularity.exportGameBonus");
 
     // Log altered commands to assist with troubleshooting.
     if (alteredCommand != command)
@@ -397,15 +421,19 @@ export async function getNsDataThroughFile_Custom(
     const initialContents = "<Insufficient RAM>";
     ns.write(fName, initialContents, "w");
 
-    const completionPort = (nextCompletionPort = (nextCompletionPort % 20) + 1);
-    ns.clearPort(completionPort);
+    nextCompletionPort = (nextCompletionPort + 1) % COMPLETION_PORT_COUNT;
+    const completionPort = COMPLETION_PORT_BASE + nextCompletionPort;
+    portClear(ns, completionPort);
     const fNameCommand = `${fName}.${completionPort}.js`;
     const commandToFile =
         `let r;try{const v=(${command});` +
         `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
         `r=JSON.stringify({ $type:'result', $value:w }, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}` +
         `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w');` +
-        `if (typeof ns.writePort === 'function') ns.writePort(${completionPort}, 1);`;
+        // The port is parsed from the script's own name (not inlined) so the source is identical for every
+        // port: the game caches each distinct script source forever.
+        `const p=+(ns.getScriptName().match(/\\.(\\d+)\\.js$/)||[])[1];` +
+        `if(p){if(ns.port)ns.port.write(p,1);else if(typeof ns.writePort==='function')ns.writePort(p,1);}`;
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(
         ns,
@@ -773,8 +801,8 @@ export async function waitForProcessToComplete_Custom(
                 `Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`,
             );
         if (completionPort) {
-            if (ns.peek(completionPort) !== "NULL PORT DATA")
-                ns.readPort(completionPort);
+            if (portPeek(ns, completionPort) !== "NULL PORT DATA")
+                portRead(ns, completionPort);
             else await ns.sleep(sleepMs);
         } else await ns.sleep(sleepMs);
         sleepMs = Math.min(sleepMs * 2, 200);
