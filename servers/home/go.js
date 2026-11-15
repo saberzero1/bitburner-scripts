@@ -23,14 +23,18 @@ import {
 const argsSchema = [
     ["cheats", true], // (Now true by default - but still an option for backwards compatibility) This is only possible if you have BN14.2
     ["disable-cheats", false], // Set to true if you want to *not* use cheats for some reason.
-    ["cheat-chance-threshold", 0.9], // Don't cheat if our success chance is less than this
+    ["cheat-chance-threshold", 0.8], // Don't cheat if our success chance is less than this
     ["logtime", false], // Logs time time it takes for each player to take their move
     ["runOnce", false], // Will only play one game if enabled
     ["board-size", 0], // Board size for new games (5, 7, 9 or 13). 0 = per opponent, the size with the most node power per hour (tools/go-sim)
     ["chooser", "marginal"], // "marginal": play whoever adds the most bonus per hour (tools/go-sim); "winrate": older komi x win-rate^6 weighting
     ["opponent", ""], // Always play this opponent (e.g. "Illuminati"); for testing
     ["random-opponents", false], // Pick opponents uniformly at random (old behaviour) instead of by expected value and win rate
-    ["max-cheats-per-game", 1], // A failed cheat after an earlier one in the same game has a 10% chance of ejection (a loss, breaking the win streak)
+    ["cheat-types", "rescue,twoMoves"], // Cheats to try, in order: twoMoves (capture a 2-liberty group), rescue (remove an enemy
+    // stone next to our group in atari), destroyEye (destroy a true eye of a 2-liberty enemy group), repair (restore an offline node we enclose)
+    ["cheat-min-capture", 2], // Only cheat (play two moves) to capture an enemy group of at least this many stones
+    ["max-cheats-per-game", 3], // A failed cheat after an earlier one in the same game has a 10% chance of ejection (a loss). With
+    // rescue,twoMoves, min capture 2, up to 3 cheats and threshold 0.8, tools/go-sim win rates rose e.g. Tetrads 41->84%, Illuminati 30->63%
     ["silent", false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
 ];
 
@@ -42,15 +46,15 @@ export function autocomplete(data, args) {
 /** Main script entrypoint.
  * Note that to protect against "shared global memory", the entire script is wrapped in the body of the main function.
  * @param {NS} ns */
-// Node power per hour by board size, from tools/go-sim (this script vs the game's AI, 40 games each, at the
-// AI's normal 200 ms/move; bonus time speeds all sizes up equally). The w0r1d_d43m0n was not simulated.
+// Node power per hour by board size, from tools/go-sim (this script with its default cheats vs the game's AI, 60
+// games each, at the AI's normal 200 ms/move; bonus time speeds all sizes up equally). The w0r1d_d43m0n was not simulated.
 const GO_POWER_PER_HOUR = {
-    Netburners: { 5: 17948, 7: 17683, 9: 12557, 13: 14526 },
-    "Slum Snakes": { 5: 31558, 7: 19609, 9: 16784, 13: 9235 },
-    "The Black Hand": { 5: 12219, 7: 11092, 9: 11419, 13: 13450 },
-    Tetrads: { 5: 9793, 7: 8744, 9: 6947, 13: 7229 },
-    Daedalus: { 5: 14188, 7: 11365, 9: 10035, 13: 13877 },
-    Illuminati: { 5: 43541, 7: 4539, 9: 6964, 13: 8038 }, // 5x5 vs Illuminati has an 8x multiplier (otherwise 2x)
+    Netburners: { 5: 21403, 7: 15263, 9: 15001, 13: 13463 },
+    "Slum Snakes": { 5: 31446, 7: 18897, 9: 15932, 13: 14232 },
+    "The Black Hand": { 5: 18012, 7: 9250, 9: 12624, 13: 14412 },
+    Tetrads: { 5: 15276, 7: 10638, 9: 10580, 13: 8129 },
+    Daedalus: { 5: 22955, 7: 13612, 9: 14635, 13: 12128 },
+    Illuminati: { 5: 91407, 7: 8761, 9: 7527, 13: 9771 }, // 5x5 vs Illuminati has an 8x multiplier (otherwise 2x)
     "????????????": { 13: 8000 },
 };
 // Each faction's bonusPower (Go Constants.ts)
@@ -66,6 +70,8 @@ export async function main(ns) {
     let fixedOpponent = null;
     let chooser = "marginal";
     let activeSourceFiles = {};
+    let cheatMinCapture = 6;
+    let cheatTypes = ["twoMoves"];
     let lastStats = null; // ns.go.analysis.getStats() snapshot, to detect each game's result
     const GO_RESULTS_FILE = "/data/go-results.txt";
     let logtime = false;
@@ -153,6 +159,8 @@ export async function main(ns) {
         cheats = !runOptions["disable-cheats"] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
+        cheatMinCapture = runOptions["cheat-min-capture"];
+        cheatTypes = String(runOptions["cheat-types"]).split(",").map((t) => t.trim()).filter(Boolean);
         boardSize = [5, 7, 9, 13].includes(runOptions["board-size"]) ? runOptions["board-size"] : 0;
         chooser = runOptions.chooser;
         randomOpponents = runOptions["random-opponents"];
@@ -337,7 +345,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -427,7 +435,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -510,7 +518,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -593,7 +601,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -676,7 +684,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -759,7 +767,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -835,7 +843,7 @@ export async function main(ns) {
                         )
                             break;
                         if (
-                            (results = await moveSnakeEyes(ns, getSnakeEyes(6)))
+                            (results = await moveCheat(ns))
                         )
                             break;
                         if (
@@ -2444,6 +2452,104 @@ export async function main(ns) {
     }
     /** @param {NS} ns
      * @returns {Promise<false | {type:"move"|"pass"|"gameOver"; x:number; y:number;}} */
+    // ─── Cheats other than playTwoMoves (compared per opponent with tools/go-sim) ───
+    function goNeighbors(x, y) {
+        const n = board.length;
+        return [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].filter(([a, b]) => a >= 0 && b >= 0 && a < n && b < n);
+    }
+    function chainPoints(x, y) {
+        const id = chains[x][y];
+        const pts = [];
+        for (let i = 0; i < board.length; i++) for (let j = 0; j < board.length; j++) if (chains[i][j] === id) pts.push([i, j]);
+        return pts;
+    }
+    function chainLiberties(pts) {
+        const libs = new Set();
+        for (const [x, y] of pts) for (const [a, b] of goNeighbors(x, y)) if (board[a][b] === ".") libs.add(a * 100 + b);
+        return [...libs].map((k) => [Math.floor(k / 100), k % 100]);
+    }
+    /** Empty point whose neighbours are all `color` stones or offline nodes. */
+    function isTrueEye(x, y, color) {
+        return board[x][y] === "." && goNeighbors(x, y).every(([a, b]) => board[a][b] === color || board[a][b] === "#");
+    }
+    /** rescue: our biggest group in atari (3+ stones) -> remove an adjacent enemy stone to give it a liberty. */
+    function getRescueRemoval(minSize = 3) {
+        let best = null;
+        const seen = new Set();
+        for (let x = 0; x < board.length; x++)
+            for (let y = 0; y < board.length; y++) {
+                if (board[x][y] !== "X" || seen.has(chains[x][y])) continue;
+                seen.add(chains[x][y]);
+                const pts = chainPoints(x, y);
+                if (pts.length < minSize || chainLiberties(pts).length !== 1) continue;
+                for (const [px, py] of pts)
+                    for (const [a, b] of goNeighbors(px, py))
+                        if (board[a][b] === "O" && (!best || pts.length > best.value))
+                            best = { coords: [a, b], value: pts.length, msg: `Cheat: removing router ${a},${b} to save a group of ${pts.length}` };
+            }
+        return best;
+    }
+    /** destroyEye: enemy group (4+ stones) with exactly 2 liberties, one a true eye -> destroy the eye (atari). */
+    function getEyeDestroy(minSize = 4) {
+        let best = null;
+        const seen = new Set();
+        for (let x = 0; x < board.length; x++)
+            for (let y = 0; y < board.length; y++) {
+                if (board[x][y] !== "O" || seen.has(chains[x][y])) continue;
+                seen.add(chains[x][y]);
+                const pts = chainPoints(x, y);
+                if (pts.length < minSize) continue;
+                const libs = chainLiberties(pts);
+                if (libs.length !== 2) continue;
+                const eye = libs.find(([a, b]) => isTrueEye(a, b, "O"));
+                if (eye && (!best || pts.length > best.value))
+                    best = { coords: eye, value: pts.length, msg: `Cheat: destroying eye ${eye[0]},${eye[1]} of a group of ${pts.length}` };
+            }
+        return best;
+    }
+    /** repair: an offline node enclosed by our stones -> repair it into territory. */
+    function getRepair() {
+        for (let x = 0; x < board.length; x++)
+            for (let y = 0; y < board.length; y++) {
+                if (board[x][y] !== "#") continue;
+                const nb = goNeighbors(x, y);
+                if (nb.some(([a, b]) => board[a][b] === "X") && nb.every(([a, b]) => board[a][b] === "X" || board[a][b] === "#"))
+                    return { coords: [x, y], msg: `Cheat: repairing offline node ${x},${y}` };
+            }
+        return null;
+    }
+    /** Run a single-point cheat if allowed. Each command string is constant (values go through ns.args). */
+    async function runPointCheat(ns, kind, target) {
+        if (!target || !cheats || cheatsThisGame >= maxCheatsPerGame) return false;
+        const chance = await go_cheat_getCheatSuccessChance(ns);
+        if (chance < cheatChanceThreshold) return false;
+        cheatsThisGame++;
+        const command =
+            kind === "removeRouter" ? `await ns.go.cheat.removeRouter(...ns.args)`
+            : kind === "destroyNode" ? `await ns.go.cheat.destroyNode(...ns.args)`
+            : `await ns.go.cheat.repairOfflineNode(...ns.args)`;
+        try {
+            const results = await getNsDataThroughFile(ns, command, null, target.coords);
+            ns.printf("%s  Chance: %.2f%%  Result: %s", target.msg, chance * 100, results?.type);
+            return results;
+        } catch (err) {
+            log(ns, `WARNING: ${kind} cheat failed: ${getErrorInfo(err)}`);
+            return false;
+        }
+    }
+    /** Try the configured cheats in order (--cheat-types). */
+    async function moveCheat(ns) {
+        for (const type of cheatTypes) {
+            let results = false;
+            if (type === "twoMoves") results = await moveSnakeEyes(ns, getSnakeEyes(cheatMinCapture));
+            else if (type === "rescue") results = await runPointCheat(ns, "removeRouter", getRescueRemoval());
+            else if (type === "destroyEye") results = await runPointCheat(ns, "destroyNode", getEyeDestroy());
+            else if (type === "repair") results = await runPointCheat(ns, "repairOfflineNode", getRepair());
+            if (results) return results;
+        }
+        return false;
+    }
+
     async function moveSnakeEyes(ns, attack) {
         if (attack.coords === undefined || !cheats || cheatsThisGame >= maxCheatsPerGame) return false;
         const [s1x, s1y, s2x, s2y] = attack.coords;
