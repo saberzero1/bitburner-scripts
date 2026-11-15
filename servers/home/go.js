@@ -26,7 +26,9 @@ const argsSchema = [
     ["cheat-chance-threshold", 0.9], // Don't cheat if our success chance is less than this
     ["logtime", false], // Logs time time it takes for each player to take their move
     ["runOnce", false], // Will only play one game if enabled
-    ["board-size", 13], // Board size for new games (5, 7, 9 or 13). The game's node power scales with score, so bigger boards give more per win.
+    ["board-size", 0], // Board size for new games (5, 7, 9 or 13). 0 = per opponent, the size with the most node power per hour (tools/go-sim)
+    ["chooser", "marginal"], // "marginal": play whoever adds the most bonus per hour (tools/go-sim); "winrate": older komi x win-rate^6 weighting
+    ["opponent", ""], // Always play this opponent (e.g. "Illuminati"); for testing
     ["random-opponents", false], // Pick opponents uniformly at random (old behaviour) instead of by expected value and win rate
     ["max-cheats-per-game", 1], // A failed cheat after an earlier one in the same game has a 10% chance of ejection (a loss, breaking the win streak)
     ["silent", false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
@@ -40,6 +42,20 @@ export function autocomplete(data, args) {
 /** Main script entrypoint.
  * Note that to protect against "shared global memory", the entire script is wrapped in the body of the main function.
  * @param {NS} ns */
+// Node power per hour by board size, from tools/go-sim (this script vs the game's AI, 40 games each, at the
+// AI's normal 200 ms/move; bonus time speeds all sizes up equally). The w0r1d_d43m0n was not simulated.
+const GO_POWER_PER_HOUR = {
+    Netburners: { 5: 17948, 7: 17683, 9: 12557, 13: 14526 },
+    "Slum Snakes": { 5: 31558, 7: 19609, 9: 16784, 13: 9235 },
+    "The Black Hand": { 5: 12219, 7: 11092, 9: 11419, 13: 13450 },
+    Tetrads: { 5: 9793, 7: 8744, 9: 6947, 13: 7229 },
+    Daedalus: { 5: 14188, 7: 11365, 9: 10035, 13: 13877 },
+    Illuminati: { 5: 43541, 7: 4539, 9: 6964, 13: 8038 }, // 5x5 vs Illuminati has an 8x multiplier (otherwise 2x)
+    "????????????": { 13: 8000 },
+};
+// Each faction's bonusPower (Go Constants.ts)
+const GO_BONUS_POWER = { Netburners: 1.3, "Slum Snakes": 1.2, "The Black Hand": 0.9, Tetrads: 0.7, Daedalus: 1.1, Illuminati: 0.7, "????????????": 2 };
+
 export async function main(ns) {
     let cheats = false;
     let cheatChanceThreshold = 1.0;
@@ -47,6 +63,9 @@ export async function main(ns) {
     let maxCheatsPerGame = 1;
     let boardSize = 13;
     let randomOpponents = false;
+    let fixedOpponent = null;
+    let chooser = "marginal";
+    let activeSourceFiles = {};
     let lastStats = null; // ns.go.analysis.getStats() snapshot, to detect each game's result
     const GO_RESULTS_FILE = "/data/go-results.txt";
     let logtime = false;
@@ -129,12 +148,15 @@ export async function main(ns) {
         runOnce = runOptions.runOnce;
 
         const sourceFiles = await getActiveSourceFiles(ns, true);
+        activeSourceFiles = sourceFiles;
         // Enable cheats if we have SF14.2 or higher (unless the user disabled cheats).
         cheats = !runOptions["disable-cheats"] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
-        boardSize = [5, 7, 9, 13].includes(runOptions["board-size"]) ? runOptions["board-size"] : 13;
+        boardSize = [5, 7, 9, 13].includes(runOptions["board-size"]) ? runOptions["board-size"] : 0;
+        chooser = runOptions.chooser;
         randomOpponents = runOptions["random-opponents"];
+        fixedOpponent = runOptions.opponent || null;
         try {
             lastStats = ns.go.analysis.getStats();
         } catch {}
@@ -908,7 +930,15 @@ export async function main(ns) {
     /** Pick the next opponent by expected node power: difficulty multiplier (komi) x bonus usefulness x win rate^6.
      *  Win streaks multiply node power (up to 3x) and any loss drops it to 0.5x, so opponents we sometimes lose to are
      *  rarely picked. Opponents with few games are still explored. */
+    /** Board size to play `opp` on: the fixed --board-size, or the size with the most node power per hour. */
+    function sizeFor(opp) {
+        if (boardSize) return boardSize;
+        const rates = GO_POWER_PER_HOUR[opp] ?? { 13: 1 };
+        return Number(Object.keys(rates).reduce((a, b) => (rates[a] >= rates[b] ? a : b)));
+    }
+
     function chooseOpponent(ns, candidates) {
+        if (fixedOpponent) return fixedOpponent;
         if (randomOpponents) return candidates[Math.floor(Math.random() * candidates.length)];
         const komi = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5, "????????????": 9.5 };
         // Rough usefulness of each faction's bonus to this repo's automation (hacking-related bonuses matter most)
@@ -917,6 +947,31 @@ export async function main(ns) {
         try {
             stats = ns.go.analysis.getStats();
         } catch {}
+        if (chooser === "marginal") {
+            // The bonus is 1 + ln(P+1) * (P+1)^0.3 * 0.002 * bonusPower (Go effect.ts), strongly diminishing in node
+            // power P. Play whoever gains the most usefulness-weighted bonus per hour at their current P.
+            // getStats() has no node power, only bonusPercent: invert the bonus formula (bisection on log P). The
+            // multiplier is 2 with SF14 (BN14's extra GoPower x4 is ignored: it rescales every opponent alike).
+            const sfMult = (activeSourceFiles[14] ?? 0) > 0 ? 2 : 1;
+            const nodePower = (o) => {
+                const target = (stats[o]?.bonusPercent ?? 0) / 100 / (0.002 * (GO_BONUS_POWER[o] ?? 1) * sfMult);
+                if (!(target > 0)) return 0;
+                let lo = 0, hi = 60; // log(P + 1)
+                for (let i = 0; i < 60; i++) {
+                    const mid = (lo + hi) / 2;
+                    if (mid * Math.exp(0.3 * mid) < target) lo = mid;
+                    else hi = mid;
+                }
+                return Math.exp(lo) - 1;
+            };
+            const value = (o) => {
+                const p = nodePower(o);
+                const slope = Math.pow(p + 1, -0.7) * (1 + 0.3 * Math.log(p + 1));
+                const rate = (GO_POWER_PER_HOUR[o] ?? { 13: 0 })[sizeFor(o)] ?? 0;
+                return (usefulness[o] ?? 1) * (GO_BONUS_POWER[o] ?? 1) * slope * rate;
+            };
+            return candidates.reduce((best, o) => (value(o) > value(best) ? o : best), candidates[0]);
+        }
         const weights = candidates.map((o) => {
             const s = stats[o] ?? { wins: 0, losses: 0 };
             const games = s.wins + s.losses;
@@ -959,10 +1014,12 @@ export async function main(ns) {
             if (runOnce) ns.exit();
             cheatsThisGame = 0;
             try {
-                ns.go.resetBoardState(chooseOpponent(ns, opponent2), boardSize);
+                const next = chooseOpponent(ns, opponent2);
+                ns.go.resetBoardState(next, sizeFor(next));
             } catch {
                 // (The w0r1d_d43m0n is only available after the Red Pill)
-                ns.go.resetBoardState(chooseOpponent(ns, opponent), boardSize);
+                const next = chooseOpponent(ns, opponent);
+                ns.go.resetBoardState(next, sizeFor(next));
             }
             turn = 0;
             currentValidMovesTurn = -1; // turn numbers restart, so don't reuse the previous game's move list
