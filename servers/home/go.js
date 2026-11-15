@@ -19,6 +19,7 @@ import {
     getNsDataThroughFile,
     formatTime,
 } from "./helpers.js";
+import { searchMove } from "./go-search.js";
 
 const argsSchema = [
     ["cheats", true], // (Now true by default - but still an option for backwards compatibility) This is only possible if you have BN14.2
@@ -38,6 +39,10 @@ const argsSchema = [
     ["favor-factions", "Daedalus"], // While a member and before installing The Red Pill, play these factions first until Go
     // has given its maximum favour with them (win streaks add favour, up to 400k rep's worth with SF14.3). Daedalus favour
     // speeds up earning The Red Pill's rep, the long final wait of BN12 runs (tools/favor-model). "" = off.
+    ["search", false], // Choose moves by Monte Carlo search on the game's own rules and AI (go-search.js). Off: live it won 28/28 but took
+    // 39s per game against 4s for the heuristics (93% won), so node power per hour fell ~5x. Use with a small --search-playouts
+    ["search-playouts", 16], // Playouts per candidate move (tools/go-sim/search.sh: 16 won 117/118 random 5x5 games, no cheats)
+    ["search-max-size", 7], // Only search on boards up to this size (playout cost grows fast with the board)
     ["silent", false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
 ];
 
@@ -80,6 +85,7 @@ export async function main(ns) {
     let cheats = false;
     let cheatChanceThreshold = 1.0;
     let cheatsThisGame = 0;
+    let searchOptions = { on: false, playouts: 16, maxSize: 7 };
     let maxCheatsPerGame = 1;
     let boardSize = 13;
     let randomOpponents = false;
@@ -178,6 +184,7 @@ export async function main(ns) {
         cheats = !runOptions["disable-cheats"] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
+        searchOptions = { on: runOptions.search, playouts: runOptions["search-playouts"], maxSize: runOptions["search-max-size"] };
         cheatMinCapture = runOptions["cheat-min-capture"];
         cheatTypes = String(runOptions["cheat-types"]).split(",").map((t) => t.trim()).filter(Boolean);
         boardSize = [5, 7, 9, 13].includes(runOptions["board-size"]) ? runOptions["board-size"] : 0;
@@ -331,6 +338,20 @@ export async function main(ns) {
                 if (state.blackScore > state.whiteScore) {
                     ns.print(`Opponent passed and we're ahead (${state.blackScore} vs ${state.whiteScore}): passing to win`);
                     results = await ns.go.passTurn();
+                    lastResults = results;
+                    checkNewGame(ns, results);
+                    continue;
+                }
+            }
+            if (searchOptions.on && size <= searchOptions.maxSize) {
+                let move;
+                try {
+                    move = await searchMove(ns, board, ns.go.getMoveHistory(), ns.go.getOpponent(), searchOptions.playouts);
+                } catch (err) {
+                    log(ns, `WARNING: Go search failed, using the heuristics this turn: ${getErrorInfo(err)}`);
+                }
+                if (move !== undefined) {
+                    results = move ? await go_makeMove(ns, move.x, move.y) : await ns.go.passTurn();
                     lastResults = results;
                     checkNewGame(ns, results);
                     continue;

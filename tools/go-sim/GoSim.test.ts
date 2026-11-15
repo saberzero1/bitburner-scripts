@@ -20,6 +20,10 @@ import fs from "fs";
 import { Player } from "../../src/Player";
 import { Factions } from "../../src/Faction/Factions";
 import { Go } from "../../src/Go/Go";
+import { getMove } from "../../src/Go/boardAnalysis/goAI";
+import { makeMove, passTurn, getStateCopy, getNewBoardStateFromSimpleBoard } from "../../src/Go/boardState/boardState";
+import { getAllValidMoves } from "../../src/Go/boardAnalysis/boardAnalysis";
+import { getScore } from "../../src/Go/boardAnalysis/scoring";
 import { getNS, initGameEnvironment, setupBasicTestingEnvironment } from "./Utilities";
 
 initGameEnvironment();
@@ -50,7 +54,12 @@ test(
     const realNs = getNS() as unknown as Record<string, unknown> & { go: Record<string, unknown> };
 
     let src = fs.readFileSync(SCRIPT, "utf8");
-    src = src.replace(/^import\s*\{[\s\S]*?\}\s*from\s*"[^"]+";/m, "");
+    src = src.replace(/^import\s*\{[\s\S]*?\}\s*from\s*"[^"]+";/gm, "");
+    // go-search.js, with the engine's own modules in place of the bundled go-engine.js (same code)
+    let searchSrc = fs.readFileSync(SCRIPT.replace(/go\.js$/, "go-search.js"), "utf8");
+    searchSrc = searchSrc.replace(/^import .*$/m, "").replace(/^export\s+/gm, "");
+    const Engine = { getMove, makeMove, passTurn, getStateCopy, getNewBoardStateFromSimpleBoard, getAllValidMoves, getScore };
+    const searchMove = new Function("Engine", searchSrc + "\nreturn searchMove;")(Engine);
     src = src.replace(/^export\s+/gm, "");
     const files: Record<string, string> = {};
     // Temp scripts share the simulated clock and the wrapped go API (overrides is defined below; read at call time)
@@ -76,6 +85,7 @@ test(
       "getActiveSourceFiles",
       "getNsDataThroughFile",
       "formatTime",
+      "searchMove",
       src + "\nreturn main;",
     )(
       getConfiguration,
@@ -85,6 +95,7 @@ test(
       async () => ({ 14: Number(env.SIM_SF14 ?? 3) }),
       getNsDataThroughFile,
       (ms: number) => `${ms}ms`,
+      searchMove,
     );
 
     // Per-game records: detect game ends from the stats (wins + losses) after each move/pass
@@ -144,8 +155,8 @@ test(
     const overrides: Record<string, unknown> = {
       args: [],
       go,
-      print: () => {},
-      printf: () => {},
+      print: env.SIM_DEBUG ? (...a: unknown[]) => console.error("print", simulatedMs, ...a) : () => {},
+      printf: env.SIM_DEBUG ? (...a: unknown[]) => console.error("printf", simulatedMs, ...a) : () => {},
       tprint: () => {},
       disableLog: () => {},
       sleep: async (ms: number) => advance(ms),
