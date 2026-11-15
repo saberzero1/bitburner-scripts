@@ -946,7 +946,7 @@ function planLateSpending(ctx, plan) {
             supportOffices: PRODUCT_BUDGET.office * (1 - mainShare),
         };
         const b = {};
-        for (const [k, share] of Object.entries(parts)) b[k] = bankBudget(ctx, `${TOB}:${k}`, budget * share);
+        for (const [k, portion] of Object.entries(parts)) b[k] = bankBudget(ctx, `${TOB}:${k}`, budget * portion);
         for (const name of EMPLOYEE_STAT_UPGRADES) plan.add("spend", { kind: "upgrade", name, budget: b.employeeStats / 4 }, null, `${TOB}:employeeStats`);
         plan.add("spend", { kind: "upgrade", name: "ABC SalesBots", budget: b.salesBot }, null, `${TOB}:salesBot`);
         plan.add("spend", { kind: "upgrade", name: "Project Insight", budget: b.projectInsight }, null, `${TOB}:projectInsight`);
