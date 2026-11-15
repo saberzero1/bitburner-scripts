@@ -1,14 +1,15 @@
 /**
  * Runs darknet.js's actual LAB_SOLVER_CONTENT against mazes from the game's generator, with labreport/authenticate
  * mocked to return the game's messages and getSurroundingsVisualized views (labyrinth.ts handleLabyrinthPassword).
- * Env: SIM_DARKNET (path to darknet.js), SIM_MAZES, SIM_OUT.
+ * Env: SIM_DARKNET (path to darknet.js, or Remote/darknet-probe.js with SIM_PROBE=1), SIM_MAZES, SIM_OUT.
  */
 import fs from "fs";
 import { generateMaze, getSurroundingsVisualized } from "../../src/DarkNet/effects/labyrinth";
 
 test("lab solver against real mazes", async () => {
   const src = fs.readFileSync(process.env.SIM_DARKNET ?? "", "utf8");
-  const arr = src.match(/const LAB_SOLVER_CONTENT = (\[[\s\S]*?\])\.join\("\\n"\);/);
+  const probe = process.env.SIM_PROBE === "1";
+  const arr = probe ? src.match(/const solverScript = (\[[\s\S]*?\])\.join\("\\n"\);/) : src.match(/const LAB_SOLVER_CONTENT = (\[[\s\S]*?\])\.join\("\\n"\);/);
   if (!arr) throw new Error("LAB_SOLVER_CONTENT not found");
   const code = (new Function("return " + arr[1])() as string[]).join("\n").replace("export async function main", "return async function main");
   const results: number[] = [];
@@ -21,7 +22,9 @@ test("lab solver against real mazes", async () => {
     const D: Record<string, number[]> = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] };
     const view = () => getSurroundingsVisualized(maze, pos[0], pos[1], 1, true, false);
     const ns = {
-      args: ["f1n4l_l4byr1nth", 18, 59, 39],
+      args: probe ? ["f1n4l_l4byr1nth", "/Temp/rf.txt", 59, 39] : ["f1n4l_l4byr1nth", 18, 59, 39],
+      ramOverride: () => {},
+      write: (_f: string, s: string) => { outcome = s === "SUCCESS" ? '"password"' : s; },
       sleep: async () => {},
       writePort: (_p: number, s: string) => { outcome = s; },
       dnet: {

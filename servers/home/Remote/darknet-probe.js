@@ -1,4 +1,4 @@
-const PROBE_VERSION = 45;
+const PROBE_VERSION = 46;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -444,6 +444,13 @@ async function tryAccessServer(ns, hostname, details, passwords) {
     return null;
 }
 
+// Maze grid size per labyrinth (labyrinth.ts labData sizes, stitched from 4 odd-sized mazes): the solver aims for
+// the far corner, where the exit is (minus a small random offset). Unknown labyrinths: aim far south-east.
+const LAB_GRID = {
+    th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
+    et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
+};
+
 // Exec'd labyrinth solvers that are still running (lab hostname -> {pid, host, resultFile}). A solver keeps its
 // maze position per PID, so never start a second one while the first is alive: check its result instead.
 const activeLabSolvers = new Map();
@@ -494,93 +501,65 @@ async function solveLabyrinth(ns, hostname) {
     // and ns.dnet.authenticate(hostname, "go <dir>") for movement.
     // Position tracking comes from response messages, not from labreport,
     // because we need to know if a move succeeded.
+    // tools/lab-sim (the game's maze generator, 60x40, 200 mazes): reading walls from each move's own response
+    // (instead of a labreport, which costs a full step, before every move) and trying directions toward the far
+    // corner first: 970 -> 264 steps on average. Result file: SUCCESS or FAIL:<reason>.
     const solverScript = [
         `export async function main(ns) {`,
         `  ns.ramOverride(2);`,
-        `  const host = String(ns.args[0]);`,
-        `  const rf = String(ns.args[1]);`,
-        `  const visited = new Set();`,
+        `  const host = String(ns.args[0]), rf = String(ns.args[1]), aimX = Number(ns.args[2]), aimY = Number(ns.args[3]);`,
+        `  const D = { north: [0,-1], south: [0,1], east: [1,0], west: [-1,0] };`,
+        `  const rev = { north: "south", south: "north", west: "east", east: "west" };`,
+        `  const parse = (data) => { const r = String(data ?? "").split("\\n"); return r.length >= 3 && r[1].length >= 3 ? { north: r[0][1] === " ", south: r[2][1] === " ", west: r[1][0] === " ", east: r[1][2] === " " } : null; };`,
+        `  let rep = null;`,
+        `  for (let i = 0; i < 20 && !rep; i++) { try { rep = await ns.dnet.labreport(); } catch {} if (!rep || !rep.success) { rep = null; await ns.sleep(1000); } }`,
+        `  if (!rep) { ns.write(rf, "FAIL:no_labreport", "w"); return; }`,
+        `  let pos = [rep.coords[0], rep.coords[1]];`,
+        `  let open = { north: rep.north, south: rep.south, east: rep.east, west: rep.west };`,
+        `  const visited = new Set([pos.join(",")]);`,
         `  const stack = [];`,
-        `  let px = 1, py = 1;`,
-        `  const parseCoords = (text) => {`,
-        `    const match = String(text || "").match(/(\\d+)\\s*,\\s*(\\d+)/);`,
-        `    if (!match) return null;`,
-        `    return [parseInt(match[1], 10), parseInt(match[2], 10)];`,
-        `  };`,
-        `  const refreshCoords = async () => {`,
-        `    try {`,
-        `      const rpt = await ns.dnet.labreport();`,
-        `      if (rpt && rpt.success && rpt.coords) {`,
-        `        px = rpt.coords[0]; py = rpt.coords[1];`,
-        `        return true;`,
-        `      }`,
-        `    } catch {}`,
-        `    return false;`,
-        `  };`,
-        `  await refreshCoords();`,
-        `  const deltas = { north: [0,-2], south: [0,2], west: [-2,0], east: [2,0] };`,
-        `  const rev = { north:"south", south:"north", west:"east", east:"west" };`,
-        `  for (let i = 0; i < 5000; i++) {`,
-        `    const key = px+","+py;`,
-        `    visited.add(key);`,
-        `    let dirs = null;`,
-        `    try {`,
-        `      const rpt = await ns.dnet.labreport();`,
-        `      if (rpt && rpt.success) {`,
-        `        dirs = [];`,
-        `        if (rpt.north) dirs.push("north");`,
-        `        if (rpt.south) dirs.push("south");`,
-        `        if (rpt.east) dirs.push("east");`,
-        `        if (rpt.west) dirs.push("west");`,
-        `        if (rpt.coords) { px = rpt.coords[0]; py = rpt.coords[1]; }`,
-        `      }`,
-        `    } catch {}`,
-        `    if (!dirs) { ns.write(rf,"FAIL:no_directions","w"); return; }`,
-        `    const nd = dirs.find(d => {`,
-        `      const dd = deltas[d];`,
-        `      return !visited.has((px+dd[0])+","+(py+dd[1]));`,
-        `    });`,
-        `    if (nd) {`,
-        `      stack.push({ px, py, dir: nd });`,
-        `      const beforeX = px, beforeY = py;`,
-        `      const mr = await ns.dnet.authenticate(host, "go "+nd);`,
-        `      if (mr && mr.success) { ns.write(rf,"SUCCESS","w"); return; }`,
-        `      const msg = (mr && (mr.message ?? mr.data)) || "";`,
-        `      const mm = parseCoords(msg);`,
-        `      let updated = false;`,
-        `      if (mm) { px = mm[0]; py = mm[1]; updated = true; }`,
-        `      if (!updated) updated = await refreshCoords();`,
-        `      if (!updated || (px === beforeX && py === beforeY)) { stack.pop(); }`,
-        `      await ns.sleep(10);`,
-        `      continue;`,
-        `    }`,
-        `    if (stack.length === 0) { ns.write(rf,"FAIL:exhausted","w"); return; }`,
-        `    const back = stack.pop();`,
-        `    const rd = rev[back.dir];`,
-        `    const beforeX = px, beforeY = py;`,
-        `    const br = await ns.dnet.authenticate(host, "go "+rd);`,
-        `    if (br && br.success) { ns.write(rf,"SUCCESS","w"); return; }`,
-        `    const bmsg = (br && (br.message ?? br.data)) || "";`,
-        `    const bm = parseCoords(bmsg);`,
-        `    let updated = false;`,
-        `    if (bm) { px = bm[0]; py = bm[1]; updated = true; }`,
-        `    if (!updated) updated = await refreshCoords();`,
-        `    if (!updated || (px === beforeX && py === beforeY)) { ns.write(rf,"FAIL:stuck","w"); return; }`,
-        `    await ns.sleep(10);`,
+        `  const score = (d) => (aimX - pos[0]) * D[d][0] + (aimY - pos[1]) * D[d][1];`,
+        `  for (let i = 0; i < 50000; i++) {`,
+        `    const order = Object.keys(D).sort((a, b) => score(b) - score(a));`,
+        `    let dir = order.find((d) => open[d] && !visited.has((pos[0] + 2 * D[d][0]) + "," + (pos[1] + 2 * D[d][1])));`,
+        `    let back = false;`,
+        `    if (!dir) { if (stack.length === 0) { ns.write(rf, "FAIL:exhausted", "w"); return; } dir = rev[stack[stack.length - 1]]; back = true; }`,
+        `    const r = await ns.dnet.authenticate(host, "go " + dir);`,
+        `    if (r && r.success) { ns.write(rf, "SUCCESS", "w"); return; }`,
+        `    const msg = (r && r.message) || "";`,
+        `    const m = msg.match(/moved to (\\d+),(\\d+)/);`,
+        `    if (m) {`,
+        `      if (back) stack.pop(); else stack.push(dir);`,
+        `      pos = [parseInt(m[1], 10), parseInt(m[2], 10)];`,
+        `      visited.add(pos.join(","));`,
+        `      const seen = parse(r.data);`,
+        `      if (seen) open = seen;`,
+        `      else { const lr = await ns.dnet.labreport(); open = { north: lr.north, south: lr.south, east: lr.east, west: lr.west }; }`,
+        `    } else if (/cannot go that way/i.test(msg)) {`,
+        `      if (back) { ns.write(rf, "FAIL:stuck", "w"); return; }`,
+        `      open[dir] = false;`,
+        `    } else if (/charism|moxie|charming/i.test(msg)) { ns.write(rf, "FAIL:charisma", "w"); return; }`,
+        `    else await ns.sleep(200);`,
         `  }`,
-        `  ns.write(rf,"FAIL:max_iterations","w");`,
+        `  ns.write(rf, "FAIL:max_iterations", "w");`,
         `}`,
     ].join("\n");
 
     ns.write(scriptFile, solverScript, "w");
     ns.write(resultFile, "<pending>", "w");
 
+    // As many threads as fit: each step takes 1 / (1 + 0.2 * (threads - 1)) as long
+    const freeRam = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host);
+    const threads = Math.max(1, Math.floor((freeRam - 4) / 2));
+    const [gridW, gridH] = LAB_GRID[hostname] ?? [1e4, 1e4];
     const pid = ns.exec(
         scriptFile,
         host,
-        { threads: 1, ramOverride: 2 },
+        { threads, ramOverride: 2 },
         hostname,
         resultFile,
+        gridW - 2,
+        gridH - 2,
     );
     if (!pid) {
         ns.print(
@@ -598,6 +577,7 @@ async function solveLabyrinth(ns, hostname) {
             activeLabSolvers.delete(hostname);
             ns.print(`Labyrinth result for ${hostname}: ${data}`);
             if (data === "SUCCESS") return true;
+            if (data === "FAIL:charisma") return false; // can't move until our charisma meets the requirement
             // Exec'd solver failed — fall back to inline solver
             ns.print(
                 `WARN: Exec'd solver failed (${data}), falling back to inline solver for ${hostname}`,
@@ -1135,6 +1115,7 @@ const WORKER_THREAD_RAM = 3.6; // 1.6 base + 2.0 for the dnet call
 const WORKER_RESERVE_GB = 16; // left free for the probe's temp scripts and setStasisLink (13.6 GB)
 
 async function manageWorker(ns, optionsFile, host) {
+    if (host === "home") return; // phishingAttack and promoteStock only work on darknet servers
     const options = loadProbeOptions(ns, optionsFile);
     const mode = options.workerMode === "cha" && options.workerStock ? "cha" : options.workerMode === "money" ? "money" : "off";
     const procs = (await nsPs(ns, host)) || [];
