@@ -199,7 +199,7 @@ export async function main(ns) {
                 const data = await getNsDataThroughFile(ns,
                     `[ns.go.getBoardState(), ns.go.analysis.getControlledEmptyNodes(), ns.go.analysis.getValidMoves(), ` +
                     `ns.go.analysis.getLiberties(), ns.go.analysis.getChains()]`,
-                    { fName: "/Temp/go-turn-data", maxRetries: 1, silent: true });
+                    { fName: "/Temp/go-turn-data.txt", maxRetries: 1, silent: true });
                 if (Array.isArray(data) && data.length === 5) return data;
             } catch {
                 // Fall through to separate lookups (RAM was taken between the check and the launch)
