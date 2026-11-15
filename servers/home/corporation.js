@@ -38,7 +38,8 @@ const argsSchema = [
     ["round2-agriculture-rp", 700],
     ["round2-chemical-rp", 390],
     ["no-dummy-divisions", false], // Dummy divisions raise valuation (offers); disable to save funds
-    ["no-public", false], // Don't go public after the 4th investment round
+    ["no-public", false], // Don't go public after the last investment round
+    ["investment-rounds", 4], // Investment offers to accept (0-4) before going public. Each round sells shares (10/35/25/20%).
     ["dividend-rate", 0.1], // Dividend rate once public (0-1)
     ["verbose", false],
 ];
@@ -244,15 +245,27 @@ async function runOp(ns, name, payload) {
 class Plan {
     constructor() {
         this.calls = {};
+        this.banks = {}; // op -> bank key per call (see bankBudget), parallel to calls
         this.descriptions = [];
     }
-    add(op, call, description) {
+    add(op, call, description, bank = null) {
         (this.calls[op] ??= []).push(call);
+        (this.banks[op] ??= []).push(bank);
         if (description) this.descriptions.push(description);
     }
+    /** Debit each bank by what its calls actually spent. */
+    settleBanks(st, results) {
+        for (const [op, banks] of Object.entries(this.banks))
+            banks.forEach((key, i) => {
+                if (!key || st.bank?.[key] === undefined) return;
+                const r = results[op]?.[i];
+                const spent = Number(r?.spent ?? r?.cost ?? 0) || 0;
+                st.bank[key] = Math.max(0, st.bank[key] - spent);
+            });
+    }
     async execute(ns, verbose) {
-        // Order matters: structure first, then supply/trade, then jobs.
-        const order = ["build", "misc", "finance", "finance2", "officeGrow", "spend", "space", "supply", "market", "trade", "jobs"];
+        // Order matters: structure first (finance before misc: a product must be discontinued before a new one is made), then supply/trade, then jobs.
+        const order = ["build", "finance", "misc", "finance2", "officeGrow", "spend", "space", "supply", "market", "trade", "jobs"];
         const results = {};
         for (const op of order) {
             const calls = this.calls[op];
@@ -328,7 +341,7 @@ export async function main(ns) {
             if (!staticData?.industries?.[TOB] || staticData.maxDivisions === undefined) {
                 staticData = await runOp(ns, "staticData", {
                     industries: [AGRI, CHEM, TOB, DUMMY_INDUSTRY],
-                    materials: ["Water", "Food", "Plants", "Chemicals", "Energy", ...BOOST_MATERIALS],
+                    materials: ["Water", "Food", "Plants", "Chemicals", ...BOOST_MATERIALS],
                     divisionMults: DIVISION_MULTS,
                 });
                 if (staticData) ns.write(STATIC_FILE, JSON.stringify(staticData), "w");
@@ -348,7 +361,8 @@ export async function main(ns) {
             const plan = new Plan();
             planCycle(ctx, plan);
             pricing = ctx.pricing;
-            await plan.execute(ns, options.verbose);
+            const results = await plan.execute(ns, options.verbose);
+            plan.settleBanks(st, results);
             if (Object.keys(plan.calls).some((op) => ["build", "misc", "spend", "space", "finance"].includes(op)))
                 st.metaDirty = true;
 
@@ -430,12 +444,37 @@ function makeContext(ns, options, st, snap, meta, staticData) {
         corp,
         round,
         constants,
-        funds: corp.funds,
+        // Round 3+: keep working capital (3 cycles of input purchases, at least $1b) out of discretionary spending.
+        // Spending everything after SALE left nothing for Smart Supply at PURCHASE, which stopped production and
+        // revenue for good when funds were small (found by simulating BN12-sized offers).
+        funds: round >= 3 ? corp.funds - Math.max(1e9, corp.expenses * 10 * 3) - bankedFunds(st, corp.funds - Math.max(1e9, corp.expenses * 10 * 3)) : corp.funds,
         profit: corp.revenue - corp.expenses,
         boostOrders: [],
         has: (d) => corp.divisions.includes(d),
         div: (d) => snap.divs[d],
     };
+}
+
+/** Budget savings ("banks"): budgets are split into many items, and a slice smaller than its item's next level
+ * buys nothing. With BN3-sized funds that never happens, but with small funds it left money idle indefinitely
+ * (seen in simulation). Each bank keeps its unspent budget until it can afford something; banked money is held
+ * back from other spending. Returns the total banked, after scaling banks down if funds no longer cover them. */
+function bankedFunds(st, available) {
+    st.bank ??= {};
+    const total = Object.values(st.bank).reduce((a, b) => a + b, 0);
+    if (total > 0 && total > Math.max(0, available)) {
+        const k = Math.max(0, available) / total;
+        for (const key of Object.keys(st.bank)) st.bank[key] *= k;
+        return Math.max(0, available);
+    }
+    return total;
+}
+
+/** Add a fresh budget to a bank and return everything that bank holds. */
+function bankBudget(ctx, key, fresh) {
+    ctx.st.bank ??= {};
+    ctx.st.bank[key] = (ctx.st.bank[key] ?? 0) + Math.max(0, fresh);
+    return ctx.st.bank[key];
 }
 
 /** Spend from the cycle's available funds. Returns the granted amount (may be less than asked). */
@@ -454,11 +493,11 @@ function planCycle(ctx, plan) {
     planExports(ctx, plan);
     planOfficesAndJobs(ctx, plan);
     planTeaAndParties(ctx, plan);
+    planProducts(ctx, plan); // before discretionary spending: new products are the main growth driver
     if (r <= 2) planEarlySpending(ctx, plan);
     else planLateSpending(ctx, plan);
     planBoostMaterials(ctx, plan);
     planResearch(ctx, plan);
-    planProducts(ctx, plan);
     planInvestment(ctx, plan);
 }
 
@@ -506,7 +545,9 @@ function planStructure(ctx, plan) {
     const ensureDivision = (name, industry) => {
         if (!ctx.has(name)) {
             const cost = ctx.staticData.industries[industry]?.startingCost ?? Infinity;
-            if (cost <= ctx.funds) {
+            // Chemical after round 2 is an optional upgrade for Agriculture: only with funds to spare
+            const needed = name === CHEM && round >= 3 ? cost * 2 : cost;
+            if (needed <= ctx.funds) {
                 take(ctx, cost);
                 plan.add("build", ["expandIndustry", industry, name], `Creating division ${name} (${industry})`);
             }
@@ -719,8 +760,12 @@ function officeTargets(ctx) {
         for (const city of SUPPORT_CITIES)
             add(TOB, city, 0, (n) => {
                 if (round === 3) return { "Research & Development": n };
-                if (round === 4 || n < 8)
-                    return { Operations: 1, Engineer: 1, Business: 1, Management: 1, "Research & Development": Math.max(0, n - 4) };
+                if (round === 4 || n < 8) {
+                    // One each of the four main jobs (as many as fit), the rest R&D
+                    const jobs = { "Research & Development": Math.max(0, n - 4) };
+                    ["Operations", "Engineer", "Business", "Management"].slice(0, n).forEach((j) => (jobs[j] = 1));
+                    return jobs;
+                }
                 const rnd = Math.min(Math.floor(n * 0.5), n - 4);
                 return { ...jobsByRatio(n - rnd, RATIO_PROFIT[4]), "Research & Development": rnd };
             });
@@ -776,7 +821,9 @@ function assignJobs(ctx, plan, div, city, office, size, wanted) {
 }
 
 function planTeaAndParties(ctx, plan) {
-    const everyCycle = ctx.round >= 3;
+    // Only when energy/morale are below max. (catloversg buys every cycle from round 3; at ~$1m per employee per
+    // cycle that is noise at BN3 scale but was the entire profit of a BN12-sized corp in simulation.)
+    const everyCycle = false;
     const epsilon = 0.5;
     for (const [name, d] of Object.entries(ctx.snap.divs)) {
         if (name.startsWith(DUMMY_PREFIX)) continue;
@@ -869,9 +916,6 @@ function planLateSpending(ctx, plan) {
     const tob = ctx.div(TOB);
     const profit = Math.max(0, ctx.profit);
 
-    // Wilson Analytics: buy what a cycle of profit affords, until awareness is maxed
-    if (tob.div.awareness < Number.MAX_VALUE)
-        plan.add("spend", { kind: "upgrade", name: "Wilson Analytics", budget: take(ctx, profit) });
 
     // Product division: big budgeted improvement every 5 cycles (immediately the first time)
     const since = (d) => st.cycle - (st.lastImprove[d] ?? -1e9);
@@ -889,20 +933,30 @@ function planLateSpending(ctx, plan) {
     if (since(TOB) >= 5) {
         st.lastImprove[TOB] = st.cycle;
         const budget = take(ctx, ctx.funds * 0.9);
-        const b = (k) => budget * PRODUCT_BUDGET[k];
-        for (const name of EMPLOYEE_STAT_UPGRADES) plan.add("spend", { kind: "upgrade", name, budget: b("employeeStats") / 4 });
-        plan.add("spend", { kind: "upgrade", name: "ABC SalesBots", budget: b("salesBot") });
-        plan.add("spend", { kind: "upgrade", name: "Project Insight", budget: b("projectInsight") });
-        plan.add("spend", { kind: "upgrade", name: "Smart Factories", budget: b("rawProduction") / 2 });
-        plan.add("space", { budget: b("rawProduction") / 2, smartStorage: meta.upgrades["Smart Storage"], divs: { [TOB]: warehouseLevels(ctx, TOB) }, allowSmartStorage: true });
-        // Wilson first (it multiplies AdVert), then AdVert with the rest
-        plan.add("spend", { kind: "upgrade", name: "Wilson Analytics", budget: b("wilsonAdvert") / 2 });
-        plan.add("spend", { kind: "advert", div: TOB, budget: b("wilsonAdvert") / 2 });
-        // Offices: main office gets most of the budget (75% in round 3, else 50%)
-        const officeBudget = b("office");
-        const mainShare = round === 3 ? 0.75 : 0.5;
-        growOffice(ctx, plan, TOB, [MAIN_CITY], officeBudget * mainShare);
-        growOffice(ctx, plan, TOB, SUPPORT_CITIES, officeBudget * (1 - mainShare));
+        const mainShare = round === 3 ? 0.75 : 0.5; // offices: main office gets most of the budget
+        const parts = {
+            employeeStats: PRODUCT_BUDGET.employeeStats,
+            salesBot: PRODUCT_BUDGET.salesBot,
+            projectInsight: PRODUCT_BUDGET.projectInsight,
+            smartFactories: PRODUCT_BUDGET.rawProduction / 2,
+            space: PRODUCT_BUDGET.rawProduction / 2,
+            wilson: PRODUCT_BUDGET.wilsonAdvert / 2,
+            advert: PRODUCT_BUDGET.wilsonAdvert / 2,
+            mainOffice: PRODUCT_BUDGET.office * mainShare,
+            supportOffices: PRODUCT_BUDGET.office * (1 - mainShare),
+        };
+        const b = {};
+        for (const [k, share] of Object.entries(parts)) b[k] = bankBudget(ctx, `${TOB}:${k}`, budget * share);
+        for (const name of EMPLOYEE_STAT_UPGRADES) plan.add("spend", { kind: "upgrade", name, budget: b.employeeStats / 4 }, null, `${TOB}:employeeStats`);
+        plan.add("spend", { kind: "upgrade", name: "ABC SalesBots", budget: b.salesBot }, null, `${TOB}:salesBot`);
+        plan.add("spend", { kind: "upgrade", name: "Project Insight", budget: b.projectInsight }, null, `${TOB}:projectInsight`);
+        plan.add("spend", { kind: "upgrade", name: "Smart Factories", budget: b.smartFactories }, null, `${TOB}:smartFactories`);
+        plan.add("space", { budget: b.space, smartStorage: meta.upgrades["Smart Storage"], divs: { [TOB]: warehouseLevels(ctx, TOB) }, allowSmartStorage: true }, null, `${TOB}:space`);
+        // Wilson first (it multiplies AdVert), then AdVert
+        plan.add("spend", { kind: "upgrade", name: "Wilson Analytics", budget: b.wilson }, null, `${TOB}:wilson`);
+        plan.add("spend", { kind: "advert", div: TOB, budget: b.advert }, null, `${TOB}:advert`);
+        growOffice(ctx, plan, TOB, [MAIN_CITY], b.mainOffice, `${TOB}:mainOffice`);
+        growOffice(ctx, plan, TOB, SUPPORT_CITIES, b.supportOffices, `${TOB}:supportOffices`);
     }
 
     // Support divisions: smaller budgets from profit
@@ -919,20 +973,22 @@ function planLateSpending(ctx, plan) {
 }
 
 function improveSupportDivision(ctx, plan, div, budget) {
-    // 10% warehouses, 90% offices (catloversg defaultBudgetRatioForSupportDivision)
-    plan.add("space", { budget: budget * 0.1, smartStorage: ctx.meta.upgrades["Smart Storage"], divs: { [div]: warehouseLevels(ctx, div) }, allowSmartStorage: false });
-    growOffice(ctx, plan, div, CITIES, budget * 0.9);
+    // 10% warehouses, 90% offices (catloversg defaultBudgetRatioForSupportDivision), saved per part (see bankBudget)
+    const space = bankBudget(ctx, `${div}:space`, budget * 0.1);
+    const offices = bankBudget(ctx, `${div}:offices`, budget * 0.9);
+    plan.add("space", { budget: space, smartStorage: ctx.meta.upgrades["Smart Storage"], divs: { [div]: warehouseLevels(ctx, div) }, allowSmartStorage: false }, null, `${div}:space`);
+    growOffice(ctx, plan, div, CITIES, offices, `${div}:offices`);
 }
 
 /** Grow offices in `cities` using `budget`, split evenly (the op re-checks the exact cost). */
-function growOffice(ctx, plan, div, cities, budget) {
+function growOffice(ctx, plan, div, cities, budget, bank = null) {
     const per = budget / cities.length;
     for (const city of cities) {
         const office = ctx.div(div)?.offices[city];
         if (!office || per <= 0) continue;
         const grow = affordableOfficeGrowth(ctx, office.size, per);
         if (grow < 3) continue;
-        plan.add("officeGrow", { div, city, grow, budget: per, hire: {} });
+        plan.add("officeGrow", { div, city, grow, budget: per, hire: {} }, null, bank);
     }
 }
 
@@ -1172,7 +1228,10 @@ function planProducts(ctx, plan) {
     // Develop a new product when none is in progress (limited count in rounds 3/4)
     if (!developing.length && developedCount < maxForRound) {
         const budget = Math.max(1e9, Math.min(ctx.funds, ctx.corp.funds * 0.01));
-        if (budget <= ctx.funds) {
+        if (budget > ctx.funds) {
+            // Save up for it: without this, upgrades bought from each cycle's profit never leave enough
+            ctx.funds = 0;
+        } else {
             if (names.length >= (tob.div.maxProducts || 3)) {
                 const worst = finished.reduce((w, n) => ((mainOf(n)?.rating ?? 0) < (mainOf(w)?.rating ?? 0) ? n : w), finished[0]);
                 if (worst) plan.add("finance", ["discontinueProduct", TOB, worst], `Discontinuing product ${worst}`);
@@ -1241,7 +1300,8 @@ function readyForOffer(ctx) {
 
 function planInvestment(ctx, plan) {
     const { round, st, snap, options } = ctx;
-    if (round === 5 && !options["no-public"]) {
+    const lastRound = Math.max(0, Math.min(4, options["investment-rounds"]));
+    if (round >= 1 && round <= 5 && round > lastRound && !options["no-public"]) {
         plan.add("finance", ["goPublic", 0], "Going public");
         plan.add("finance2", ["issueDividends", options["dividend-rate"]]);
         return;
