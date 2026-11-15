@@ -2757,7 +2757,7 @@ function getTarget(ns, locations, faction, target = undefined, loop = 1) {
     }
     if (typeof target === "string") {
         target = locations.filter(
-            (location) => location.name === forceTarget[0],
+            (location) => location.name === target,
         )[0];
     }
 

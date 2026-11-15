@@ -6,11 +6,17 @@
     "type": "module",
     "scripts": {
         "start": "node ./config.mjs",
-        "build": "node ./config.mjs --build"
+        "build": "node ./config.mjs --build",
+        "lint": "eslint servers"
     },
     "license": "MIT",
     "dependencies": {
         "esbuild": "^0.23.1",
         "esbuild-bitburner-plugin": "^1.6.3"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.39.5",
+        "eslint": "^9.39.5",
+        "globals": "^15.15.0"
     }
 }
