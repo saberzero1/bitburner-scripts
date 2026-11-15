@@ -53,6 +53,7 @@ const argsSchema = [
     ["on-completion-script", null], // Spawn this script when we defeat the bitnode
     ["on-completion-script-args", []], // Optional args to pass to the script when we defeat the bitnode
     ["xp-mode-interval-minutes", 55], // Every time this many minutes has elapsed, toggle daemon.js to runing in --xp-only mode, which prioritizes earning hack-exp rather than money
+    ["xp-mode-hack-income-share", 0.01], // Always run daemon.js in --xp-only mode while hacking earns less than this share of our other income
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
@@ -1044,10 +1045,20 @@ export async function main(ns) {
 
         // Determine the arguments we want to run daemon.js with. We will either pass these directly, or through stanek.js if we're running it first.
         const hackThreshold = options["high-hack-threshold"]; // If player.skills.hacking level is about 8000, tweak daemon to increase income rates
+        // When hacking earns a negligible share of our income, money mode only gives up hack exp. Measured live in
+        // BN12.74 (hacking ~$1.5k/s against ~$5m/s from darknet etc.): --xp-only earned 448k hack exp/s, money mode
+        // 15.7k/s (28x less), and hack level drives the World Daemon requirement and faction work rep.
+        const sources = (await getPlayerMoneySources(ns))?.sinceInstall ?? {};
+        const hackIncome = Math.max(0, sources.hacking ?? 0);
+        const otherIncome = Object.entries(sources)
+            .filter(([k, v]) => !["hacking", "total"].includes(k) && v > 0)
+            .reduce((total, [, v]) => total + v, 0);
+        const hackMoneyNegligible = otherIncome > 0 && hackIncome < options["xp-mode-hack-income-share"] * otherIncome;
         // When our hack level gets sufficiently high, hack/grow/weaken go so fast that spawning new scripts for each cycle becomes very
         // expensive / laggy. To help with this, daemon.js supports "looping mode", to just spawn one long-lived script that does H/G/W in a loop.
         if (player.skills.hacking >= hackThreshold) {
             daemonArgs = [
+                ...(hackMoneyNegligible ? ["--xp-only"] : []),
                 "--looping-mode",
                 "--cycle-timing-delay",
                 40,
@@ -1072,6 +1083,7 @@ export async function main(ns) {
         } else {
             // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
             let useXpOnlyMode =
+                hackMoneyNegligible ||
                 prioritizeHackForDaedalus ||
                 prioritizeHackForWd ||
                 // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8)
@@ -1109,7 +1121,9 @@ export async function main(ns) {
                                   bitNodeMults.ScriptHackMoneyGain ==
                               0
                             ? `The current BitNode does not give any money from hacking, so we will run daemon.js in --xp-only mode.`
-                            : `Relaunching daemon.js to focus on earning Hack Experience for ${options["xp-mode-duration-minutes"]} minutes (--xp-mode-duration-minutes)`;
+                            : hackMoneyNegligible
+                              ? `Hacking earns under ${options["xp-mode-hack-income-share"] * 100}% of our other income, so we will run daemon.js in --xp-only mode.`
+                              : `Relaunching daemon.js to focus on earning Hack Experience for ${options["xp-mode-duration-minutes"]} minutes (--xp-mode-duration-minutes)`;
             }
         }
         // Prevent daemon from starting "work-for-faction.js" since we now manage that script
