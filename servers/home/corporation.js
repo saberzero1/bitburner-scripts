@@ -4,8 +4,9 @@
  * Strategy follows the in-game corporation guide (Documentation > Advanced > Corporation, by catloversg) and
  * catloversg's scripts (https://github.com/catloversg/bitburner-scripts, MIT License, Copyright (c) 2023 catloversg):
  * round presets, office job ratios, boost-material optimum, export string, offer-acceptance heuristic, research
- * priorities and budget splits are ported from there. Their optimizers and custom pricing are not ported; this script
- * uses the built-in Smart Supply, Market-TA2 once researched, and simple adaptive product pricing before that.
+ * priorities and budget splits are ported from there. Their optimizers are not ported; this script uses the built-in
+ * Smart Supply. Selling uses a custom Market-TA2 (see "Custom Market-TA2" below) once the two market-data unlocks are
+ * bought (round 3+), and MP / an adaptive product price before that.
  *
  *  Round 1: Agriculture in 6 cities, 4 employees (R&D until 55 RP, then 1/1/1/1), Smart Supply, 2 AdVerts,
  *           Smart Storage/warehouse/Smart Factories, boost materials (84% of warehouse). Accept offer when it plateaus.
@@ -121,7 +122,8 @@ const EMPLOYEE_STAT_UPGRADES = [
     "Neural Accelerators",
     "FocusWires",
 ];
-const UNLOCKS = ["Smart Supply", "Export", "Market Research - Demand", "Market Data - Competition"];
+const MARKET_UNLOCKS = ["Market Research - Demand", "Market Data - Competition"];
+const UNLOCKS = ["Smart Supply", "Export", ...MARKET_UNLOCKS];
 const UPGRADES = [
     "Smart Storage",
     "Smart Factories",
@@ -201,6 +203,24 @@ if(best.kind==="ss"){c.levelUpgrade("Smart Storage");ss++;bought.ss++;}else{for(
 budget-=best.cost;spent+=best.cost;}return {spent,bought};});})()`,
 };
 
+// Custom Market-TA2 (61.6 GB). Runs between EXPORT and SALE, so the stock it reads is exactly what SALE will sell.
+// Same formula as the game's Market-TA2 (Division.ts), except it never prices below MP + markup limit: when the
+// item can't sell out anyway, the extra price costs no volume.
+// payload: {sales, divs: {div: {adv, cities: {city: businessFactor}, mats: {name: baseMarkup}, inputs: {name: coefficient}, prods: {name: markup}}}}
+OPS.price = `(()=>{const c=ns.corporation;const p=JSON.parse(ns.args[0]);const out=[];
+const best=(mp,ml,pot,amt)=>mp+ml*Math.max(1,Math.sqrt(pot/amt));
+const mkt=(x)=>Math.max(0.1,x.demand*(100-x.competition)/100);
+for(const [d,q] of Object.entries(p.divs))for(const [city,bf] of Object.entries(q.cities)){const k=q.adv*bf*p.sales;
+for(const [m,mu] of Object.entries(q.mats)){try{const x=c.getMaterial(d,city,m);const amt=x.stored/10;if(!(amt>1e-5))continue;
+const v=best(x.marketPrice,x.quality/mu,(x.quality+0.001)*mkt(x)*k,amt);
+c.sellMaterial(d,city,m,"MAX",v.toFixed(3));out.push({d,city,m,amt,mp:x.marketPrice,v});}catch(e){out.push({d,city,m,error:String(e?.message??e)});}}
+const names=Object.keys(q.prods);if(!names.length)continue;
+let mp=0;try{for(const [m,co] of Object.entries(q.inputs))mp+=co*c.getMaterial(d,city,m).marketPrice;}catch{continue;}mp*=5;
+for(const n of names){try{const x=c.getProduct(d,city,n);const amt=x.stored/10;if(!(amt>1e-5))continue;const er=x.effectiveRating;
+const v=best(mp,Math.max(er,0.001)/q.prods[n],0.5*Math.pow(er,0.65)*mkt(x)*k,amt);
+c.sellProduct(d,city,n,"MAX",v.toFixed(3),false);out.push({d,city,n,amt,mp,v});}catch(e){out.push({d,city,n,error:String(e?.message??e)});}}}
+return out;})()`;
+
 /** Run a batched op. Returns the op's result, or null on failure. */
 async function runOp(ns, name, payload) {
     try {
@@ -274,6 +294,8 @@ export async function main(ns) {
     let staticData = loadJson(ns, STATIC_FILE, null);
     let meta = null;
     let lastStatus = 0;
+    let pricing = null; // custom Market-TA2 payload, rebuilt every cycle by planCycle
+    const priceStats = { runs: 0, late: 0, lastWarn: 0 };
 
     while (true) {
         try {
@@ -282,7 +304,21 @@ export async function main(ns) {
                 await ns.sleep(10000);
                 continue;
             }
-            const justFinished = await ns.corporation.nextUpdate();
+            let justFinished = await ns.corporation.nextUpdate();
+            if (justFinished === "EXPORT" && pricing) {
+                // Prices must land before SALE. nextUpdate() reports the next state processed, so "SALE" means on time.
+                await runOp(ns, "price", pricing);
+                justFinished = await ns.corporation.nextUpdate();
+                priceStats.runs++;
+                if (justFinished !== "SALE") {
+                    priceStats.late++;
+                    if (Date.now() - priceStats.lastWarn > 600_000) {
+                        priceStats.lastWarn = Date.now();
+                        log(ns, `WARNING: Custom prices landed after SALE ${priceStats.late}/${priceStats.runs} times (they apply a cycle late; bonus time makes states fast).`);
+                    }
+                }
+                justFinished = "SALE"; // plan this cycle either way
+            }
             if (justFinished !== "SALE") continue; // Act once per cycle, right before START
 
             if (!staticData?.industries?.[TOB]) {
@@ -306,6 +342,7 @@ export async function main(ns) {
             const ctx = makeContext(ns, options, st, snap, meta, staticData);
             const plan = new Plan();
             planCycle(ctx, plan);
+            pricing = ctx.pricing;
             await plan.execute(ns, options.verbose);
             if (Object.keys(plan.calls).some((op) => ["build", "misc", "spend", "space", "finance"].includes(op)))
                 st.metaDirty = true;
@@ -404,6 +441,7 @@ function take(ctx, amount) {
 
 function planCycle(ctx, plan) {
     const r = ctx.round;
+    ctx.pricing = buildPricing(ctx);
     planStructure(ctx, plan);
     planSales(ctx, plan);
     planSmartSupply(ctx, plan);
@@ -431,6 +469,8 @@ function planStructure(ctx, plan) {
     // Unlocks: Smart Supply (round 1), Export (round 2)
     const unlockWanted = ["Smart Supply"];
     if (round >= 2) unlockWanted.push("Export");
+    // Demand and competition data make the custom Market-TA2 possible (catloversg buys them at the start of round 3)
+    if (round >= 3) unlockWanted.push(...MARKET_UNLOCKS);
     for (const u of unlockWanted) {
         if (meta.unlocks[u]) continue;
         const cost = meta.unlockCosts[u] ?? Infinity;
@@ -507,6 +547,7 @@ function planSales(ctx, plan) {
         if (!d) continue;
         const produced = ctx.staticData.industries[d.div.type]?.producedMaterials ?? [];
         const hasTA2 = ctx.meta.rd[name]?.["Market-TA.II"]?.has; // support divisions don't research it, but handle it
+        if (!hasTA2 && ctx.pricing?.divs[name]) continue; // custom Market-TA2 sets these prices before each SALE
         for (const city of Object.keys(d.warehouses)) {
             for (const m of produced) {
                 const mat = d.materials[city]?.[m];
@@ -975,12 +1016,111 @@ function planResearch(ctx, plan) {
             plan.add("misc", ["research", name, r], `Researching ${r} in ${name}`);
         }
         // Market-TA.I + II for product pricing: once RP is comfortably above their combined cost
-        if (isProduct && !list["Market-TA.II"]?.has) {
+        // (Not needed once the custom Market-TA2 runs: it uses the same formula, and the RP is better spent elsewhere.)
+        if (isProduct && !list["Market-TA.II"]?.has && !MARKET_UNLOCKS.every((u) => meta.unlocks[u])) {
             const cost = RESEARCH_TA.reduce((s, r) => s + (list[r]?.has ? 0 : (list[r]?.cost ?? Infinity)), 0);
             if (rp >= cost * (round >= 5 ? 2 : 3))
                 for (const r of RESEARCH_TA) if (!list[r]?.has) plan.add("misc", ["research", name, r], `Researching ${r} in ${name}`);
         }
     }
+}
+
+// ─── Custom Market-TA2 ────────────────────────────────────────────────────────
+// The game's sale volume (Division.ts) is
+//   min(stored/10, itemMult * marketFactor * markupMult * businessFactor * salesBots * advertFactor)
+// with markupMult = (markupLimit / (price - MP))^2 above MP + markupLimit. The highest price that still sells all
+// stock is MP + markupLimit * sqrt(potential / (stored/10)). Stock, quality, demand and competition are read right
+// before SALE by the "price" op; the office and division factors come from this cycle's snapshot.
+
+// How each product stat depends on the job factors accumulated while it was developed (Product.ts finishProduct).
+// Columns: Engineer, Management, R&D, Operations, Business. Rows: quality, performance, durability, reliability,
+// aesthetics, features. All rows share one multiplier, so the job mix can be recovered exactly from the stats.
+const PRODUCT_STAT_WEIGHTS = [
+    [0.1, 0.05, 0.05, 0.02, 0.02],
+    [0.15, 0.02, 0.02, 0.02, 0.02],
+    [0.05, 0.02, 0.08, 0.05, 0.05],
+    [0.02, 0.08, 0.02, 0.05, 0.08],
+    [0, 0.08, 0.05, 0.02, 0.1],
+    [0.08, 0.05, 0.02, 0.05, 0.05],
+];
+
+/** Least squares solve of PRODUCT_STAT_WEIGHTS * x = statValues (normal equations, Gauss-Jordan elimination). */
+function solveJobFactors(statValues) {
+    const A = PRODUCT_STAT_WEIGHTS;
+    const n = 5;
+    const M = [];
+    for (let i = 0; i < n; i++) {
+        const row = [];
+        for (let j = 0; j < n; j++) row.push(A.reduce((t, r) => t + r[i] * r[j], 0));
+        row.push(A.reduce((t, r, k) => t + r[i] * statValues[k], 0));
+        M.push(row);
+    }
+    for (let col = 0; col < n; col++) {
+        let pivot = col;
+        for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+        [M[col], M[pivot]] = [M[pivot], M[col]];
+        for (let r = 0; r < n; r++) {
+            if (r === col) continue;
+            const f = M[r][col] / M[col][col];
+            for (let k = col; k <= n; k++) M[r][k] -= f * M[col][k];
+        }
+    }
+    return M.map((r, i) => r[n] / r[i]);
+}
+
+/** A product's hidden markup (Product.ts finishProduct), from its public stats. Null if it can't be worked out. */
+function productMarkup(product) {
+    const st = product?.stats;
+    if (!st) return null;
+    const x = solveJobFactors([st.quality, st.performance, st.durability, st.reliability, st.aesthetics, st.features]);
+    const total = x.reduce((a, b) => a + b, 0);
+    const busMgmtRatio = (x[1] + x[4]) / total;
+    if (!(busMgmtRatio > 0) || !(total > 0)) return null;
+    const advMult = 1 + Math.pow(product.advertisingInvestment ?? 0, 0.1) / 100;
+    const markup = 100 / (advMult * Math.pow(st.quality + 0.001, 0.65) * busMgmtRatio);
+    return Number.isFinite(markup) && markup > 0 ? markup : null;
+}
+
+/** Payload for the "price" op, or null when the custom Market-TA2 can't run yet (market-data unlocks missing). */
+function buildPricing(ctx) {
+    const { meta, staticData } = ctx;
+    if (!MARKET_UNLOCKS.every((u) => meta.unlocks[u])) return null;
+    const divs = {};
+    for (const name of [AGRI, CHEM, TOB]) {
+        const d = ctx.div(name);
+        const ind = d && staticData.industries[d.div.type];
+        if (!ind) continue;
+        if (meta.rd[name]?.["Market-TA.II"]?.has) continue; // the built-in one is just as good when researched
+        const aw = d.div.awareness;
+        const pop = d.div.popularity;
+        const f = ind.advertisingFactor ?? 0;
+        const ratio = aw === 0 ? 0.01 : Math.max((pop + 0.001) / aw, 0.01);
+        const adv = Math.pow(Math.pow(aw + 1, f) * Math.pow(pop + 1, f) * ratio, 0.85);
+        const cities = {};
+        for (const city of Object.keys(d.warehouses)) {
+            const office = d.offices[city];
+            if (!office) continue;
+            const business = 1 + (office.employeeProductionByJob?.Business ?? 0);
+            cities[city] = Math.pow(business, 0.26) + business / 10e3;
+        }
+        const mats = {};
+        for (const m of ind.producedMaterials ?? []) {
+            const mu = staticData.materials[m]?.baseMarkup;
+            if (mu > 0) mats[m] = mu;
+        }
+        const prods = {};
+        if (d.div.makesProducts)
+            for (const n of d.div.products) {
+                const product = d.products[n]?.[MAIN_CITY];
+                if (!product || product.developmentProgress < 100) continue;
+                const markup = productMarkup(product);
+                if (markup) prods[n] = markup;
+            }
+        if (!Object.keys(mats).length && !Object.keys(prods).length) continue;
+        divs[name] = { adv, cities, mats, inputs: ind.requiredMaterials ?? {}, prods };
+    }
+    if (!Object.keys(divs).length) return null;
+    return { sales: 1 + 0.01 * (meta.upgrades["ABC SalesBots"] ?? 0), divs };
 }
 
 // ─── Products ─────────────────────────────────────────────────────────────────
@@ -1027,6 +1167,7 @@ function planProducts(ctx, plan) {
             }
             continue;
         }
+        if (ctx.pricing?.divs[TOB]?.prods[n]) continue; // custom Market-TA2 prices it before each SALE
         let k = st.priceMult[n] ?? 1;
         let stored = 0;
         let produced = 0;
