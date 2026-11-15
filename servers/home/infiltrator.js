@@ -1803,6 +1803,33 @@ function restoreEventListeners() {
 const DECAY_RATE = -2e-5;
 const MARKET_DEMAND_FACTOR = 1e-3;
 
+// Factions whose rep we earn faster by working than by infiltrating (work-for-factions.js stops work while this
+// script holds port 30). Late in BN12 runs, Daedalus work (hacking level ~10k, Go favour) earns several times the
+// ~130k rep/h infiltration gives at its best pace, so infiltrating for it slowed the Red Pill wait.
+const pausedFactions = {}; // faction -> Date.now() until which we don't infiltrate for it
+const PAUSE_MS = 10 * 60 * 1000;
+let secondsPerFloor = null; // measured, moving average
+
+/** Rep/s the player would earn working for `faction` (best work type, current favour), or null without Formulas.exe.
+ * @param {NS} ns */
+async function playerWorkRepRate(ns, faction) {
+    try {
+        return await getNsDataThroughFile(ns,
+            "(() => { const p = ns.getPlayer(), f = ns.args[0], favor = ns.singularity.getFactionFavor(f); " +
+            "return 5 * Math.max(0, ...ns.singularity.getFactionWorkTypes(f).map(w => ns.formulas.work.factionGains(p, w, favor).reputation)); })()",
+            "/Temp/infiltrator-work-rep-rate.txt", [faction]);
+    } catch {
+        return null;
+    }
+}
+
+/** Rep/s infiltrating `target` gives at the measured pace (including the pause between runs), or null if unmeasured. */
+function infiltrationRepRate(target) {
+    if (!secondsPerFloor) return null;
+    const runSeconds = target.maxClearanceLevel * secondsPerFloor + (options["sleep-Between-Infiltration-Time"] || 0) / 1000;
+    return getActualReward(target.reward.tradeRep) / runSeconds;
+}
+
 let marketState = {
     floors: 0,
     lastTimestamp: Date.now(),
@@ -2081,6 +2108,14 @@ export async function main(ns) {
             )) !== null
         ) {
             if (!options["no-tail"]) ns.ui.openTail();
+            const workRate = await playerWorkRepRate(ns, goal.faction);
+            const infilRate = infiltrationRepRate(goal.target);
+            if (workRate !== null && infilRate !== null && workRate > infilRate) {
+                pausedFactions[goal.faction] = Date.now() + PAUSE_MS;
+                log(ns, `Working for ${goal.faction} earns more rep (${formatNumberShort(workRate * 3600, 3)}/h) than infiltrating ` +
+                    `${goal.target.name} (${formatNumberShort(infilRate * 3600, 3)}/h). Leaving it to faction work for ${PAUSE_MS / 60000} minutes.`);
+                continue;
+            }
             if (options["sleep-Between-Infiltration-Time"]) {
                 portClear(ns, 30); // Release lock so faction worker can run during downtime
                 await ns.sleep(options["sleep-Between-Infiltration-Time"]);
@@ -2130,6 +2165,7 @@ export async function main(ns) {
 
             const MAX_RETRIES = 3;
             let completet = false;
+            const runStart = Date.now();
             for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
                 completet = await infiltrate(
                     ns,
@@ -2155,6 +2191,8 @@ export async function main(ns) {
             }
             if (completet === true) {
                 totalLoops++;
+                const floorSeconds = (Date.now() - runStart) / 1000 / goal.target.maxClearanceLevel;
+                secondsPerFloor = secondsPerFloor ? 0.7 * secondsPerFloor + 0.3 * floorSeconds : floorSeconds;
                 recordInfiltration(goal.target.maxClearanceLevel);
                 const delay = getOptimalDelay(goal.target.maxClearanceLevel);
                 if (delay > 0) {
@@ -2178,6 +2216,16 @@ export async function main(ns) {
             await updateAugmentationData(ns, player, ignoreFaction);
         }
 
+        if (goal === null && Object.values(pausedFactions).some((t) => t > Date.now())) {
+            // Factions still need rep, but faction work earns it faster: don't stop that work to infiltrate for money
+            portClear(ns, 30);
+            await ns.sleep(PAUSE_MS);
+            portWrite(ns, 30, ns.pid);
+            player = await getPlayerInfo(ns);
+            locations = await getLocations(ns, verbose);
+            await updateAugmentationData(ns, player, ignoreFaction);
+            continue;
+        }
         if (goal === null) {
             log(
                 ns,
@@ -2566,6 +2614,7 @@ async function computeNextGoal(ns, ignoreFaction, boostFaction, forceTarget) {
     for (const aug of availableAugs) {
         const faction = aug.getFromJoined();
         if (boostFaction && boostFaction !== faction) continue;
+        if (pausedFactions[faction] > Date.now()) continue;
         if (!(faction in factionRepCache))
             factionRepCache[faction] = await getFactionReputation(ns, faction);
         const currentRep = factionRepCache[faction];
