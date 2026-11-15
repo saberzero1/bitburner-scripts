@@ -1,4 +1,4 @@
-const PROBE_VERSION = 46;
+const PROBE_VERSION = 47;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1171,6 +1171,8 @@ async function runOptionalActions(ns, optionsFile, hostname) {
     }
 }
 
+const PROBE_OPTIONS_PORT = 23; // published by darknet.js (files on home can't be read from darknet servers)
+
 function loadProbeOptions(ns, filePath) {
     const defaults = {
         enablePhishing: true,
@@ -1184,7 +1186,8 @@ function loadProbeOptions(ns, filePath) {
         labNeighbors: [],
     };
     try {
-        const data = ns.read(filePath);
+        const published = portPeek(ns, PROBE_OPTIONS_PORT);
+        const data = published !== "NULL PORT DATA" ? String(published) : ns.read(filePath);
         if (!data) return defaults;
         const parsed = JSON.parse(data);
         return {
