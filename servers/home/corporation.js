@@ -459,16 +459,33 @@ function planCycle(ctx, plan) {
 // Division layout for the current round
 function wantedDivisions(ctx) {
     const list = [AGRI];
-    if (ctx.round >= 2) list.push(CHEM);
-    if (ctx.round >= 3) list.push(TOB);
+    if (ctx.round >= 3) list.push(TOB); // before Chemical, so Tobacco gets the funds first when both can't be afforded
+    if (ctx.round >= 2 && !skipChemicalInRound2(ctx)) list.push(CHEM);
     return list;
+}
+
+/** Round 2 without a Chemical division. The guide's round 2 assumes the round-1 offer covers Chemical ($70b) plus
+ * Export ($20b). With reduced valuations (BN12 scales them by 1.02^-level) it can't, and waiting on it would stall
+ * the corp in round 2 indefinitely. Decided once, at the start of round 2, so spending can't flip the decision. */
+function skipChemicalInRound2(ctx) {
+    const { st } = ctx;
+    if (ctx.round !== 2 || ctx.has(CHEM)) return false;
+    if (st.round2AgriOnly === undefined) {
+        const chemCost = ctx.staticData.industries[CHEM]?.startingCost ?? 70e9;
+        const exportCost = ctx.meta.unlocks.Export ? 0 : (ctx.meta.unlockCosts.Export ?? 20e9);
+        st.round2AgriOnly = ctx.funds < chemCost + exportCost;
+        if (st.round2AgriOnly)
+            log(ctx.ns, `Round 2: funds (${formatMoney(ctx.funds)}) can't cover Chemical + Export (${formatMoney(chemCost + exportCost)}). Running round 2 with Agriculture only.`);
+    }
+    return st.round2AgriOnly;
 }
 
 function planStructure(ctx, plan) {
     const { constants, meta, round } = ctx;
     // Unlocks: Smart Supply (round 1), Export (round 2)
     const unlockWanted = ["Smart Supply"];
-    if (round >= 2) unlockWanted.push("Export");
+    // Export: in round 2 only once Chemical exists (it's only for the Plants/Chemicals loop); round 3+ also feeds Tobacco
+    if (round >= 3 || (round === 2 && ctx.has(CHEM))) unlockWanted.push("Export");
     // Demand and competition data make the custom Market-TA2 possible (catloversg buys them at the start of round 3)
     if (round >= 3) unlockWanted.push(...MARKET_UNLOCKS);
     for (const u of unlockWanted) {
@@ -803,14 +820,14 @@ function planEarlySpending(ctx, plan) {
     const { round, meta } = ctx;
     if (!ctx.has(AGRI) || Object.keys(ctx.div(AGRI).warehouses).length < 6) return; // finish setup first
     if (!meta.unlocks["Smart Supply"]) return; // Smart Supply comes first
-    if (round === 2 && !ctx.has(CHEM)) return;
+    if (round === 2 && !ctx.has(CHEM) && !skipChemicalInRound2(ctx)) return; // wait for the Chemical division
     // Once the RP wait is over, stop buying upgrades: larger warehouses would raise the boost material target,
     // and re-buying boost materials would keep resetting the offer wait (catloversg upgrades once, then waits).
     const rp = (d) => ctx.div(d)?.div.researchPoints ?? 0;
     const rpReached =
         round === 1
             ? rp(AGRI) >= ctx.options["round1-rp"]
-            : rp(AGRI) >= ctx.options["round2-agriculture-rp"] && rp(CHEM) >= ctx.options["round2-chemical-rp"];
+            : rp(AGRI) >= ctx.options["round2-agriculture-rp"] && (skipChemicalInRound2(ctx) || rp(CHEM) >= ctx.options["round2-chemical-rp"]);
 
     // AdVert: 2 in round 1, 8 in round 2
     const advertTarget = round === 1 ? 2 : 8;
@@ -1195,8 +1212,11 @@ function readyForOffer(ctx) {
     const rp = (d) => ctx.div(d)?.div.researchPoints ?? 0;
     const boostStocked = (d) => !ctx.boostOrders.some(([div]) => div === d) && ctx.has(d);
     if (round === 1) return rp(AGRI) >= options["round1-rp"] && ctx.meta.unlocks["Smart Supply"] && boostStocked(AGRI);
-    if (round === 2)
-        return rp(AGRI) >= options["round2-agriculture-rp"] && rp(CHEM) >= options["round2-chemical-rp"] && boostStocked(AGRI) && boostStocked(CHEM);
+    if (round === 2) {
+        const agriReady = rp(AGRI) >= options["round2-agriculture-rp"] && boostStocked(AGRI);
+        if (skipChemicalInRound2(ctx)) return agriReady;
+        return agriReady && rp(CHEM) >= options["round2-chemical-rp"] && boostStocked(CHEM);
+    }
     if (round === 3 || round === 4) {
         const tob = ctx.div(TOB);
         if (!tob) return false;
