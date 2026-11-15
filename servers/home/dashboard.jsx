@@ -1340,10 +1340,10 @@ function CorpTab({ ns, freeRam }) {
                 return;
             }
 
-            const parsed = readJsonFile(
-                ns,
-                "/Temp/ns-corporation-getCorporation.txt",
-            );
+            // corporation.js writes a full snapshot each cycle; stats.js still uses getCorporation directly
+            const parsed =
+                readJsonFile(ns, "/Temp/corp-op-snapA.txt")?.corp ??
+                readJsonFile(ns, "/Temp/ns-corporation-getCorporation.txt");
 
             if (parsed && typeof parsed === "object") {
                 setStatus((prev) => (prev === "" ? prev : ""));
