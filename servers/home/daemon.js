@@ -80,7 +80,7 @@ const argsSchema = [
 
     // Debugging flags
     ["silent-misfires", false], // Instruct remote scripts not to alert when they misfire
-    ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ["h", false], // Do nothing but hack, no prepping (drains servers to 0 money, if you want to do that for some reason)
     ["hack-only", false], // Same as above
     ["v", false], // Detailed logs about batch scheduling / tuning

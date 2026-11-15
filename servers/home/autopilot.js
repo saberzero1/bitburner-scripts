@@ -55,7 +55,7 @@ const argsSchema = [
     ["xp-mode-interval-minutes", 55], // Every time this many minutes has elapsed, toggle daemon.js to runing in --xp-only mode, which prioritizes earning hack-exp rather than money
     ["xp-mode-hack-income-share", 0.01], // Always run daemon.js in --xp-only mode while hacking earns less than this share of our other income
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
-    ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
 ];
 

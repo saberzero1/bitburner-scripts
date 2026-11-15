@@ -35,7 +35,7 @@ const argsSchema = [
     ["faction", ""], // Auto-accept reputation for this faction instead of money
     ["company", ""], // Auto-navigate to this company and start infiltration
     ["quiet", false], // Suppress tprint messages
-    ["no-tail", false], // Suppress opening tail windows (for dashboard integration)
+    ["no-tail", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them
     ["stop", false], // Stop running infiltration automation
     ["status", false], // Check if automation is active
 ];
