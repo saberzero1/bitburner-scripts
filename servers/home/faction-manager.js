@@ -51,6 +51,37 @@ const factionsWithoutDonation = [
     "Shadows of Anarchy",
 ]; // Not allowed to donate to these factions for rep
 
+// Shadows of Anarchy and darknet labyrinth augs are priced differently by the game (see getAugCost in AugmentationHelpers.ts):
+// - Neither kind is subject to, nor counts toward, the usual x1.9 (augCountMult) price increase per queued aug.
+// - Each SoA aug owned or queued multiplies the next SoA aug's money cost by 7 and its rep requirement by 1.3.
+// - Labyrinth augs are only granted by the darknet labyrinth (no faction sells them), but they may be queued awaiting install.
+const soaAugNames = [
+    "SoA - Beauty of Aphrodite",
+    "SoA - Chaos of Dionysus",
+    "SoA - Flood of Poseidon",
+    "SoA - Hunt of Artemis",
+    "SoA - Knowledge of Apollo",
+    "SoA - Might of Ares",
+    "SoA - Trickery of Hermes",
+    "SoA - phyzical WKS harmonizer",
+    "SoA - Wisdom of Athena",
+];
+const labAugNames = [
+    "The W1ngs of Icarus",
+    "The B00ts of Perseus",
+    "The St4ff of Asclepius",
+    "The H4mmer of Daedalus",
+    "The L4w of Bayes",
+    "The B1ade of Solomonoff",
+    "The Thr3ad of Ariadne",
+];
+const soaCostMult = 7;
+const soaRepMult = 1.3;
+const isSoaAug = (augName) => soaAugNames.includes(augName);
+/** @returns {boolean} Whether buying this aug raises the price of subsequent (normal) augs by augCountMult */
+const scalesAugCount = (augName) =>
+    !isSoaAug(augName) && !labAugNames.includes(augName);
+
 // Factors used in calculations
 const nfCountMult = 1.14; // Factors that control how NeuroFlux prices scale
 let augCountMult = 1.9; // The multiplier for the cost increase of augmentations (changes based on SF11 level)
@@ -60,6 +91,7 @@ let playerData = /**@returns{Player}*/ (() => null)(),
     bitNode = 0,
     gangFaction = "";
 let numAugsAwaitingInstall = 0,
+    numScalingAugsAwaitingInstall = 0, // Queued augs that drive the augCountMult price penalty (excludes SoA / labyrinth augs)
     nfLevelPurchased = 0,
     startingPlayerMoney = 0,
     stockValue = 0; // If the player holds stocks, their liquidation value will be determined
@@ -451,6 +483,10 @@ export async function main(ns) {
         ));
     numAugsAwaitingInstall =
         ownedAugmentations.length - installedAugmentations.length;
+    // Only queued "normal" augs (including NF) raise prices by augCountMult; queued SoA / labyrinth augs do not.
+    numScalingAugsAwaitingInstall = ownedAugmentations
+        .slice(installedAugmentations.length) // Queued augs are listed after installed augs
+        .filter(scalesAugCount).length;
     if (options["neuroflux-disabled"]) omitAugs.push(strNF);
     simulatedOwnedAugmentations = ignorePlayerData
         ? []
@@ -1201,10 +1237,53 @@ let getReqDonationForAug = (aug, factionOrFactionName) =>
 /** @param {AugmentationData[]} augPurchaseOrder The augmentations we wish to purchase in order of purchase.
  * @returns The total cost of purchasing all these augmentations in the specified order */
 let getTotalCost = (augPurchaseOrder) =>
-    augPurchaseOrder.reduce(
-        (total, aug, i) => total + aug.price * augCountMult ** i,
-        0,
+    getPlannedPrices(augPurchaseOrder).reduce((total, p) => total + p, 0);
+
+/** Mirrors the game's getAugCost: normal augs (incl. NF) cost x augCountMult per normal aug bought before them,
+ * SoA augs cost x soaCostMult per SoA aug bought before them, and labyrinth augs neither scale nor count.
+ * (aug.price already includes the scaling from augs that are owned / queued before this plan.)
+ * @param {AugmentationData[]} augPurchaseOrder The augmentations we wish to purchase in order of purchase.
+ * @returns {number[]} The money each aug will cost when bought in this order */
+function getPlannedPrices(augPurchaseOrder) {
+    let numScaling = 0,
+        numSoa = 0;
+    return augPurchaseOrder.map((aug) =>
+        isSoaAug(aug.name)
+            ? aug.price * soaCostMult ** numSoa++
+            : scalesAugCount(aug.name)
+              ? aug.price * augCountMult ** numScaling++
+              : aug.price * augCountMult ** numScaling,
     );
+}
+
+/** @param {AugmentationData[]} augs @returns {number} The number of these augs that raise the price of later augs by augCountMult */
+let countScalingAugs = (augs) =>
+    augs.filter((aug) => scalesAugCount(aug.name)).length;
+
+/** SoA rep cannot be bought with donations, and each SoA aug bought raises the next one's rep requirement by x soaRepMult.
+ * Drop (in place) any SoA augs whose scaled rep requirement isn't met by a joined faction, given the purchase order.
+ * @param {NS} ns @param {AugmentationData[]} augs augmentations in purchase order
+ * @returns {AugmentationData[]} The input array, with unaffordable SoA augs removed */
+function dropSoaAugsBeyondRep(ns, augs) {
+    let numSoa = 0;
+    for (let i = 0; i < augs.length; i++) {
+        const aug = augs[i];
+        if (!isSoaAug(aug.name)) continue;
+        const scaledRep = aug.reputation * soaRepMult ** numSoa;
+        const factions = aug.joinedFactionsWithAug();
+        if (factions.some((f) => f.reputation >= scaledRep)) {
+            numSoa++;
+            continue;
+        }
+        log(
+            ns,
+            `INFO: Dropping "${aug.name}": after ${numSoa} other SoA aug(s) in this order it would need ` +
+                `${formatNumberShort(scaledRep)} rep, which we don't have (SoA rep can't be bought with donations).`,
+        );
+        augs.splice(i--, 1);
+    }
+    return augs;
+}
 
 /** @param {AugmentationData} a @param {AugmentationData} b */
 let augSortOrder = (a, b) =>
@@ -1384,10 +1463,14 @@ async function manageUnownedAugmentations(ns, ignoredAugs) {
               true,
           );
     if (countAvailable > 0) {
-        let augsWithRep = availableAugs.filter(
-            (aug) =>
-                aug.canAfford() ||
-                (aug.canAffordWithDonation() && !options["disable-donations"]),
+        let augsWithRep = dropSoaAugsBeyondRep(
+            ns,
+            availableAugs.filter(
+                (aug) =>
+                    aug.canAfford() ||
+                    (aug.canAffordWithDonation() &&
+                        !options["disable-donations"]),
+            ),
         );
         let desiredAugs = availableAugs.filter((aug) => aug.desired);
         if (augsWithRep.length > desiredAugs.length) {
@@ -1641,15 +1724,18 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
         // Outer loop is only repeated if we have to drop a priority aug and start over with our purchasable augs determination
         restart = false; // Flag as to whether we need to loop again with different starting set of priority augs
         dropped = [];
-        purchaseableAugs = filterMissingPrereqs(
+        purchaseableAugs = dropSoaAugsBeyondRep(
             ns,
-            accessibleAugs
-                .slice()
-                .filter(
-                    (a) =>
-                        !droppedPriorityAugs.includes(a.name) &&
-                        a.price + getReqDonationForAug(a) <= budget,
-                ),
+            filterMissingPrereqs(
+                ns,
+                accessibleAugs
+                    .slice()
+                    .filter(
+                        (a) =>
+                            !droppedPriorityAugs.includes(a.name) &&
+                            a.price + getReqDonationForAug(a) <= budget,
+                    ),
+            ),
         );
         [purchaseFactionDonations, totalRepCost, totalAugCost] =
             computeCosts(purchaseableAugs);
@@ -1658,10 +1744,20 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
             totalAugCost + totalRepCost > budget &&
             purchaseableAugs.length > 0
         ) {
+            // SoA augs are compared at their scaled price (x soaCostMult per earlier SoA aug), since that's what they'd really cost
+            let numSoa = 0;
+            const listPrices = new Map(
+                purchaseableAugs.map((a) => [
+                    a,
+                    isSoaAug(a.name)
+                        ? a.price * soaCostMult ** numSoa++
+                        : a.price,
+                ]),
+            );
             let mostExpensiveAug = purchaseableAugs
                 .filter((a) => !priorityAugs.includes(a.name))
                 .slice()
-                .sort((a, b) => b.price - a.price)[0];
+                .sort((a, b) => listPrices.get(b) - listPrices.get(a))[0];
             if (!mostExpensiveAug) {
                 // If there is nothing but "priority augs" left, then we need the user to deprioritize one or the other
                 const aPa = priorityAugs.filter((name) =>
@@ -1711,10 +1807,10 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
               ` ${dropped[0].costBefore}  ` +
               `for \"${dropped[0].aug.name}\" from "${dropped[0].aug.getFromJoined()}" (cheapest of ${dropped.length} dropped augs)`;
     if (nextUpAug && options["neuroflux-disabled"]) outputRows.push(nextUpAug); // Output this now if we will be exiting early, otherwise save for after the last table.
-    if (numAugsAwaitingInstall > 0)
+    if (numScalingAugsAwaitingInstall > 0)
         outputRows.push(
-            `WARNING: Prices all have a x ${formatNumberShort(augCountMult ** numAugsAwaitingInstall)} cost penalty, because ` +
-                `${numAugsAwaitingInstall} Augmentations were previously purchased but are not yet installed.`,
+            `WARNING: Prices all have a x ${formatNumberShort(augCountMult ** numScalingAugsAwaitingInstall)} cost penalty, because ` +
+                `${numScalingAugsAwaitingInstall} Augmentations were previously purchased but are not yet installed.`,
         );
     if (inaccessiblePriorityAugs.length > 0)
         outputRows.push(
@@ -1735,13 +1831,13 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     nfLevelPurchased = Math.round(
         Math.log(
             augNf.price /
-                (augCountMult ** numAugsAwaitingInstall *
+                (augCountMult ** numScalingAugsAwaitingInstall *
                     750000 *
                     bitNodeMults.AugmentationMoneyCost),
         ) / Math.log(1.14),
     );
     let nextNfLevel = nfLevelPurchased + 1;
-    const baseAugCount = purchaseableAugs.length;
+    const baseAugCount = countScalingAugs(purchaseableAugs); // SoA augs don't raise NF's price
     let nfPurchased = purchaseableAugs.filter(
         (a) => a.name === augNf.name,
     ).length;
@@ -1869,7 +1965,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     let nextUpNf; // Will tell the user when they will unlock the next NF level
     while (augNfFaction && nfPurchased < 200) {
         // Limit to 200 to avoid breaking the game if near infinite money.
-        const currentAugCount = purchaseableAugs.length;
+        const currentAugCount = countScalingAugs(purchaseableAugs); // SoA augs don't raise NF's price
         const candidateFaction = selectBestNfFaction(
             augNf,
             budget,
