@@ -807,7 +807,7 @@ async function beingInBladeburner(ns) {
                 if (9 in ownedSourceFiles && options["disable-spending-hashes"])
                     message +=
                         " --disable-spending-hashes is set, but consider running the following command to give it a boost:\n" +
-                        "run spend-hacknet-hashes.js --spend-on Exchange_for_Bladeburner_Rank --spend-on Exchange_for_Bladeburner_SP --liquidate --no-corp-priority";
+                        "run spend-hacknet-hashes.js --spend-on Exchange_for_Bladeburner_Rank --liquidate --no-corp-priority";
                 log(ns, message, true, "success");
                 break;
             } else
@@ -841,17 +841,17 @@ async function beingInBladeburner(ns) {
         );
     const fPath = getFilePath("spend-hacknet-hashes.js");
     const args = [
+        // Rank only: in tools/bb-sim (BN12, 50 hashes/s, installs hourly) rank alone finished the Black Operations in
+        // 43h without sleeves (11.5h with 8), rank+SP in 52h (12h), SP alone 63h - no better than no hashes (61h)
         "--spend-on",
         "Exchange_for_Bladeburner_Rank",
-        "--spend-on",
-        "Exchange_for_Bladeburner_SP",
         "--liquidate",
-        "--no-corp-priority", // hashes are for Bladeburner rank/SP here
+        "--no-corp-priority", // hashes are for Bladeburner rank here
     ];
     if (ns.run(fPath, { preventDuplicates: true }, ...args))
         log(
             ns,
-            `INFO: Launched '${fPath}' to gain Bladeburner Rank and Skill Points more quickly (Can be disabled with --disable-spending-hashes)`,
+            `INFO: Launched '${fPath}' to gain Bladeburner Rank more quickly (Can be disabled with --disable-spending-hashes)`,
         );
     else log(ns, `WARNING: Failed to launch '${fPath}' (already running?)`);
 }

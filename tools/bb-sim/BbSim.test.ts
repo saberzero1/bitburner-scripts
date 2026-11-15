@@ -3,6 +3,8 @@
  * Runs the real bladeburner.js against the real Bladeburner engine, one engine second at a time.
  * Env: SIM_SCRIPT, SIM_HOURS, SIM_ARGS (JSON bladeburner.js options), SIM_STATS (starting combat/cha levels),
  * SIM_LEVEL_MULT (BN stat level multiplier), SIM_RANK_MULT, SIM_SKILLCOST_MULT, SIM_OUT.
+ * Hash spending: SIM_HASH_RATE (hashes/s), SIM_HASH_ON ("rank", "sp" or "both": cheapest first, like
+ * spend-hacknet-hashes.js), SIM_INSTALL_H (installs every this many hours reset hash upgrade prices; 0 = never).
  */
 import fs from "fs";
 import { Player } from "@player";
@@ -127,6 +129,8 @@ test(
       samples.push({
         h: +(simMs / 3.6e6).toFixed(2),
         rank: bb.rank,
+        hashRank,
+        hashSp,
         blackOps: bb.numBlackOpsComplete,
         skillPoints: bb.skillPoints,
         stamina: bb.stamina,
@@ -139,6 +143,31 @@ test(
         city: bb.getCurrentCity().name,
       });
     };
+    // Hash exchange for rank / skill points (Hacknet HashUpgradesMetadata: 250 hashes per level, +100 rank or +10 SP)
+    const hashRate = Number(env.SIM_HASH_RATE ?? 0);
+    const hashOn = env.SIM_HASH_ON ?? "both";
+    const installMs = Number(env.SIM_INSTALL_H ?? 0) * 3.6e6;
+    let hashes = 0, rankLevel = 0, spLevel = 0, hashRank = 0, hashSp = 0;
+    const spendHashes = () => {
+      hashes += hashRate;
+      if (installMs > 0 && simMs % installMs < 1000) rankLevel = spLevel = 0;
+      for (;;) {
+        const rankCost = hashOn === "sp" ? Infinity : 250 * (rankLevel + 1);
+        const spCost = hashOn === "rank" ? Infinity : 250 * (spLevel + 1);
+        const cost = Math.min(rankCost, spCost);
+        if (cost > hashes) break;
+        hashes -= cost;
+        if (rankCost <= spCost) {
+          bb.changeRank(Player, 100);
+          rankLevel++;
+          hashRank += 100;
+        } else {
+          bb.skillPoints += 10;
+          spLevel++;
+          hashSp += 10;
+        }
+      }
+    };
     let carry = 0;
     const advance = (ms: number) => {
       if (stopped) return;
@@ -148,6 +177,7 @@ test(
         bb.storeCycles(5);
         bb.process();
         for (const sl of Player.sleeves) sl.process(5);
+        if (hashRate > 0) spendHashes();
         simMs += 1000;
         if (simMs >= nextSample) {
           sample();

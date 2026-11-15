@@ -48,6 +48,7 @@ const argsSchema = [
     ["disable-wait-for-4s", false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
     ["disable-rush-gangs", false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
     ["disable-casino", false], // Set to true to disable running the casino.js script automatically
+    ["boost-horizon-minutes", 60], // A server boost must repay its hashes' sale value within this long (see below)
     ["spend-hashes-on-server-hacking-threshold", 0.1], // Threshold for how good hacking multipliers must be to merit spending hashes for boosting hack income. Set to a large number to disable this entirely.
     ["on-completion-script", null], // Spawn this script when we defeat the bitnode
     ["on-completion-script-args", []], // Optional args to pass to the script when we defeat the bitnode
@@ -927,9 +928,29 @@ export async function main(ns) {
                     );
                 const spendHashesMultThreshold =
                     options["spend-hashes-on-server-hacking-threshold"];
+                // Compare with selling: a boost level (+2% max money, the cheapest at 50 hashes) adds ~2% of our
+                // actual hack income; the same hashes sell for $12.5m. In BN12.74 hacking earned ~$1.5k/s, so a level
+                // took days to repay while darknet and the casino earned billions.
+                const moneySources = await getPlayerMoneySources(ns);
+                const hackIncomeRate =
+                    (moneySources?.sinceInstall?.hacking ?? 0) / Math.max(1, getTimeInAug() / 1000);
+                const boostRepays =
+                    resetInfo.currentNode == 9 ||
+                    0.02 * hackIncomeRate * options["boost-horizon-minutes"] * 60 > 50 * 250e3;
+                if (!boostRepays) {
+                    if (existingSpendHashesProc) {
+                        log(ns, `Killing spend-hacknet-hashes.js server boosting: hack income (${formatMoney(hackIncomeRate)}/s) is too low ` +
+                            `for a boost to repay what its hashes would sell for within ${options["boost-horizon-minutes"]} minutes.`);
+                        await killScript(ns, "spend-hacknet-hashes.js", null, existingSpendHashesProc);
+                        existingSpendHashesProc = false;
+                    } else
+                        log_once(ns, `INFO: Not boosting servers with hashes: hack income (${formatMoney(hackIncomeRate)}/s) is too low ` +
+                            `for a boost to repay what its hashes would sell for within ${options["boost-horizon-minutes"]} minutes (--boost-horizon-minutes).`);
+                }
                 // If hacking gain multipliers are too low, assume the bitnode is meant to be won a different way and don't bother wasting hashes on boosting hack income
                 // The exception is that in BN9, despite high penalties, we're definitely meant to spend hashes to boost hack income
                 if (
+                    boostRepays &&
                     bestServer &&
                     (gain > spendHashesMultThreshold ||
                         resetInfo.currentNode == 9)
@@ -1001,6 +1022,8 @@ export async function main(ns) {
                             spendHashesArgs,
                         );
                     }
+                } else if (!boostRepays) {
+                    // (logged above)
                 } else if (gain <= 1)
                     log_once(
                         ns,
