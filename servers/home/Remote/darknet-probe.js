@@ -1,8 +1,9 @@
-const PROBE_VERSION = 39;
+const PROBE_VERSION = 42;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
     ns.port ? ns.port.write(port, data) : ns.writePort(port, data);
+const portPeek = (ns, port) => (ns.port ? ns.port.peek(port) : ns.peek(port));
 
 export async function main(ns) {
     // NOTE: ns.getScriptName() via runDnetCommand returns the TEMP script's name,
@@ -286,8 +287,6 @@ async function processServer(
             });
             portWrite(ns, 17, reportData);
         } catch {}
-        // Signal that THIS probe host is adjacent to a labyrinth
-        foundLabyrinthNeighbor = true;
     }
 
     if (effectiveDetails.hasSession || hostname === "darkweb") {
@@ -444,7 +443,35 @@ async function tryAccessServer(ns, hostname, details, passwords) {
     return null;
 }
 
+// Exec'd labyrinth solvers that are still running (lab hostname -> {pid, host, resultFile}). A solver keeps its
+// maze position per PID, so never start a second one while the first is alive: check its result instead.
+const activeLabSolvers = new Map();
+
+/** Result of a previously started solver: true/false when finished, null while still running or unknown. */
+function checkLabSolver(ns, hostname) {
+    const job = activeLabSolvers.get(hostname);
+    if (!job) return undefined;
+    const data = ns.read(job.resultFile);
+    if (data && data !== "<pending>") {
+        activeLabSolvers.delete(hostname);
+        ns.print(`Labyrinth result for ${hostname}: ${data}`);
+        return data === "SUCCESS";
+    }
+    let running = false;
+    try {
+        running = ns.ps(job.host).some((p) => p.pid === job.pid);
+    } catch {}
+    if (!running) {
+        activeLabSolvers.delete(hostname);
+        return false;
+    }
+    return null;
+}
+
 async function solveLabyrinth(ns, hostname) {
+    const previous = checkLabSolver(ns, hostname);
+    if (previous === true) return true;
+    if (previous === null) return false; // still working on it; check again next tick
     // The labyrinth solver MUST run as a single persistent PID because
     // DarknetState.labLocations[pid] tracks position per-PID.
     // Using temp scripts (new PID per call) resets position to (1,1) every time.
@@ -561,11 +588,13 @@ async function solveLabyrinth(ns, hostname) {
         return await solveLabyrinthInline(ns, hostname);
     }
 
-    // Poll for result — labyrinth solving can take many iterations
-    // Each iteration has a 10ms sleep, 5000 iterations max = ~50 seconds worst case
-    for (let i = 0; i < 600; i++) {
+    activeLabSolvers.set(hostname, { pid, host, resultFile });
+    // Poll briefly; long solves continue in the background and are picked up by checkLabSolver() next tick
+    for (let i = 0; i < 100; i++) {
+        if (!activeLabSolvers.has(hostname)) break;
         const data = ns.read(resultFile);
         if (data && data !== "<pending>") {
+            activeLabSolvers.delete(hostname);
             ns.print(`Labyrinth result for ${hostname}: ${data}`);
             if (data === "SUCCESS") return true;
             // Exec'd solver failed — fall back to inline solver
@@ -577,7 +606,7 @@ async function solveLabyrinth(ns, hostname) {
         await ns.sleep(100);
     }
 
-    ns.print(`WARNING: Labyrinth solver timed out for ${hostname}`);
+    ns.print(`Labyrinth solver for ${hostname} still running (pid ${pid}); will check its result next tick`);
     return false;
 }
 
@@ -1272,147 +1301,38 @@ async function deployHackScript(ns, optionsFile) {
 }
 
 const AIR_GAP_DEPTH = 8;
-const STASIS_RECHECK_INTERVAL = 120000; // Re-evaluate stasis every 2 minutes
 let lastStasisCheck = 0;
-let foundLabyrinthNeighbor = false; // Set true when this probe discovers a labyrinth neighbor
+
+// Anchors (stasis links) are decided centrally by darknet.js, which publishes the servers it wants linked on
+// ANCHOR_COMMAND_PORT. setStasisLink only works on the server it runs on, so a probe links its own server when
+// asked. (Probes used to score and request swaps themselves, which fought with the orchestrator's choices.)
+const ANCHOR_COMMAND_PORT = 22;
+const ANCHOR_ATTEMPT_INTERVAL_MS = 20000; // a link takes ~30s; don't stack attempts
 
 async function manageStasis(ns, optionsFile, hostname, passwords) {
     const options = loadProbeOptions(ns, optionsFile);
     if (!options.enableStasis) return;
-
-    // Throttle stasis checks — expensive operations
-    // BUT: bypass throttle when this probe found a labyrinth neighbor (urgent stasis needed)
-    if (
-        !foundLabyrinthNeighbor &&
-        Date.now() - lastStasisCheck < STASIS_RECHECK_INTERVAL
-    )
-        return;
-    lastStasisCheck = Date.now();
-
+    let command = null;
     try {
-        // Get current stasis state (these are 0 GB cost calls)
-        const stasisLimit = await runGetStasisLimit(ns);
-        if (stasisLimit <= 0) return; // No stasis slots available
-
-        const stasisList = await runGetStasisList(ns);
-        const currentStasisSet = new Set(stasisList || []);
-
-        // If this server is already stasis-linked, nothing to do
-        if (currentStasisSet.has(hostname)) return;
-
-        // Score this server for stasis worthiness
-        const myScore = await scoreServerForStasis(ns, hostname);
-        if (myScore <= 0) return; // Not worth stasis-linking
-
-        if (currentStasisSet.size < stasisLimit) {
-            // Free slot available — set stasis on this server
-            ns.print(
-                `Stasis: slot available (${currentStasisSet.size}/${stasisLimit}), setting stasis on ${hostname} (score: ${myScore})`,
-            );
-            await execStasisBootstrap(ns, hostname, true);
-            // Report password to orchestrator so it always has credentials for stasis servers.
-            // This prevents future 'zombie stasis' — stasis servers the orchestrator can't authenticate.
-            const pwd = passwords.get(hostname);
-            if (pwd !== undefined) {
-                reportPasswordToOrchestrator(ns, hostname, pwd);
-                ns.print(
-                    `Stasis: reported password for ${hostname} to orchestrator (port 19)`,
-                );
-            }
-        } else {
-            // All slots full — check if we should replace the weakest
-            let weakestHost = null;
-            let weakestScore = Infinity;
-            for (const stasisHost of currentStasisSet) {
-                const score = await scoreServerForStasis(ns, stasisHost);
-                if (score < weakestScore) {
-                    weakestScore = score;
-                    weakestHost = stasisHost;
-                }
-            }
-
-            // Only replace if our score beats the weakest by a significant margin (20%+)
-            if (weakestHost && myScore > weakestScore * 1.2) {
-                ns.print(
-                    `Stasis: need to replace ${weakestHost} (score: ${weakestScore}) with ${hostname} (score: ${myScore})`,
-                );
-                // We CANNOT remove stasis on a remote server — setStasisLink only works locally.
-                // Write a swap request to port 21 for the orchestrator to remove old stasis.
-                // The orchestrator CAN exec on the old stasis server (it has stasis = exec works).
-                // Once the orchestrator frees the slot, our next tick will find a free slot and set stasis.
-                try {
-                    const swapRequest = JSON.stringify({
-                        requestor: hostname,
-                        removeHost: weakestHost,
-                        reason: foundLabyrinthNeighbor
-                            ? "labyrinth_neighbor"
-                            : "better_score",
-                        myScore,
-                        weakestScore,
-                    });
-                    portWrite(ns, 21, swapRequest);
-                    ns.print(
-                        `Stasis: wrote swap request to port 21 (remove ${weakestHost} for ${hostname})`,
-                    );
-                } catch (swapErr) {
-                    ns.print(
-                        `WARN: Failed to write stasis swap request: ${swapErr}`,
-                    );
-                }
-            }
-        }
+        const raw = portPeek(ns, ANCHOR_COMMAND_PORT);
+        if (raw !== "NULL PORT DATA") command = JSON.parse(String(raw));
+    } catch {}
+    if (!Array.isArray(command?.link) || !command.link.includes(hostname)) return;
+    if (Date.now() - lastStasisCheck < ANCHOR_ATTEMPT_INTERVAL_MS) return;
+    lastStasisCheck = Date.now();
+    try {
+        const linked = new Set((await runGetStasisList(ns)) || []);
+        if (linked.has(hostname)) return;
+        const limit = await runGetStasisLimit(ns);
+        if (linked.size >= limit) return; // the orchestrator frees a slot first; wait for it
+        ns.print(`Stasis: orchestrator asked to anchor ${hostname}`);
+        await execStasisBootstrap(ns, hostname, true);
+        // Report the password so the orchestrator always has credentials for anchored servers
+        const pwd = passwords.get(hostname);
+        if (pwd !== undefined) reportPasswordToOrchestrator(ns, hostname, pwd);
     } catch (err) {
         logError(ns, `Stasis management error`, err);
     }
-}
-
-async function scoreServerForStasis(ns, hostname) {
-    let score = 0;
-
-    // Get server depth (0 GB cost)
-    let depth;
-    try {
-        depth = await runDnetCommand(
-            ns,
-            buildDnetCommand(commandNames.depth, commandArgs.singleArg),
-            [hostname],
-        );
-    } catch {}
-
-    if (depth !== undefined && depth !== null && typeof depth === "number") {
-        const posInGap = depth % AIR_GAP_DEPTH;
-        // Critical: servers just before air gaps are migration staging points
-        if (posInGap === AIR_GAP_DEPTH - 2 || posInGap === AIR_GAP_DEPTH - 1) {
-            score += 80;
-        } else if (posInGap === 0 || posInGap === 1) {
-            // Just after an air gap — useful anchor
-            score += 30;
-        }
-
-        // Penalize shallow servers (game auto-maintains density there)
-        if (depth <= 3) {
-            score -= 50;
-        }
-
-        // Deeper = harder to reach = stasis more valuable
-        score += Math.min(depth * 2, 30);
-    }
-
-    // RAM is the DOMINANT factor — user wants high-RAM servers for daemon.js hacking
-    try {
-        const serverRam = await nsGetServerMaxRam(ns, hostname);
-        // Strong RAM bonus: 1 point per 8GB, up to 200 points for 1.6TB
-        score += Math.min(Math.floor(serverRam / 8), 200);
-    } catch {}
-
-    // Labyrinth adjacency: if this probe found a labyrinth neighbor, this server
-    // is directly adjacent to the labyrinth and should be prioritized for stasis.
-    // This is the ONLY way to get stasis on deep servers the orchestrator can't reach.
-    if (foundLabyrinthNeighbor && hostname === ns.getHostname()) {
-        score += 200;
-    }
-
-    return score;
 }
 
 /**
@@ -2375,8 +2295,8 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
 }
 
 /**
- * OpenWebAccessPoint (packet sniffer) servers return captured traffic in the `data` field of a
- * FAILED authenticate() response (ns.dnet.packetCapture was removed in #2594).
+ * OpenWebAccessPoint (packet sniffer) servers put captured traffic in the `data` of a FAILED attempt's server
+ * log entry, read back with heartbleed (ns.dnet.packetCapture was removed in #2594).
  * - Easy servers (difficulty <= 16): traffic contains " <hostname>:<password> ".
  * - Hard servers: the bare password is embedded in random noise at a random offset, so the
  *   only length-L substring present in every capture is the password.
@@ -2397,7 +2317,9 @@ async function sniffPacketPassword(ns, hostname, serverInfo, maxCaptures = 12) {
         const r = await runAuth(ns, hostname, probeGuess);
         if (r?.success) return probeGuess;
         tried.add(probeGuess);
-        const text = String(r?.data ?? "");
+        // authenticate() only returns feedback data on labyrinth servers; elsewhere it's in the server log,
+        // as JSON of the response ({code, message, data, passwordAttempted}). data holds the captured packets.
+        const text = await capturedPacketsFromLog(ns, hostname, probeGuess);
         if (!text) continue;
         for (const m of text.matchAll(/(\S+):(\S+)/g)) {
             if (m[1] === hostname && (await tryCandidate(m[2]))) return m[2];
@@ -2415,6 +2337,18 @@ async function sniffPacketPassword(ns, hostname, serverInfo, maxCaptures = 12) {
         if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
+}
+
+/** Find our latest failed attempt in the server log and return its captured-packet data. */
+async function capturedPacketsFromLog(ns, hostname, attempted) {
+    const bleed = await runHeartbleedMulti(ns, hostname, 8);
+    for (const line of bleed?.logs ?? []) {
+        try {
+            const entry = JSON.parse(String(line));
+            if (entry?.passwordAttempted === attempted && typeof entry.data === "string") return entry.data;
+        } catch {}
+    }
+    return "";
 }
 
 async function solvePacketSniffer(ns, hostname, serverInfo) {
@@ -2577,6 +2511,8 @@ async function solveSpiceLevel(ns, hostname, serverInfo) {
                 if (feedbackMisses > 4) return null;
                 continue;
             }
+            // Changing this position lowered the count: the original character was already correct
+            if (Number.isFinite(fb.count) && fb.count < currentCount) break;
             if (Number.isFinite(fb.count) && fb.count > currentCount) {
                 // This char increased the pepper count — it's correct for this position
                 guess = guess.substring(0, i) + ch + guess.substring(i + 1);
@@ -3413,6 +3349,8 @@ async function dnetCall(ns, method, ...args) {
                 return await ns.dnet.labreport(...args);
             case commandNames.link:
                 return ns.dnet.connectToSession(...args);
+            case commandNames.bleed:
+                return await ns.dnet.heartbleed(...args);
         }
     } catch {}
     return null;
@@ -3462,12 +3400,15 @@ async function runDnetCommand(ns, command, args = []) {
     ns.write(resultFile, "<pending>", "w");
     const pid = ns.exec(scriptFile, host, 1, ...args, resultFile);
     if (!pid) return null;
-    for (let i = 0; i < 50; i++) {
+    // dnet calls take up to several seconds (auth time, heartbleed = 1.5x auth time): wait up to 60s.
+    // The temp script always writes its result (errors included), so this only times out if it was killed.
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
         const data = ns.read(resultFile);
         if (data && data !== "<pending>") {
             return decodePayload(data);
         }
-        await ns.sleep(10);
+        await ns.sleep(25);
     }
     return null;
 }
@@ -3526,12 +3467,15 @@ async function nsScpWithSession(ns, source, destination, password) {
         resultFile,
     );
     if (!pid) return null;
-    for (let i = 0; i < 50; i++) {
+    // dnet calls take up to several seconds (auth time, heartbleed = 1.5x auth time): wait up to 60s.
+    // The temp script always writes its result (errors included), so this only times out if it was killed.
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
         const data = ns.read(resultFile);
         if (data && data !== "<pending>") {
             return decodePayload(data);
         }
-        await ns.sleep(10);
+        await ns.sleep(25);
     }
     return null;
 }
@@ -3673,6 +3617,10 @@ function resetCrackedCheck(hostname) {
 
 async function runHeartbleed(ns, hostname) {
     try {
+        const direct = await dnetCall(ns, commandNames.bleed, hostname, { peek: true });
+        if (direct) return direct;
+    } catch {}
+    try {
         return await runDnetCommand(
             ns,
             buildDnetCommand(commandNames.bleed, commandArgs.peekArg),
@@ -3683,6 +3631,10 @@ async function runHeartbleed(ns, hostname) {
 }
 
 async function runHeartbleedMulti(ns, hostname, logsToCapture) {
+    try {
+        const direct = await dnetCall(ns, commandNames.bleed, hostname, { peek: true, logsToCapture });
+        if (direct) return direct;
+    } catch {}
     try {
         // Build custom heartbleed command with multi-log capture and peek
         const args = `${nsPrefix}args[0], { peek: true, logsToCapture: Number(${nsPrefix}args[1]) }`;

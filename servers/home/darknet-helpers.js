@@ -776,8 +776,8 @@ async function solveDivisibilityTest(ns, hostname, serverInfo) {
 }
 
 /**
- * OpenWebAccessPoint (packet sniffer) servers return captured traffic in the `data` field of a
- * FAILED authenticate() response (ns.dnet.packetCapture was removed in #2594).
+ * OpenWebAccessPoint (packet sniffer) servers put captured traffic in the `data` of a FAILED attempt's server
+ * log entry, read back with heartbleed (ns.dnet.packetCapture was removed in #2594).
  * - Easy servers (difficulty <= 16): traffic contains " <hostname>:<password> ".
  * - Hard servers: the bare password is embedded in random noise at a random offset, so the
  *   only length-L substring present in every capture is the password.
@@ -798,7 +798,21 @@ async function sniffPacketPassword(ns, hostname, serverInfo, maxCaptures = 12) {
         const r = await safeAuthenticate(ns, hostname, probeGuess);
         if (r?.success) return probeGuess;
         tried.add(probeGuess);
-        const text = String(r?.data ?? "");
+        // authenticate() only returns feedback data on labyrinth servers; elsewhere it's in the server log,
+        // as JSON of the response ({code, message, data, passwordAttempted}). data holds the captured packets.
+        let text = "";
+        try {
+            const bleed = await ns.dnet.heartbleed(hostname, { peek: true, logsToCapture: 8 });
+            for (const line of bleed?.logs ?? []) {
+                try {
+                    const entry = JSON.parse(String(line));
+                    if (entry?.passwordAttempted === probeGuess && typeof entry.data === "string") {
+                        text = entry.data;
+                        break;
+                    }
+                } catch {}
+            }
+        } catch {}
         if (!text) continue;
         for (const m of text.matchAll(/(\S+):(\S+)/g)) {
             if (m[1] === hostname && (await tryCandidate(m[2]))) return m[2];
@@ -935,6 +949,8 @@ async function solveSpiceLevel(ns, hostname, serverInfo) {
             if (resp.success) return trial;
             if (await isAlreadyCracked(ns, hostname)) return null;
             const count = parsePepperCount(resp);
+            // Changing this position lowered the count: the original character was already correct
+            if (Number.isFinite(count) && count < currentCount) break;
             if (Number.isFinite(count) && count > currentCount) {
                 guess = guess.substring(0, i) + ch + guess.substring(i + 1);
                 currentCount = count;

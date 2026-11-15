@@ -8,6 +8,8 @@ import {
     portPeek,
     portRead,
     portClear,
+    portWrite,
+    getNsDataThroughFile,
 } from "./helpers.js";
 import {
     getDarknetPasswordSolver,
@@ -73,7 +75,8 @@ const RAMFREE_RESULT_FILE = "/Temp/ramfree-done.txt";
 const LAB_SOLVER_SCRIPT = "/Temp/darknet-lab-solver.js";
 const LAB_SOLVER_RESULT_PORT = 18; // Netscript port for labyrinth solver results
 const LAB_NEIGHBOR_REPORT_PORT = 17; // Netscript port for probe-reported labyrinth neighbors
-const STASIS_SWAP_REQUEST_PORT = 21; // Netscript port for probe stasis swap requests
+const STASIS_SWAP_REQUEST_PORT = 21; // Legacy: probe stasis swap requests (drained, no longer used)
+const ANCHOR_COMMAND_PORT = 22; // Orchestrator -> probes: {link: [hostnames]} (peeked, not consumed)
 const STASIS_PWD_PORT = 19; // Netscript port for probe-reported stasis server passwords
 
 // Self-contained labyrinth solver script. Deployed to a stasis-linked neighbor of a
@@ -131,7 +134,7 @@ const LAB_SOLVER_CONTENT = [
     `  (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 39;
+const PROBE_VERSION = 42;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -766,87 +769,10 @@ async function orchestrateDarknet(ns, state, options) {
         await scanAllClueFiles(ns, state, options);
     }
 
-    // Step 5b: Process stasis swap requests from probes (port 21).
-    // Probes on deep servers can't remove stasis on OTHER servers (setStasisLink is local-only).
-    // When a probe wants stasis but all slots are full, it writes a swap request here.
-    // The orchestrator CAN exec on existing stasis servers, so it removes the weakest.
-    // On the probe's next tick, it will find a free slot and set stasis on itself.
-    {
-        // Collect all swap requests, then process the best one
-        const swapRequests = [];
-        while (portPeek(ns, STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") {
-            const raw = portRead(ns, STASIS_SWAP_REQUEST_PORT);
-            try {
-                const req = JSON.parse(String(raw));
-                if (req.removeHost && req.requestor) swapRequests.push(req);
-            } catch {}
-        }
-        if (swapRequests.length > 0) {
-            // If ALL stasis slots are occupied by confirmed zombies (past grace period),
-            // swap is impossible — just drain the requests
-            const now = Date.now();
-            const isConfirmedZombie = (h) => {
-                const z = state.zombieStasisServers.get(h);
-                return z && z.failCount >= 10 && now - z.firstFailAt > 300000;
-            };
-            const allZombie = [...state.stasisServers].every((h) =>
-                isConfirmedZombie(h),
-            );
-            if (allZombie) {
-                if (verbose)
-                    log(
-                        ns,
-                        `INFO: All ${state.stasisServers.size} stasis slot(s) are zombies — ignoring ${swapRequests.length} swap request(s). Probes solve labyrinths directly.`,
-                    );
-            } else {
-                // Pick the request with the highest score (best candidate to receive stasis)
-                swapRequests.sort(
-                    (a, b) => (b.myScore || 0) - (a.myScore || 0),
-                );
-                const best = swapRequests[0];
-                if (isConfirmedZombie(best.removeHost)) {
-                    // Target is a confirmed zombie — can't remove stasis, skip
-                    if (verbose)
-                        log(
-                            ns,
-                            `INFO: Swap target ${best.removeHost} is a zombie stasis server — cannot remove. Ignoring ${swapRequests.length} requests.`,
-                        );
-                } else if (state.stasisServers.has(best.removeHost)) {
-                    log(
-                        ns,
-                        `Stasis swap: processing best of ${swapRequests.length} requests — ${best.requestor} (score: ${best.myScore}) wants to replace ${best.removeHost} (score: ${best.weakestScore})`,
-                    );
-                    const removed = await execStasisLink(
-                        ns,
-                        state,
-                        best.removeHost,
-                        false,
-                        options,
-                    );
-                    if (removed) {
-                        state.stasisServers.delete(best.removeHost);
-                        state.zombieStasisServers.delete(best.removeHost);
-                        log(
-                            ns,
-                            `Stasis swap: removed stasis from ${best.removeHost} — slot now free for ${best.requestor}`,
-                        );
-                    } else {
-                        log(
-                            ns,
-                            `WARN: Stasis swap: failed to remove stasis from ${best.removeHost} (will retry next tick)`,
-                        );
-                    }
-                } else if (verbose) {
-                    log(
-                        ns,
-                        `INFO: Stasis swap target ${best.removeHost} no longer stasis-linked, ignoring ${swapRequests.length} requests`,
-                    );
-                }
-            }
-        }
-    }
-    // Step 6: Manage stasis links (exec from target server)
-    await manageStasisLinks(ns, state, options);
+    // Step 6: Anchors (stasis links). The orchestrator is the only decision maker; probes link their own
+    // server when it is published on ANCHOR_COMMAND_PORT. Older probes may still send swap requests: drain them.
+    while (portPeek(ns, STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") portRead(ns, STASIS_SWAP_REQUEST_PORT);
+    await manageAnchors(ns, state, options);
 
     // Step 7: Charge migrations for air gap crossing
     if (options["enable-migration"]) {
@@ -1800,168 +1726,224 @@ async function ensureHomeProbe(ns, state, options) {
  * server — it operates on the server the calling script is running on.
  * We exec a tiny helper script on the target to do this.
  */
-async function manageStasisLinks(ns, state, options) {
-    let stasisLimit;
+// ─── Anchors (stasis links) ──────────────────────────────────────────────────
+//
+// Stasis links ("anchors") pin a darknet server in place, keep it online and allow remote exec. There are only
+// 1-4 of them (+1 each for The W1ngs of Icarus, The H4mmer of Daedalus, The St4ff of Asclepius).
+//
+// Phases:
+//  - push:   while the current labyrinth is unsolved (and our charisma meets its requirement), anchors serve
+//            depth: labyrinth neighbours first, then footholds in the deepest air-gap segment reached, then
+//            staging servers right before the next air gap.
+//  - stable: once the labyrinth is solved (or out of reach), anchors keep high-RAM servers stable.
+//
+// Swaps are conservative: an anchor is held at least ANCHOR_MIN_HOLD_MS, a candidate must beat the weakest
+// anchor by 25%, must be verified ready (authenticated, online, enough RAM, reachable or running a probe)
+// before anything is unlinked, and only one change is in flight at a time.
+
+const ANCHOR_MIN_HOLD_MS = 10 * 60 * 1000;
+const ANCHOR_SWAP_COOLDOWN_MS = 2 * 60 * 1000;
+const ANCHOR_LINK_TIMEOUT_MS = 3 * 60 * 1000;
+const ANCHOR_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
+const ANCHOR_REPLACE_MARGIN = 1.25;
+const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
+
+/** Determine the anchoring phase and the labyrinth it is targeting. */
+async function getAnchorPhase(ns, state) {
+    // The current labyrinth: discovered, online lab server(s); prefer an unsolved one
+    const labs = [...state.labyrinthServers].filter((h) => safeGetAuthDetails(ns, h)?.isOnline !== false);
+    const unsolved = labs.filter((h) => !isServerAuthenticated(state, h));
+    if (labs.length === 0) return { phase: "push", lab: null, reason: "labyrinth not found yet" };
+    if (unsolved.length === 0) return { phase: "stable", lab: labs[0], reason: "labyrinth solved" };
+    const lab = unsolved[0];
+    // Charisma requirement: without it the labyrinth can't be navigated, so pushing deeper is pointless
+    if (!state.charismaCheckedAt || Date.now() - state.charismaCheckedAt > 5 * 60 * 1000) {
+        state.charismaCheckedAt = Date.now();
+        try {
+            state.playerCharisma = await getNsDataThroughFile(ns, "ns.getPlayer().skills.charisma", "/Temp/player-charisma.txt");
+        } catch {}
+        try {
+            state.labCharismaRequired = ns.dnet.getServerRequiredCharismaLevel(lab);
+        } catch {}
+    }
+    if (state.playerCharisma !== undefined && state.labCharismaRequired > state.playerCharisma)
+        return { phase: "stable", lab, reason: `charisma ${state.playerCharisma} < ${state.labCharismaRequired} required` };
+    return { phase: "push", lab, reason: "labyrinth unsolved" };
+}
+
+function scoreAnchor(ns, state, hostname, phaseInfo, frontierSegment) {
+    const depth = state.serverDepths.get(hostname) ?? 0;
+    let ram = 0;
     try {
-        stasisLimit = ns.dnet.getStasisLinkLimit();
+        ram = ns.getServerMaxRam(hostname);
+    } catch {}
+    if (phaseInfo.phase === "stable") {
+        // Stability: host as much of our work as possible on servers that won't go offline
+        return Math.min(ram, 16384) / 16 + 1;
+    }
+    let score = depth * 10; // deeper is better
+    const segment = Math.floor(depth / AIR_GAP_DEPTH);
+    if (segment === frontierSegment && depth > 0) score += 200; // foothold in the deepest segment reached
+    const labDepth = phaseInfo.lab ? state.serverDepths.get(phaseInfo.lab) : undefined;
+    // Staging point right before an air gap we still need to cross (migrations ride across from here)
+    if (depth % AIR_GAP_DEPTH === AIR_GAP_DEPTH - 1 && (labDepth === undefined || labDepth > depth)) score += 150;
+    // Next to the unsolved labyrinth: needed to run the solver
+    if (phaseInfo.lab && state.labyrinthNeighbors.get(phaseInfo.lab)?.has(hostname)) score += 1000;
+    if (depth <= 3) score -= 100; // the game keeps shallow servers dense; anchors add little there
+    score += Math.min(ram / 64, 25); // tie-breaker
+    return score;
+}
+
+/** Can this server be linked right now? Returns {ok, direct, reason}. */
+function anchorReadiness(ns, state, hostname) {
+    if (hostname === DARKWEB_HOSTNAME) return { ok: false, reason: "darkweb is always reachable" };
+    if (!isServerAuthenticated(state, hostname)) return { ok: false, reason: "not authenticated" };
+    const failedUntil = state.anchorFailures?.get(hostname) ?? 0;
+    if (failedUntil > Date.now()) return { ok: false, reason: "recent link failure" };
+    const details = safeGetAuthDetails(ns, hostname);
+    if (!details?.isOnline) return { ok: false, reason: "offline" };
+    let maxRam = 0;
+    try {
+        maxRam = ns.getServerMaxRam(hostname);
+    } catch {}
+    if (maxRam < STASIS_RAM_NEEDED) return { ok: false, reason: `only ${maxRam} GB RAM` };
+    if (details.isConnectedToCurrentServer) return { ok: true, direct: true };
+    // Otherwise the server's own probe must do it
+    const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
+    let hasProbe = false;
+    try {
+        hasProbe = ns.ps(hostname).some((p) => p.filename === probeScript);
+    } catch {}
+    return hasProbe ? { ok: true, direct: false } : { ok: false, reason: "no probe running" };
+}
+
+function isRunningLabSolver(ns, hostname) {
+    try {
+        return ns.ps(hostname).some((p) => /lab-solver/.test(p.filename));
+    } catch {
+        return false;
+    }
+}
+
+function publishAnchorCommand(ns, link) {
+    portClear(ns, ANCHOR_COMMAND_PORT);
+    portWrite(ns, ANCHOR_COMMAND_PORT, JSON.stringify({ link, at: Date.now() }));
+}
+
+async function manageAnchors(ns, state, options) {
+    let limit;
+    try {
+        limit = ns.dnet.getStasisLinkLimit();
     } catch {
         return; // Stasis API not available
     }
+    state.anchorSince ??= new Map();
+    state.anchorFailures ??= new Map();
+    const now = Date.now();
+    const linked = state.stasisServers;
+    for (const h of linked) if (!state.anchorSince.has(h)) state.anchorSince.set(h, now);
+    for (const h of [...state.anchorSince.keys()]) if (!linked.has(h)) state.anchorSince.delete(h);
 
-    const currentLinks = state.stasisServers.size;
-
-    // Build scored candidate list for ALL authenticated servers (including current stasis)
-    // Cache scores to avoid repeated ns.getServerMaxRam() calls per tick
-    const scoreCache = new Map();
-    const scoreServer = (hostname) => {
-        const cached = scoreCache.get(hostname);
-        if (cached !== undefined) return cached;
-        let score = 0;
-        const depth = state.serverDepths.get(hostname);
-
-        if (depth !== undefined) {
-            const posInGap = depth % AIR_GAP_DEPTH;
-            if (
-                posInGap === AIR_GAP_DEPTH - 2 ||
-                posInGap === AIR_GAP_DEPTH - 1
-            ) {
-                // Depth is 6,7 / 14,15 / 22,23 / 30,31 — critical for migration staging
-                score += 80;
-            } else if (posInGap === 0 || posInGap === 1) {
-                score += 30;
-            }
-
-            if (depth <= 3) {
-                score -= 50;
-            }
-
-            score += Math.min(depth * 2, 30);
-        }
-
-        // RAM is the DOMINANT factor — high-RAM servers are the primary goal
-        // for stasis (they serve as additional hacking infrastructure for daemon.js)
-        try {
-            const serverRam = ns.getServerMaxRam(hostname);
-            // Strong RAM bonus: 1 point per 2GB, up to 400 points for 800GB+
-            score += Math.min(Math.floor(serverRam / 2), 400);
-        } catch {}
-
-        // Labyrinth adjacency: servers adjacent to unsolved labyrinths get a massive bonus
-        // to prioritize getting stasis links for labyrinth solving
-        for (const [labHost, neighbors] of state.labyrinthNeighbors) {
-            if (neighbors.has(hostname)) {
-                // Only boost if the labyrinth is not yet authenticated (unsolved)
-                if (!isServerAuthenticated(state, labHost)) {
-                    score += 200;
-                    break; // One bonus is enough
-                }
-            }
-        }
-
-        scoreCache.set(hostname, score);
-        return score;
-    };
-
-    // Diagnostic: log labyrinth neighbor status in stasis management
-    if (state.labyrinthNeighbors.size > 0 && options.verbose) {
-        for (const [labHost, neighbors] of state.labyrinthNeighbors) {
-            const labSolved = isServerAuthenticated(state, labHost);
-            const neighborDetails = [...neighbors].map((n) => {
-                const isStasis = state.stasisServers.has(n);
-                const isAuthed = isServerAuthenticated(state, n);
-                const score = isAuthed ? scoreServer(n) : "N/A (unauthed)";
-                return `${n}(stasis=${isStasis}, authed=${isAuthed}, score=${score})`;
-            });
-            log(
-                ns,
-                `Labyrinth stasis info: ${labHost} (solved=${labSolved}), neighbors: ${neighborDetails.join(", ")}`,
-            );
-        }
+    const phaseInfo = await getAnchorPhase(ns, state);
+    if (state.anchorPhase !== phaseInfo.phase) {
+        log(ns, `Anchors: phase ${phaseInfo.phase} (${phaseInfo.reason})`);
+        state.anchorPhase = phaseInfo.phase;
     }
 
-    // Find candidates not yet stasis-linked
+    // Deepest air-gap segment we hold any authenticated server in
+    let frontierSegment = 0;
+    for (const [h, depth] of state.serverDepths)
+        if (isServerAuthenticated(state, h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
+    const score = (h) => scoreAnchor(ns, state, h, phaseInfo, frontierSegment);
+
+    // 1. A change in flight: link/unlink each take ~30s (setStasisLink duration), so wait for confirmation.
+    const pending = state.anchorPending;
+    if (pending?.stage === "unlinking") {
+        if (!linked.has(pending.remove)) {
+            state.anchorPending = null;
+            await startAnchorLink(ns, state, options, pending.candidate, pending.remove);
+        } else if (now - pending.startedAt > ANCHOR_LINK_TIMEOUT_MS) {
+            log(ns, `WARNING: Anchors: unlinking ${pending.remove} timed out; keeping it`, false, "warning");
+            state.anchorPending = null;
+            state.lastAnchorChange = now;
+        }
+        return;
+    }
+    if (pending) {
+        if (linked.has(pending.add)) {
+            log(ns, `Anchors: ${pending.add} is now anchored${pending.replaced ? ` (replaced ${pending.replaced})` : ""}`);
+            state.anchorPending = null;
+            state.lastAnchorChange = now;
+        } else if (now - pending.startedAt > ANCHOR_LINK_TIMEOUT_MS) {
+            log(ns, `WARNING: Anchors: linking ${pending.add} timed out; trying another candidate later`, false, "warning");
+            state.anchorFailures.set(pending.add, now + ANCHOR_FAILURE_COOLDOWN_MS);
+            state.anchorPending = null;
+        } else {
+            publishAnchorCommand(ns, pending.direct ? [] : [pending.add]);
+            return;
+        }
+    }
+    publishAnchorCommand(ns, []);
+
+    // 2. Rank ready candidates
     const candidates = [];
     for (const [hostname] of state.discoveredServers) {
-        if (state.stasisServers.has(hostname)) continue;
-        if (hostname === DARKWEB_HOSTNAME) continue; // darkweb is always reachable from home — stasis is pointless
-        if (!isServerAuthenticated(state, hostname)) continue;
-        candidates.push({ hostname, score: scoreServer(hostname) });
+        if (linked.has(hostname)) continue;
+        const s = score(hostname);
+        if (s <= 0) continue;
+        candidates.push({ hostname, score: s });
     }
     candidates.sort((a, b) => b.score - a.score);
-
-    if (currentLinks < stasisLimit) {
-        // Free slots available — fill them with best candidates
-        const slotsAvailable = stasisLimit - currentLinks;
-        for (const candidate of candidates.slice(0, slotsAvailable)) {
-            if (candidate.score <= 0) break; // Not worth stasis-linking
-            const success = await execStasisLink(
-                ns,
-                state,
-                candidate.hostname,
-                true,
-                options,
-            );
-            if (success) {
-                state.stasisServers.add(candidate.hostname);
-                log(
-                    ns,
-                    `Applied stasis link to ${candidate.hostname} (score: ${candidate.score})`,
-                );
-            }
+    const pickReady = () => {
+        for (const c of candidates.slice(0, 15)) {
+            const r = anchorReadiness(ns, state, c.hostname);
+            if (r.ok) return { ...c, direct: r.direct };
+            if (options.verbose) log(ns, `Anchors: candidate ${c.hostname} (score ${c.score.toFixed(0)}) not ready: ${r.reason}`);
         }
-    } else if (candidates.length > 0 && candidates[0].score > 0) {
-        // All slots full — check if the best unlinked candidate beats the weakest linked server
-        let weakestHost = null;
-        let weakestScore = Infinity;
-        for (const stasisHost of state.stasisServers) {
-            // Skip confirmed zombie stasis servers — we can't remove them, so they're not swap candidates.
-            // Servers in grace period ARE still considered (exec might work if the server restarts).
-            const z = state.zombieStasisServers.get(stasisHost);
-            if (z && z.failCount >= 10 && Date.now() - z.firstFailAt > 300000)
-                continue;
-            const score = scoreServer(stasisHost);
-            if (score < weakestScore) {
-                weakestScore = score;
-                weakestHost = stasisHost;
-            }
-        }
+        return null;
+    };
 
-        const bestCandidate = candidates[0];
-        // Only replace if the candidate beats the weakest by 20%+
-        if (weakestHost && bestCandidate.score > weakestScore * 1.1) {
-            // Remove stasis from weakest
-            const removed = await execStasisLink(
-                ns,
-                state,
-                weakestHost,
-                false,
-                options,
-            );
-            if (removed) {
-                state.stasisServers.delete(weakestHost);
-                log(
-                    ns,
-                    `Removed stasis from ${weakestHost} (score: ${weakestScore})`,
-                );
-
-                // Apply stasis to better candidate
-                const added = await execStasisLink(
-                    ns,
-                    state,
-                    bestCandidate.hostname,
-                    true,
-                    options,
-                );
-                if (added) {
-                    state.stasisServers.add(bestCandidate.hostname);
-                    log(
-                        ns,
-                        `Applied stasis link to ${bestCandidate.hostname} (score: ${bestCandidate.score}, replacing ${weakestHost})`,
-                    );
-                }
-            }
-        }
+    // 3. Free slot: fill it with the best ready candidate
+    if (linked.size < limit) {
+        const best = pickReady();
+        if (best) await startAnchorLink(ns, state, options, best);
+        return;
     }
+
+    // 4. All slots used: consider replacing the weakest anchor
+    if (now - (state.lastAnchorChange ?? 0) < ANCHOR_SWAP_COOLDOWN_MS) return;
+    let weakest = null;
+    for (const h of linked) {
+        const z = state.zombieStasisServers.get(h);
+        if (z && z.failCount >= 10 && now - z.firstFailAt > 300000) continue; // can't exec there
+        if (now - (state.anchorSince.get(h) ?? now) < ANCHOR_MIN_HOLD_MS) continue; // hold new anchors
+        if (isRunningLabSolver(ns, h)) continue; // never interrupt a labyrinth attempt
+        const s = score(h);
+        if (!weakest || s < weakest.score) weakest = { hostname: h, score: s };
+    }
+    if (!weakest || !candidates.length) return;
+    if (candidates[0].score <= weakest.score * ANCHOR_REPLACE_MARGIN + 25) return;
+    // Verify the replacement is ready BEFORE unlinking anything
+    const best = pickReady();
+    if (!best || best.score <= weakest.score * ANCHOR_REPLACE_MARGIN + 25) return;
+    log(ns, `Anchors: replacing ${weakest.hostname} (score ${weakest.score.toFixed(0)}) with ${best.hostname} (score ${best.score.toFixed(0)}) [${phaseInfo.phase}]`);
+    const removed = await execStasisLink(ns, state, weakest.hostname, false, options);
+    if (!removed) {
+        log(ns, `WARNING: Anchors: could not unlink ${weakest.hostname}; keeping it`, false, "warning");
+        state.lastAnchorChange = now; // back off before retrying
+        return;
+    }
+    // Wait for the unlink to complete before linking the replacement (the slot is still taken until then)
+    state.anchorPending = { stage: "unlinking", remove: weakest.hostname, candidate: best, startedAt: now };
+}
+
+/** Start linking a candidate: directly when home can exec there, otherwise via the server's own probe. */
+async function startAnchorLink(ns, state, options, cand, replaced) {
+    let direct = cand.direct;
+    if (direct && !(await execStasisLink(ns, state, cand.hostname, true, options))) direct = false; // fall back to its probe
+    state.anchorPending = { stage: "linking", add: cand.hostname, startedAt: Date.now(), direct, replaced };
+    publishAnchorCommand(ns, direct ? [] : [cand.hostname]);
+    log(ns, `Anchors: linking ${cand.hostname} (score ${cand.score.toFixed(0)}, ${direct ? "direct" : "via its probe"})`);
 }
 
 /**
