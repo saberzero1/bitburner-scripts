@@ -1812,19 +1812,20 @@ async function ensureHomeProbe(ns, state, options) {
 //
 // Phases:
 //  - push:   while the current labyrinth is unsolved (and our charisma meets its requirement), anchors serve
-//            depth: labyrinth neighbours first, then footholds in the deepest air-gap segment reached, then
-//            staging servers right before the next air gap.
+//            depth: one labyrinth neighbour (to host the solver), then footholds in the deepest air-gap segment
+//            reached (deeper is better, so they can't drift back across the gap), with a bonus for a charger 4 rows
+//            before the gap being crossed (it charges its neighbours' migrations and is itself out of range).
 //  - stable: once the labyrinth is solved (or out of reach), anchors keep high-RAM servers stable.
 //
 // Swaps are conservative: an anchor is held at least ANCHOR_MIN_HOLD_MS, a candidate must beat the weakest
-// anchor by 25%, must be verified ready (authenticated, online, enough RAM, reachable or running a probe)
+// anchor by ANCHOR_REPLACE_MARGIN points, must be verified ready (authenticated, online, enough RAM, reachable or running a probe)
 // before anything is unlinked, and only one change is in flight at a time.
 
-const ANCHOR_MIN_HOLD_MS = 10 * 60 * 1000;
+const ANCHOR_MIN_HOLD_MS = 5 * 60 * 1000;
 const ANCHOR_SWAP_COOLDOWN_MS = 2 * 60 * 1000;
 const ANCHOR_LINK_TIMEOUT_MS = 3 * 60 * 1000;
 const ANCHOR_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
-const ANCHOR_REPLACE_MARGIN = 1.25;
+const ANCHOR_REPLACE_MARGIN = 100; // score points (a new frontier foothold beats an old one or a charger)
 const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
 
 /** Determine the anchoring phase and the labyrinth it is targeting. */
@@ -1850,7 +1851,7 @@ async function getAnchorPhase(ns, state) {
     return { phase: "push", lab, reason: "labyrinth unsolved" };
 }
 
-function scoreAnchor(ns, state, hostname, phaseInfo, frontierSegment) {
+function scoreAnchor(ns, state, hostname, phaseInfo, ctx) {
     const depth = state.serverDepths.get(hostname) ?? 0;
     let ram = 0;
     try {
@@ -1862,12 +1863,15 @@ function scoreAnchor(ns, state, hostname, phaseInfo, frontierSegment) {
     }
     let score = depth * 10; // deeper is better
     const segment = Math.floor(depth / AIR_GAP_DEPTH);
-    if (segment === frontierSegment && depth > 0) score += 200; // foothold in the deepest segment reached
-    const labDepth = phaseInfo.lab ? state.serverDepths.get(phaseInfo.lab) : undefined;
-    // Staging point right before an air gap we still need to cross (migrations ride across from here)
-    if (depth % AIR_GAP_DEPTH === AIR_GAP_DEPTH - 1 && (labDepth === undefined || labDepth > depth)) score += 150;
-    // Next to the unsolved labyrinth: needed to run the solver
-    if (phaseInfo.lab && state.labyrinthNeighbors.get(phaseInfo.lab)?.has(hostname)) score += 1000;
+    // Foothold in the deepest segment reached: an anchored server can't be moved back across the gap, never loses
+    // its connections, and home can exec on it at any distance (probes are redeployed there if they die)
+    if (segment === ctx.frontierSegment && depth > 0) score += 400;
+    // Charger before the gap being crossed: a stable host whose probe charges its neighbours' migrations. An anchor
+    // can't migrate itself, so prefer the row just out of migration range (gap - 4) over the launch rows.
+    if (ctx.gap && depth >= ctx.gap - 4 && depth < ctx.gap) score += (depth === ctx.gap - 4 ? 150 : 75) + Math.min(ram / 32, 50);
+    // Next to the unsolved labyrinth: the solver needs one host there; more anchors there add little
+    if (phaseInfo.lab && state.labyrinthNeighbors.get(phaseInfo.lab)?.has(hostname))
+        score += !ctx.labAnchor || ctx.labAnchor === hostname ? 1000 : 50;
     if (depth <= 3) score -= 100; // the game keeps shallow servers dense; anchors add little there
     score += Math.min(ram / 64, 25); // tie-breaker
     return score;
@@ -1929,11 +1933,23 @@ async function manageAnchors(ns, state, options) {
         state.anchorPhase = phaseInfo.phase;
     }
 
-    // Deepest air-gap segment we hold any authenticated server in
+    // Deepest air-gap segment we hold any authenticated server in, the gap being crossed, and the (largest) anchored
+    // labyrinth neighbour
     let frontierSegment = 0;
     for (const [h, depth] of state.serverDepths)
         if (isServerAuthenticated(state, h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
-    const score = (h) => scoreAnchor(ns, state, h, phaseInfo, frontierSegment);
+    const labNeighbors = phaseInfo.lab ? state.labyrinthNeighbors.get(phaseInfo.lab) : undefined;
+    let labAnchor = null;
+    const maxRamOf = (h) => {
+        try {
+            return ns.getServerMaxRam(h);
+        } catch {
+            return 0;
+        }
+    };
+    for (const h of linked) if (labNeighbors?.has(h) && (!labAnchor || maxRamOf(h) > maxRamOf(labAnchor))) labAnchor = h;
+    const ctx = { frontierSegment, gap: options["enable-migration"] ? getFrontierGap(ns, state) : 0, labAnchor };
+    const score = (h) => scoreAnchor(ns, state, h, phaseInfo, ctx);
 
     // 1. A change in flight: link/unlink each take ~30s (setStasisLink duration), so wait for confirmation.
     const pending = state.anchorPending;
@@ -1964,17 +1980,24 @@ async function manageAnchors(ns, state, options) {
     }
     publishAnchorCommand(ns, []);
 
-    // 2. Rank ready candidates
+    // 2. Rank candidates. Only cracked servers with room for the link can be anchored; filter them first (the deepest
+    // discovered servers are mostly uncracked, and used to fill the whole shortlist, so nothing away from the
+    // labyrinth was ever anchored).
     const candidates = [];
     for (const [hostname] of state.discoveredServers) {
-        if (linked.has(hostname)) continue;
+        if (linked.has(hostname) || !isServerAuthenticated(state, hostname)) continue;
+        let maxRam = 0;
+        try {
+            maxRam = ns.getServerMaxRam(hostname);
+        } catch {}
+        if (maxRam < STASIS_RAM_NEEDED) continue;
         const s = score(hostname);
         if (s <= 0) continue;
         candidates.push({ hostname, score: s });
     }
     candidates.sort((a, b) => b.score - a.score);
     const pickReady = () => {
-        for (const c of candidates.slice(0, 15)) {
+        for (const c of candidates.slice(0, 30)) {
             const r = anchorReadiness(ns, state, c.hostname);
             if (r.ok) return { ...c, direct: r.direct };
             if (options.verbose) log(ns, `Anchors: candidate ${c.hostname} (score ${c.score.toFixed(0)}) not ready: ${r.reason}`);
@@ -2001,10 +2024,10 @@ async function manageAnchors(ns, state, options) {
         if (!weakest || s < weakest.score) weakest = { hostname: h, score: s };
     }
     if (!weakest || !candidates.length) return;
-    if (candidates[0].score <= weakest.score * ANCHOR_REPLACE_MARGIN + 25) return;
+    if (candidates[0].score <= weakest.score + ANCHOR_REPLACE_MARGIN) return;
     // Verify the replacement is ready BEFORE unlinking anything
     const best = pickReady();
-    if (!best || best.score <= weakest.score * ANCHOR_REPLACE_MARGIN + 25) return;
+    if (!best || best.score <= weakest.score + ANCHOR_REPLACE_MARGIN) return;
     log(ns, `Anchors: replacing ${weakest.hostname} (score ${weakest.score.toFixed(0)}) with ${best.hostname} (score ${best.score.toFixed(0)}) [${phaseInfo.phase}]`);
     const removed = await execStasisLink(ns, state, weakest.hostname, false, options);
     if (!removed) {
