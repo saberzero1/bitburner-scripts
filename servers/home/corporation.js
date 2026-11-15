@@ -40,6 +40,18 @@ const argsSchema = [
     ["no-dummy-divisions", false], // Dummy divisions raise valuation (offers); disable to save funds
     ["no-public", false], // Don't go public after the last investment round
     ["investment-rounds", 4], // Investment offers to accept (0-4) before going public. Each round sells shares (10/35/25/20%).
+    // Round 3+ product-division spending (tuned with tools/corp-sim):
+    ["budget", ""], // JSON weights overriding the split, keys: employeeStats salesBot projectInsight smartFactories space wilson advert mainOffice supportOffices
+    ["spend-interval", 5], // cycles between budgeted improvements
+    ["spend-fraction", 0.9], // share of available funds each improvement round
+    ["product-share", 0.01], // share of corporation funds invested in each new product (min $1b)
+    ["support-scale", 1], // multiplier on Agriculture/Chemical budgets (from profit)
+    ["interns", true], // give offices of 9+ employees 1/9 Interns, which stops energy/morale decay (instead of tea/parties)
+    ["tea-below", 3], // buy tea when energy is this far below max
+    ["party-below", 5], // throw a party when morale is this far below max
+    ["party-max", 500e3], // max party spend per employee (parties are sized to reach max morale). Topping up
+    // every cycle at up to $5m per employee was over half of all spending in a BN12-sized corp (tools/corp-sim).
+    ["support-seed", 1], // multiplier on the one-time round-3 Agriculture/Chemical starting budgets (37.5%/7.5% of funds)
     ["dividend-rate", 0.1], // Dividend rate once public (0-1)
     ["verbose", false],
 ];
@@ -114,7 +126,7 @@ const RESEARCH_COST_MULT = {
 const PRODUCT_BUDGET = {
     rawProduction: 1 / 23,
     wilsonAdvert: 4 / 23,
-    office: 8 / 23,
+    office: 16 / 23, // catloversg uses 8/23; doubling it took off ~35% sooner in tools/corp-sim (BN12), same in BN3
     employeeStats: 8 / 23,
     salesBot: 1 / 23,
     projectInsight: 1 / 23,
@@ -191,8 +203,10 @@ for(const [job,n] of Object.entries(o.hire||{}))for(let i=0;i<n;i++){if(c.hireEm
     finance2: dispatchOp(["issueDividends", "createCorporation"]),
     // Budgeted levelling (60 GB): [{kind:"upgrade"|"advert", name|div, budget, maxLevels}]
     spend: `(()=>{const c=ns.corporation;const out=[];for(const o of JSON.parse(ns.args[0])){let budget=o.budget,n=0,spent=0;
-try{for(;n<(o.maxLevels??1e9);n++){const cost=o.kind==="upgrade"?c.getUpgradeLevelCost(o.name):c.getHireAdVertCost(o.div);
-if(!(cost<=budget))break;if(o.kind==="upgrade")c.levelUpgrade(o.name);else c.hireAdVert(o.div);budget-=cost;spent+=cost;}}catch(e){out.push({error:String(e?.message??e)});continue;}
+try{for(;n<(o.maxLevels??1e9);n++){let nm=o.name,cost;
+if(o.kind==="cheapest"){cost=Infinity;for(const x of o.names){const k=c.getUpgradeLevelCost(x);if(k<cost){cost=k;nm=x;}}}
+else cost=o.kind==="upgrade"?c.getUpgradeLevelCost(nm):c.getHireAdVertCost(o.div);
+if(!(cost<=budget))break;if(o.kind==="advert")c.hireAdVert(o.div);else c.levelUpgrade(nm);budget-=cost;spent+=cost;}}catch(e){out.push({error:String(e?.message??e)});continue;}
 out.push({n,spent});}return out;})()`,
     // Warehouse space (60 GB): greedily buy warehouse levels vs Smart Storage by space per $.
     // payload: [{budget, smartStorage, divs:{div:{city:level}}, maxWarehouseLevel?, allowSmartStorage}]
@@ -792,7 +806,11 @@ function planOfficesAndJobs(ctx, plan) {
             plan.add("officeGrow", { div: t.div, city: t.city, grow: t.size - size, budget: cost * 1.01, hire: {} });
             size = t.size;
         }
-        const wanted = t.jobsFn(size);
+        let wanted = t.jobsFn(size);
+        if (ctx.options.interns && size >= 9 && !wanted.Intern) {
+            const interns = Math.ceil(size / 9);
+            wanted = { ...t.jobsFn(size - interns), Intern: interns };
+        }
         assignJobs(ctx, plan, t.div, t.city, office, size, wanted);
     }
 }
@@ -824,22 +842,23 @@ function planTeaAndParties(ctx, plan) {
     // Only when energy/morale are below max. (catloversg buys every cycle from round 3; at ~$1m per employee per
     // cycle that is noise at BN3 scale but was the entire profit of a BN12-sized corp in simulation.)
     const everyCycle = false;
-    const epsilon = 0.5;
+    const teaBelow = ctx.options["tea-below"];
+    const partyBelow = ctx.options["party-below"];
     for (const [name, d] of Object.entries(ctx.snap.divs)) {
         if (name.startsWith(DUMMY_PREFIX)) continue;
         for (const [city, office] of Object.entries(d.offices ?? {})) {
             if (!office.numEmployees) continue;
-            if (everyCycle || office.avgEnergy < office.maxEnergy - epsilon) {
+            if (everyCycle || office.avgEnergy < office.maxEnergy - teaBelow) {
                 const cost = ctx.constants.teaCostPerEmployee * office.numEmployees;
                 if (cost <= ctx.funds) {
                     take(ctx, cost);
                     plan.add("jobs", ["buyTea", name, city]);
                 }
             }
-            if (everyCycle || office.avgMorale < office.maxMorale - epsilon) {
+            if (everyCycle || office.avgMorale < office.maxMorale - partyBelow) {
                 // Party multiplier is 1 + cost/1e7 and adds cost/1e6 morale: size it to reach max morale when
                 // possible (capped), but at least the standard $500k per employee.
-                const perEmployee = Math.max(500e3, Math.min(partyCostToMax(office), 5e6));
+                const perEmployee = Math.max(500e3, Math.min(partyCostToMax(office), ctx.options["party-max"]));
                 const cost = perEmployee * office.numEmployees;
                 if (cost <= ctx.funds) {
                     take(ctx, cost);
@@ -926,14 +945,15 @@ function planLateSpending(ctx, plan) {
         st.supportSeeded = true;
         st.lastImprove[AGRI] = st.lastImprove[CHEM] = st.cycle;
         const seed = Math.min(ctx.funds, 400e9);
-        improveSupportDivision(ctx, plan, AGRI, take(ctx, seed * 0.375));
-        if (ctx.has(CHEM)) improveSupportDivision(ctx, plan, CHEM, take(ctx, seed * 0.075));
+        const k = ctx.options["support-seed"];
+        improveSupportDivision(ctx, plan, AGRI, take(ctx, seed * 0.375 * k));
+        if (ctx.has(CHEM)) improveSupportDivision(ctx, plan, CHEM, take(ctx, seed * 0.075 * k));
     }
 
-    if (since(TOB) >= 5) {
+    if (since(TOB) >= ctx.options["spend-interval"]) {
         st.lastImprove[TOB] = st.cycle;
-        const budget = take(ctx, ctx.funds * 0.9);
-        const mainShare = round === 3 ? 0.75 : 0.5; // offices: main office gets most of the budget
+        const budget = take(ctx, ctx.funds * ctx.options["spend-fraction"]);
+        const mainShare = 0.5; // main vs other offices; favouring the main office was slower in tools/corp-sim
         const parts = {
             employeeStats: PRODUCT_BUDGET.employeeStats,
             salesBot: PRODUCT_BUDGET.salesBot,
@@ -945,9 +965,13 @@ function planLateSpending(ctx, plan) {
             mainOffice: PRODUCT_BUDGET.office * mainShare,
             supportOffices: PRODUCT_BUDGET.office * (1 - mainShare),
         };
+        const custom = ctx.options.budget;
+        if (custom) Object.assign(parts, typeof custom === "string" ? JSON.parse(custom) : custom);
+        const sum = Object.values(parts).reduce((a, x) => a + x, 0);
+        for (const k of Object.keys(parts)) parts[k] /= sum;
         const b = {};
         for (const [k, portion] of Object.entries(parts)) b[k] = bankBudget(ctx, `${TOB}:${k}`, budget * portion);
-        for (const name of EMPLOYEE_STAT_UPGRADES) plan.add("spend", { kind: "upgrade", name, budget: b.employeeStats / 4 }, null, `${TOB}:employeeStats`);
+        plan.add("spend", { kind: "cheapest", names: EMPLOYEE_STAT_UPGRADES, budget: b.employeeStats }, null, `${TOB}:employeeStats`);
         plan.add("spend", { kind: "upgrade", name: "ABC SalesBots", budget: b.salesBot }, null, `${TOB}:salesBot`);
         plan.add("spend", { kind: "upgrade", name: "Project Insight", budget: b.projectInsight }, null, `${TOB}:projectInsight`);
         plan.add("spend", { kind: "upgrade", name: "Smart Factories", budget: b.smartFactories }, null, `${TOB}:smartFactories`);
@@ -960,12 +984,13 @@ function planLateSpending(ctx, plan) {
     }
 
     // Support divisions: smaller budgets from profit
-    const agriBudget = Math.max(0, Math.min(profit * (round <= 4 ? 0.9 : 0.99), ctx.funds * 0.09));
+    const ss = ctx.options["support-scale"];
+    const agriBudget = Math.max(0, Math.min(profit * (round <= 4 ? 0.9 : 0.99) * ss, ctx.funds * 0.09 * ss));
     if (since(AGRI) >= 10 && ctx.has(AGRI) && agriBudget > 0) {
         st.lastImprove[AGRI] = st.cycle;
         improveSupportDivision(ctx, plan, AGRI, take(ctx, agriBudget));
     }
-    const chemBudget = Math.max(0, Math.min(profit * (round <= 4 ? 0.1 : 0.01), ctx.funds * 0.01));
+    const chemBudget = Math.max(0, Math.min(profit * (round <= 4 ? 0.1 : 0.01) * ss, ctx.funds * 0.01 * ss));
     if (since(CHEM) >= 15 && ctx.has(CHEM) && chemBudget > 0) {
         st.lastImprove[CHEM] = st.cycle;
         improveSupportDivision(ctx, plan, CHEM, take(ctx, chemBudget));
@@ -981,14 +1006,29 @@ function improveSupportDivision(ctx, plan, div, budget) {
 }
 
 /** Grow offices in `cities` using `budget`, split evenly (the op re-checks the exact cost). */
+/** Grow offices in `cities` with `budget`: repeatedly add 3 to the smallest office while affordable. (An even
+ * split left each city's share below the cost of one step, so small budgets bought nothing.) */
 function growOffice(ctx, plan, div, cities, budget, bank = null) {
-    const per = budget / cities.length;
+    const sizes = {};
     for (const city of cities) {
         const office = ctx.div(div)?.offices[city];
-        if (!office || per <= 0) continue;
-        const grow = affordableOfficeGrowth(ctx, office.size, per);
-        if (grow < 3) continue;
-        plan.add("officeGrow", { div, city, grow, budget: per, hire: {} }, null, bank);
+        if (office) sizes[city] = office.size;
+    }
+    const start = { ...sizes };
+    const cost = {};
+    let left = budget;
+    for (let guard = 0; guard < 1000; guard++) {
+        const city = Object.keys(sizes).sort((a, b) => sizes[a] - sizes[b])[0];
+        if (!city) break;
+        const step = officeUpgradeCost(ctx, sizes[city], 3);
+        if (step > left) break;
+        left -= step;
+        sizes[city] += 3;
+        cost[city] = (cost[city] ?? 0) + step;
+    }
+    for (const city of Object.keys(sizes)) {
+        const grow = sizes[city] - start[city];
+        if (grow > 0) plan.add("officeGrow", { div, city, grow, budget: cost[city] * 1.01, hire: {} }, null, bank);
     }
 }
 
@@ -998,12 +1038,6 @@ function officeUpgradeCost(ctx, size, increase) {
     return (ctx.constants.officeInitialCost / 0.09) * 1.09 ** (size / 3) * (1.09 ** (increase / 3) - 1);
 }
 
-/** Largest office size increase (multiple of 3) affordable with `budget`: inverse of officeUpgradeCost. */
-function affordableOfficeGrowth(ctx, size, budget) {
-    const base = (ctx.constants.officeInitialCost / 0.09) * 1.09 ** (size / 3);
-    const increase = 3 * Math.log(1 + budget / base) / Math.log(1.09);
-    return Math.max(0, Math.floor(increase / 3) * 3);
-}
 
 // ─── Boost materials ──────────────────────────────────────────────────────────
 
@@ -1227,7 +1261,7 @@ function planProducts(ctx, plan) {
 
     // Develop a new product when none is in progress (limited count in rounds 3/4)
     if (!developing.length && developedCount < maxForRound) {
-        const budget = Math.max(1e9, Math.min(ctx.funds, ctx.corp.funds * 0.01));
+        const budget = Math.max(1e9, Math.min(ctx.funds, ctx.corp.funds * ctx.options["product-share"]));
         if (budget > ctx.funds) {
             // Save up for it: without this, upgrades bought from each cycle's profit never leave enough
             ctx.funds = 0;
