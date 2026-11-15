@@ -988,7 +988,7 @@ function manageProducts(ns) {
 function setJob(ns, div, city, job, total) {
     if (ns.ui.getGameInfo()?.versionNumber >= 44)
         ns.corporation.setJobAssignment(div, city, job, total);
-    else ns.corporation.setAutoJobAssignment(div, city, job, total);
+    else ns.corporation.setJobAssignment(div, city, job, total);
 }
 function manageOffice(ns) {
     const c = ns.corporation;
@@ -3518,8 +3518,8 @@ function updateHud(ns) {
     else
         ns.printf(
             "Funds : $%s  Profit: $%s/s",
-            ns.formatNumber(cObj.funds, 3),
-            ns.formatNumber(cObj.revenue - cObj.expenses, 3),
+            ns.format.number(cObj.funds, 3),
+            ns.format.number(cObj.revenue - cObj.expenses, 3),
         );
     const invest = investOffer;
     const upgrades =
@@ -3555,8 +3555,8 @@ function updateHud(ns) {
         ns.printf(
             "Round: %s  Offer: %s FundsReq: %s  %s",
             invest.round,
-            ns.formatNumber(invest.funds, 3),
-            ns.formatNumber(offer, 3),
+            ns.format.number(invest.funds, 3),
+            ns.format.number(offer, 3),
             minRound,
         );
     if (ns.ui.getGameInfo()?.versionNumber >= 44)
@@ -3607,12 +3607,12 @@ function updateHud(ns) {
                 "-%s(%s)  Profit: $%s/s  Awareness: %s  Pop: %s",
                 div,
                 division.type,
-                ns.formatNumber(
+                ns.format.number(
                     division.lastCycleRevenue - division.lastCycleExpenses,
                     3,
                 ),
-                ns.formatNumber(division.awareness, 3),
-                ns.formatNumber(division.popularity, 3),
+                ns.format.number(division.awareness, 3),
+                ns.format.number(division.popularity, 3),
             );
         let wCount = 0;
         let wSpace = 0;
@@ -3655,7 +3655,7 @@ function updateHud(ns) {
                 oCount,
                 oEmployees,
                 oSize,
-                ns.formatNumber(division.researchPoints, 3),
+                ns.format.number(division.researchPoints, 3),
             );
         if (indDataDB[hasDivDB[div].type] === undefined)
             indDataDB[hasDivDB[div].type] = c.getIndustryData(division.type);
@@ -3683,7 +3683,7 @@ function updateHud(ns) {
                         else
                             ns.printf(
                                 "  $%s - %s",
-                                ns.formatNumber(
+                                ns.format.number(
                                     getSellPrice(ns, div, "Sector-12", product),
                                     3,
                                 ),
@@ -3701,7 +3701,7 @@ function updateHud(ns) {
                     else
                         ns.printf(
                             "  %s%s - %s",
-                            ns.formatNumber(prog, 2),
+                            ns.format.number(prog, 2),
                             "%",
                             product,
                         );

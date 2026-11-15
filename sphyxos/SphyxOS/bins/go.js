@@ -66,12 +66,12 @@ export async function main(ns) {
     you = me === "X" ? "O" : "X";
 
     ns.atExit(() => {
-        ns.clearPort(5);
-        ns.writePort(1, 1);
+        ns.port.clear(5);
+        ns.port.write(1, 1);
         if (win) win.close();
     });
-    ns.clearPort(5);
-    ns.writePort(5, ns.pid); //We are running!
+    ns.port.clear(5);
+    ns.port.write(5, ns.pid); //We are running!
     const startBoard = await getBState(ns);
     let inProgress = false;
     turn = 0;
@@ -490,7 +490,7 @@ function update(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.writePort(1, "ipvgo popout off");
+        ns.port.write(1, "ipvgo popout off");
     }
     if (win) win.update(text);
 }
@@ -524,9 +524,9 @@ function getStyle(ns) {
 async function getCommands(ns) {
     let changed = false;
     let silent = false;
-    while (ns.peek(15) !== "NULL PORT DATA") {
+    while (ns.port.peek(15) !== "NULL PORT DATA") {
         changed = true;
-        switch (ns.readPort(15)) {
+        switch (ns.port.read(15)) {
             case "popout":
                 win = await makeNewWindow("Go", ns.ui.getTheme());
                 if (!silent) ns.tprintf("IPvGo:  Popout On!");
@@ -2110,8 +2110,8 @@ async function movePiece(ns, attack) {
                 ns,
                 ns.sprintf(
                     "Time: Me: %s  Them: %s",
-                    ns.tFormat(mid - START, true),
-                    ns.tFormat(END - mid, true),
+                    ns.format.time(mid - START, true),
+                    ns.format.time(END - mid, true),
                 ),
             );
     }
@@ -2148,8 +2148,8 @@ async function moveWallBreaker(ns, attack) {
                     ns,
                     ns.sprintf(
                         "Time: Me: %s  Them: %s",
-                        ns.tFormat(mid - START, true),
-                        ns.tFormat(END - mid, true),
+                        ns.format.time(mid - START, true),
+                        ns.format.time(END - mid, true),
                     ),
                 );
         }
@@ -2189,8 +2189,8 @@ async function moveSnakeEyes(ns, attack) {
                     ns,
                     ns.sprintf(
                         "Time: Me: %s  Them: %s",
-                        ns.tFormat(mid - START, true),
-                        ns.tFormat(END - mid, true),
+                        ns.format.time(mid - START, true),
+                        ns.format.time(END - mid, true),
                     ),
                 );
         }

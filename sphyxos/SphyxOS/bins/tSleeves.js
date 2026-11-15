@@ -24,14 +24,14 @@ let win;
 /** @param {NS} ns */
 export async function main(ns) {
     ns.disableLog("ALL");
-    ns.clearPort(7);
-    ns.writePort(7, ns.pid);
+    ns.port.clear(7);
+    ns.port.write(7, ns.pid);
     ns.atExit(() => {
-        ns.clearPort(7);
-        ns.writePort(1, 1);
+        ns.port.clear(7);
+        ns.port.write(1, 1);
         if (win) {
             win.close();
-            ns.writePort(1, "sleeves popout off");
+            ns.port.write(1, "sleeves popout off");
         }
     });
     win = false;
@@ -328,15 +328,15 @@ async function displaySleeves(ns, sleeves) {
                     ns.sprintf(
                         "%s: %8s %8s %8s %8s %8s %8s %8s %3s %5s %8s %s",
                         slv.num,
-                        ns.formatNumber(slv.me.skills.hacking, 3),
-                        ns.formatNumber(slv.me.skills.strength, 3),
-                        ns.formatNumber(slv.me.skills.defense, 3),
-                        ns.formatNumber(slv.me.skills.dexterity, 3),
-                        ns.formatNumber(slv.me.skills.agility, 3),
-                        ns.formatNumber(slv.me.skills.charisma, 3),
-                        ns.formatNumber(slv.me.skills.intelligence),
+                        ns.format.number(slv.me.skills.hacking, 3),
+                        ns.format.number(slv.me.skills.strength, 3),
+                        ns.format.number(slv.me.skills.defense, 3),
+                        ns.format.number(slv.me.skills.dexterity, 3),
+                        ns.format.number(slv.me.skills.agility, 3),
+                        ns.format.number(slv.me.skills.charisma, 3),
+                        ns.format.number(slv.me.skills.intelligence),
                         augs,
-                        ns.formatNumber(slv.me.shock, 2),
+                        ns.format.number(slv.me.shock, 2),
                         slv.task === null ? "Shock Recovery" : slv.task?.type,
                         slv.task?.actionType ||
                             slv.task?.classType ||
@@ -350,14 +350,14 @@ async function displaySleeves(ns, sleeves) {
                     ns.sprintf(
                         "%s: %8s %8s %8s %8s %8s %8s %8s %3s %5s %8s %s",
                         slv.num,
-                        ns.formatNumber(slv.me.skills.hacking, 3),
-                        ns.formatNumber(slv.me.skills.strength, 3),
-                        ns.formatNumber(slv.me.skills.defense, 3),
-                        ns.formatNumber(slv.me.skills.dexterity, 3),
-                        ns.formatNumber(slv.me.skills.agility, 3),
-                        ns.formatNumber(slv.me.skills.charisma, 3),
+                        ns.format.number(slv.me.skills.hacking, 3),
+                        ns.format.number(slv.me.skills.strength, 3),
+                        ns.format.number(slv.me.skills.defense, 3),
+                        ns.format.number(slv.me.skills.dexterity, 3),
+                        ns.format.number(slv.me.skills.agility, 3),
+                        ns.format.number(slv.me.skills.charisma, 3),
                         augs,
-                        ns.formatNumber(slv.me.shock, 2),
+                        ns.format.number(slv.me.shock, 2),
                         slv.task === null ? "Shock Recovery" : slv.task?.type,
                         slv.task?.actionType ||
                             slv.task?.classType ||
@@ -370,8 +370,8 @@ async function displaySleeves(ns, sleeves) {
 }
 async function getCommands(ns) {
     let silent = false;
-    while (ns.peek(17) !== "NULL PORT DATA") {
-        let result = ns.readPort(17);
+    while (ns.port.peek(17) !== "NULL PORT DATA") {
+        let result = ns.port.read(17);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("Sleeves", ns.ui.getTheme());
@@ -464,7 +464,7 @@ function update(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.writePort(1, "sleeves popout off");
+        ns.port.write(1, "sleeves popout off");
     }
     if (win) win.update(text);
 }

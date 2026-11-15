@@ -147,7 +147,7 @@ export async function main(ns) {
         batches: batchesrun,
         batching: chunkSwitch,
     };
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(record));
 }
 /** @param {NS} ns */

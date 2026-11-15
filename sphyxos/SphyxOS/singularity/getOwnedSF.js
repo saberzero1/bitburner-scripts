@@ -10,6 +10,6 @@ export async function main(ns) {
             collection.push(record);
         }
     } catch {}
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(collection));
 }

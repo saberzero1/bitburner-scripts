@@ -661,7 +661,7 @@ export async function main(ns) {
         }
     } else if (
         ns.ui.getGameInfo()?.versionNumber === undefined &&
-        stks.has4SDataTIXAPI() &&
+        stks.has4SDataTixApi() &&
         !ns.args.includes("no4s")
     ) {
         S4DATA = true;
@@ -765,7 +765,7 @@ export async function main(ns) {
             }
         } else if (
             ns.ui.getGameInfo()?.versionNumber === undefined &&
-            stks.has4SDataTIXAPI() &&
+            stks.has4SDataTixApi() &&
             !ns.args.includes("no4s") &&
             !S4DATA
         ) {

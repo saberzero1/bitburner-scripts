@@ -5,15 +5,15 @@ export async function main(ns) {
     ns.disableLog("ALL");
     let g = ns.grafting;
     ns.atExit(() => {
-        ns.clearPort(20);
-        ns.writePort(1, true);
+        ns.port.clear(20);
+        ns.port.write(1, true);
         if (win) {
-            ns.writePort(1, "grafting popout off");
+            ns.port.write(1, "grafting popout off");
             win.close();
         }
     });
-    ns.clearPort(20);
-    ns.writePort(20, ns.pid);
+    ns.port.clear(20);
+    ns.port.write(20, ns.pid);
     win = false;
     let graftable = await proxy(ns, "grafting.getGraftableAugmentations");
     let queue = [];
@@ -124,7 +124,7 @@ export async function main(ns) {
             else
                 update(
                     ns,
-                    ns.sprintf("Will take a min of %s", ns.tFormat(graftTime)),
+                    ns.sprintf("Will take a min of %s", ns.format.time(graftTime)),
                 );
         }
         if (queue.length > 0) {
@@ -149,7 +149,7 @@ export async function main(ns) {
                         ns.sprintf(
                             "Queued: %s for $%s",
                             queue[0],
-                            ns.tFormat(price, 3),
+                            ns.format.time(price, 3),
                         ),
                     );
             } else update(ns, "Queued: Invalid and will be skipped.");
@@ -205,7 +205,7 @@ export async function main(ns) {
                         ns,
                         ns.sprintf(
                             "Will take a min of %s",
-                            ns.tFormat(graftTime),
+                            ns.format.time(graftTime),
                         ),
                     );
             }
@@ -231,7 +231,7 @@ export async function main(ns) {
                             ns.sprintf(
                                 "Queued: %s for $%s",
                                 queue[0],
-                                ns.tFormat(price, 3),
+                                ns.format.time(price, 3),
                             ),
                         );
                 } else update(ns, "Queued: Invalid and will be skipped.");
@@ -277,15 +277,15 @@ function update(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.writePort(1, "grafting popout off");
+        ns.port.write(1, "grafting popout off");
     }
     if (win) win.update(text);
 }
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.peek(23) !== "NULL PORT DATA") {
-        let result = ns.readPort(23);
+    while (ns.port.peek(23) !== "NULL PORT DATA") {
+        let result = ns.port.read(23);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("Grafting", ns.ui.getTheme());

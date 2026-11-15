@@ -18,7 +18,7 @@ export async function main(ns) {
             worker.onerror = null;
             worker = null;
         });
-        ns.writePort(40, true);
+        ns.port.write(40, true);
     });
     //ns.args:  0 is server  1 is script name
     const servers = ns.args.includes("darknet")

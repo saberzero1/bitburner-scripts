@@ -3,11 +3,11 @@ import { getServersLight, runIt } from "SphyxOS/util.js";
 export async function main(ns) {
     ns.disableLog("ALL");
     ns.clearLog();
-    ns.atExit(() => ns.writePort(40, true));
+    ns.atExit(() => ns.port.write(40, true));
     if (!ns.args.includes("quiet")) ns.ui.openTail();
     const all = ns.args.includes("all");
     const allServers = await getServersLight(ns);
-    const purchasedServers = ns.getPurchasedServers();
+    const purchasedServers = ns.cloud.getServerNames();
     const hackingLevel = ns.getHackingLevel();
     const servers = all
         ? allServers.filter(
@@ -41,7 +41,7 @@ export async function main(ns) {
     servers.forEach((s) => (eta += ns.getHackTime(s) / 4));
     if (ns.ui.getGameInfo()?.versionNumber >= 44)
         ns.printf("Max ETA: %s", ns.format.time(eta), 3);
-    else ns.printf("Max ETA: %s", ns.tFormat(eta), 3);
+    else ns.printf("Max ETA: %s", ns.format.time(eta), 3);
     let runningScripts = 0;
     for (let point of servers) {
         let target = point;
@@ -68,7 +68,7 @@ export async function main(ns) {
                 ns.printf(
                     "Server(Local): %s - %s",
                     point,
-                    ns.tFormat(ns.getHackTime(point) / 4),
+                    ns.format.time(ns.getHackTime(point) / 4),
                 );
             await ns.singularity.installBackdoor();
             ns.printf("Installed backdoor on %s", point);
@@ -84,9 +84,9 @@ export async function main(ns) {
                 ns.printf(
                     "Server(Remote): %s - %s",
                     point,
-                    ns.tFormat(ns.getHackTime(point) / 4),
+                    ns.format.time(ns.getHackTime(point) / 4),
                 );
-            ns.nextPortWrite(runningPid).then(() => {
+            ns.port.nextWrite(runningPid).then(() => {
                 ns.printf("Installed backdoor on %s", point);
                 runningScripts--;
             });
@@ -105,7 +105,7 @@ export async function main(ns) {
         ns.printf(
             "Finished %s servers in %s",
             servers.length,
-            ns.tFormat(performance.now() - startTime),
+            ns.format.time(performance.now() - startTime),
         );
 }
 const targets = [

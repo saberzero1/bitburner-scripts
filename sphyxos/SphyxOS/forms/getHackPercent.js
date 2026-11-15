@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export function getHackPercent(ns) {
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(hackperc));
 
     const host = ns.getServer(ns.args[0]);

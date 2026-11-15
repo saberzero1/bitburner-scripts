@@ -72,9 +72,9 @@ export async function main(ns) {
     if (threads >= 1)
         ns.tprintf("Failed to allocate all threads for script: %s", script);
 
-    await ns.nextPortWrite(thispid);
-    const result = ns.readPort(thispid);
-    ns.atExit(() => ns.writePort(ns.pid, result));
+    await ns.port.nextWrite(thispid);
+    const result = ns.port.read(thispid);
+    ns.atExit(() => ns.port.write(ns.pid, result));
 }
 
 /** @param {NS} ns */

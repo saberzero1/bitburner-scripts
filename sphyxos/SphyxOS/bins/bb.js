@@ -102,13 +102,13 @@ export async function main(ns) {
     ns.ui.openTail();
     win = false;
     ns.atExit(() => {
-        ns.clearPort(8);
-        ns.writePort(1, 1);
+        ns.port.clear(8);
+        ns.port.write(1, 1);
         if (win) win.close();
     });
-    ns.clearPort(8);
-    ns.writePort(8, ns.pid);
-    ns.writePort(1, true);
+    ns.port.clear(8);
+    ns.port.write(8, ns.pid);
+    ns.port.write(1, true);
 
     await getCommands(ns);
     await init(ns);
@@ -885,7 +885,7 @@ async function updatedisplay(ns) {
             ns,
             ns.sprintf(
                 "Rank: %s  Operations Queued: %s",
-                ns.formatNumber(await bbGetRank(ns)),
+                ns.format.number(await bbGetRank(ns)),
                 queues.length,
             ),
         );
@@ -905,9 +905,9 @@ async function updatedisplay(ns) {
             ns,
             ns.sprintf(
                 "Stamina: %s/%s(%s%s)",
-                ns.formatNumber(stamina[0]),
-                ns.formatNumber(stamina[1]),
-                ns.formatNumber((stamina[0] / stamina[1]) * 100, 2),
+                ns.format.number(stamina[0]),
+                ns.format.number(stamina[1]),
+                ns.format.number((stamina[0] / stamina[1]) * 100, 2),
                 "%",
             ),
         );
@@ -939,21 +939,21 @@ async function updatedisplay(ns) {
             ns,
             ns.sprintf(
                 "Est. Population: %s",
-                ns.formatNumber(await bbGetCityEstPop(ns, city)),
+                ns.format.number(await bbGetCityEstPop(ns, city)),
             ),
         );
         update(
             ns,
             ns.sprintf(
                 "Synth Comms: %s",
-                ns.formatNumber(await bbGetCityComms(ns, city), 0),
+                ns.format.number(await bbGetCityComms(ns, city), 0),
             ),
         );
         update(
             ns,
             ns.sprintf(
                 "Chaos: %s",
-                ns.formatNumber(await bbGetCityChaos(ns, city)),
+                ns.format.number(await bbGetCityChaos(ns, city)),
             ),
         );
     }
@@ -982,7 +982,7 @@ async function updatedisplay(ns) {
             ns,
             ns.sprintf(
                 "Skill Points: %s",
-                skillPoints > 1000 ? ns.formatNumber(skillPoints) : skillPoints,
+                skillPoints > 1000 ? ns.format.number(skillPoints) : skillPoints,
             ),
         );
         update(
@@ -990,7 +990,7 @@ async function updatedisplay(ns) {
             ns.sprintf(
                 "Bonus Time: %s",
                 b.getBonusTime() / 1000 >= 1000
-                    ? ns.formatNumber(b.getBonusTime() / 1000)
+                    ? ns.format.number(b.getBonusTime() / 1000)
                     : b.getBonusTime() / 1000,
             ),
         );
@@ -1037,7 +1037,7 @@ async function updatedisplay(ns) {
                 ns.sprintf(
                     "Progress: %s Time: %s",
                     updateprogress(actionTime, actionCurTime),
-                    ns.tFormat(actionTime - actionCurTime),
+                    ns.format.time(actionTime - actionCurTime),
                 ),
             );
     } else
@@ -1061,7 +1061,7 @@ async function updatedisplay(ns) {
             else
                 cycles =
                     currentSlv.storedCycles > 1000
-                        ? ns.formatNumber(currentSlv.storedCycles, 2)
+                        ? ns.format.number(currentSlv.storedCycles, 2)
                         : currentSlv.storedCycles;
             let buf = ns.sprintf("Sleeve: %s  Cycles: %-7s ", slv, cycles);
             if (task !== null) {
@@ -1158,7 +1158,7 @@ async function updatemissions(ns) {
                       ns,
                       ns.sprintf(
                           "Contracts: " +
-                              ns.formatNumber(count) +
+                              ns.format.number(count) +
                               " " +
                               contract,
                       ),
@@ -1167,7 +1167,7 @@ async function updatemissions(ns) {
                       ns,
                       ns.sprintf(
                           "Contracts: " +
-                              ns.formatNumber(count, 2) +
+                              ns.format.number(count, 2) +
                               " " +
                               contract,
                       ),
@@ -1184,7 +1184,7 @@ async function updatemissions(ns) {
                       ns,
                       ns.sprintf(
                           "Operation: " +
-                              ns.formatNumber(count) +
+                              ns.format.number(count) +
                               " " +
                               operation,
                       ),
@@ -1193,7 +1193,7 @@ async function updatemissions(ns) {
                       ns,
                       ns.sprintf(
                           "Operation: " +
-                              ns.formatNumber(count, 2) +
+                              ns.format.number(count, 2) +
                               " " +
                               operation,
                       ),
@@ -1459,7 +1459,7 @@ function clearLogs(ns) {
     if (win && win.closed) {
         win.close();
         win = false;
-        ns.writePort(1, "bb popout off");
+        ns.port.write(1, "bb popout off");
     }
     if (win) win.clear();
 }
@@ -1470,8 +1470,8 @@ function update(ns, text) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let quiet = false;
-    while (ns.peek(18) !== "NULL PORT DATA") {
-        let result = ns.readPort(18);
+    while (ns.port.peek(18) !== "NULL PORT DATA") {
+        let result = ns.port.read(18);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("BladeBurner", ns.ui.getTheme());

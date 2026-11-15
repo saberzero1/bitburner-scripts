@@ -25,6 +25,6 @@ export async function main(ns) {
         faction: bestFac,
         rep: bestRep,
     };
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(result));
 }

@@ -5,5 +5,5 @@ export async function main(ns) {
     let nsFunction = ns;
     for (let prop of func.split(".")) nsFunction = nsFunction[prop];
     const result = nsFunction(...argmnts);
-    ns.atExit(() => ns.writePort(ns.pid, result));
+    ns.atExit(() => ns.port.write(ns.pid, result));
 }

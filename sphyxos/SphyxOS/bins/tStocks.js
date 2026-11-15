@@ -49,12 +49,12 @@ export async function main(ns) {
     ns.disableLog("ALL");
     ns.atExit(() => {
         UpdateHud();
-        ns.clearPort(4);
-        ns.writePort(1, 1);
+        ns.port.clear(4);
+        ns.port.write(1, 1);
         if (win) win.close();
     });
-    ns.writePort(4, ns.pid);
-    ns.writePort(1, 1);
+    ns.port.write(4, ns.pid);
+    ns.port.write(1, 1);
     win = false;
     RESERVE = Number.isInteger(ns.args[0]) ? Number(ns.args[0]) : 0;
     await getCommands(ns);
@@ -100,7 +100,7 @@ export async function main(ns) {
     await printLogs(ns, stocks);
     if (ns.ui.getGameInfo()?.versionNumber >= 44)
         UpdateHud(ns.format.number(await getWorth(ns), 3));
-    else UpdateHud(ns.formatNumber(await getWorth(ns), 3));
+    else UpdateHud(ns.format.number(await getWorth(ns), 3));
     let count = 0;
     starttime = performance.now();
 
@@ -138,16 +138,16 @@ export async function main(ns) {
                 } else {
                     ns.tprintf(
                         "INFO: Success!  After 1 hour %s turned into %s (%s%%)",
-                        ns.formatNumber(STARTWORTH, 2),
-                        ns.formatNumber(combinedWorth, 2),
-                        ns.formatNumber((combinedWorth / STARTWORTH) * 100, 2),
+                        ns.format.number(STARTWORTH, 2),
+                        ns.format.number(combinedWorth, 2),
+                        ns.format.number((combinedWorth / STARTWORTH) * 100, 2),
                     );
                     newMsg(
                         ns,
                         "INFO: Success!  After 1 hour %s turned into %s (%s%%)",
-                        ns.formatNumber(STARTWORTH, 2),
-                        ns.formatNumber(combinedWorth, 2),
-                        ns.formatNumber((combinedWorth / STARTWORTH) * 100, 2),
+                        ns.format.number(STARTWORTH, 2),
+                        ns.format.number(combinedWorth, 2),
+                        ns.format.number((combinedWorth / STARTWORTH) * 100, 2),
                     );
                 }
             } else {
@@ -168,16 +168,16 @@ export async function main(ns) {
                 } else {
                     ns.tprintf(
                         "INFO: Fail!  After 1 hour %s turned into %s (%s%%)",
-                        ns.formatNumber(STARTWORTH, 2),
-                        ns.formatNumber(combinedWorth, 2),
-                        ns.formatNumber((combinedWorth / STARTWORTH) * 100, 2),
+                        ns.format.number(STARTWORTH, 2),
+                        ns.format.number(combinedWorth, 2),
+                        ns.format.number((combinedWorth / STARTWORTH) * 100, 2),
                     );
                     newMsg(
                         ns,
                         "INFO: Fail!  After 1 hour %s turned into %s (%s%%)",
-                        ns.formatNumber(STARTWORTH, 2),
-                        ns.formatNumber(combinedWorth, 2),
-                        ns.formatNumber((combinedWorth / STARTWORTH) * 100, 2),
+                        ns.format.number(STARTWORTH, 2),
+                        ns.format.number(combinedWorth, 2),
+                        ns.format.number((combinedWorth / STARTWORTH) * 100, 2),
                     );
                 }
             }
@@ -229,7 +229,7 @@ export async function main(ns) {
 
         if (ns.ui.getGameInfo()?.versionNumber >= 44)
             UpdateHud(ns.format.number(await getWorth(ns)));
-        else UpdateHud(ns.formatNumber(await getWorth(ns)));
+        else UpdateHud(ns.format.number(await getWorth(ns)));
 
         await ns.stock.nextUpdate();
         await getCommands(ns);
@@ -277,7 +277,7 @@ function update(ns, text) {
     ns.printRaw(text);
     if (win && win.closed) {
         win = false;
-        ns.writePort(1, "stocks popout off");
+        ns.port.write(1, "stocks popout off");
     }
     if (win) win.update(text);
 }
@@ -383,15 +383,15 @@ async function printLogs(ns, stocks) {
                     "│ %5s │ %4s │ %7s │ %7s │ %7s │ %8s │ %7s │ %6s │ %4s │",
                     stk.sym,
                     type,
-                    shares > 0 ? ns.formatNumber(shares, 2) : "-------",
-                    paid > 0 ? ns.formatNumber(paid, 2) : "-------",
-                    value > 0 ? ns.formatNumber(value, 2) : "-------",
-                    profit != 0 ? ns.formatNumber(profit, 2) : "--------",
+                    shares > 0 ? ns.format.number(shares, 2) : "-------",
+                    paid > 0 ? ns.format.number(paid, 2) : "-------",
+                    value > 0 ? ns.format.number(value, 2) : "-------",
+                    profit != 0 ? ns.format.number(profit, 2) : "--------",
                     percentchange != 0
-                        ? ns.formatNumber(percentchange, 2)
+                        ? ns.format.number(percentchange, 2)
                         : "-------",
-                    ns.formatNumber(stk.forcast, 2),
-                    ns.formatNumber(stk.volitile, 2),
+                    ns.format.number(stk.forcast, 2),
+                    ns.format.number(stk.volitile, 2),
                 ),
             );
     }
@@ -427,15 +427,15 @@ async function printLogs(ns, stocks) {
             ns,
             ns.sprintf(
                 "│Start: %8s│ %7s │ %7s │ %7s │ %8s │ %7s │Gain: %7s%% │",
-                "$" + ns.formatNumber(STARTWORTH, 2),
-                ns.formatNumber(totalshares, 2),
-                ns.formatNumber(totalpaid, 2),
-                ns.formatNumber(totalvalue, 2),
-                ns.formatNumber(totalprofit, 2),
-                ns.formatNumber(totalpercentchange, 2),
+                "$" + ns.format.number(STARTWORTH, 2),
+                ns.format.number(totalshares, 2),
+                ns.format.number(totalpaid, 2),
+                ns.format.number(totalvalue, 2),
+                ns.format.number(totalprofit, 2),
+                ns.format.number(totalpercentchange, 2),
                 STARTWORTH === 0
                     ? 0
-                    : ns.formatNumber((worth / STARTWORTH - 1) * 100, 2),
+                    : ns.format.number((worth / STARTWORTH - 1) * 100, 2),
             ),
         );
     update(
@@ -459,15 +459,15 @@ async function printLogs(ns, stocks) {
             ns,
             ns.sprintf(
                 "│Sales: %18s│Fees: %13s│Banked: %12s│",
-                "$" + ns.formatNumber(RUNNINGTOTAL, 2),
-                "$" + ns.formatNumber(RUNNINGCOST, 2),
-                "$" + ns.formatNumber(RUNNINGBANKED, 2),
+                "$" + ns.format.number(RUNNINGTOTAL, 2),
+                "$" + ns.format.number(RUNNINGCOST, 2),
+                "$" + ns.format.number(RUNNINGBANKED, 2),
             ),
         );
     const tm =
         ns.ui.getGameInfo()?.versionNumber >= 44
             ? ns.format.time(starttime + REPORT - performance.now())
-            : ns.tFormat(starttime + REPORT - performance.now());
+            : ns.format.time(starttime + REPORT - performance.now());
     update(
         ns,
         ns.sprintf(
@@ -580,8 +580,8 @@ async function sellItems(ns, stocks, arg) {
                     const msg = ns.sprintf(
                         "WARN: Selling %s long for $%s ($%s profit)",
                         stk.sym,
-                        ns.formatNumber(sellprice * stk.posi[0], 2),
-                        ns.formatNumber(profit, 2),
+                        ns.format.number(sellprice * stk.posi[0], 2),
+                        ns.format.number(profit, 2),
                     );
                     newMsg(ns, msg);
                 }
@@ -603,8 +603,8 @@ async function sellItems(ns, stocks, arg) {
                     const msg = ns.sprintf(
                         "WARN: Selling %s long for $%s ($%s loss)",
                         stk.sym,
-                        ns.formatNumber(sellprice * stk.posi[0], 2),
-                        ns.formatNumber(loss, 2),
+                        ns.format.number(sellprice * stk.posi[0], 2),
+                        ns.format.number(loss, 2),
                     );
                     newMsg(ns, msg);
                 }
@@ -642,8 +642,8 @@ async function sellItems(ns, stocks, arg) {
                     const msg = ns.sprintf(
                         "WARN: Selling %s short for $%s ($%s profit)",
                         stk.sym,
-                        ns.formatNumber(shortsales, 2),
-                        ns.formatNumber(profit, 2),
+                        ns.format.number(shortsales, 2),
+                        ns.format.number(profit, 2),
                     );
                     newMsg(ns, msg);
                 }
@@ -663,8 +663,8 @@ async function sellItems(ns, stocks, arg) {
                     const msg = ns.sprintf(
                         "WARN: Selling %s short for $%s ($%s loss)",
                         stk.sym,
-                        ns.formatNumber(shortsales, 2),
-                        ns.formatNumber(loss, 2),
+                        ns.format.number(shortsales, 2),
+                        ns.format.number(loss, 2),
                     );
                     newMsg(ns, msg);
                 }
@@ -763,7 +763,7 @@ async function buyItems(ns, stocks, arg) {
                                 "Buying %s short of %s for $%s",
                                 buying,
                                 bot.sym,
-                                ns.formatNumber(bought * buying, 2),
+                                ns.format.number(bought * buying, 2),
                             );
                             newMsg(ns, msg);
                         }
@@ -810,7 +810,7 @@ async function buyItems(ns, stocks, arg) {
                                 "Buying %s long of %s for $%s",
                                 buying,
                                 top.sym,
-                                ns.formatNumber(bought * buying, 2),
+                                ns.format.number(bought * buying, 2),
                             );
                             newMsg(ns, msg);
                         }
@@ -856,7 +856,7 @@ async function buyItems(ns, stocks, arg) {
                             "Buying %s long of %s for $%s",
                             buying,
                             top.sym,
-                            ns.formatNumber(bought * buying, 2),
+                            ns.format.number(bought * buying, 2),
                         );
                         newMsg(ns, msg);
                     }
@@ -899,9 +899,9 @@ async function buyItems(ns, stocks, arg) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.peek(13) !== "NULL PORT DATA") {
+    while (ns.port.peek(13) !== "NULL PORT DATA") {
         //1-4  1: noHacknet, 2: !noHacknet, 3: buyServers, 4: !buyServers
-        const result = ns.readPort(13);
+        const result = ns.port.read(13);
         if (Number.isInteger(result)) {
             if (!silent)
                 ns.tprintf(

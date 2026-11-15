@@ -1,10 +1,10 @@
 /** @param {NS} ns */
 export async function main(ns) {
     let upgradeCost = -1;
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => {
         port.write(upgradeCost);
-        ns.writePort(40, true);
+        ns.port.write(40, true);
     });
     await ns.sleep(100);
     let count = 0;

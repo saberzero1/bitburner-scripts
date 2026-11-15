@@ -36,12 +36,12 @@ export async function main(ns) {
     if (!ns.args.includes("quiet")) ns.ui.openTail();
     ns.ui.resizeTail(WIDTH, HEIGHT);
     ns.clearLog();
-    ns.clearPort(9);
-    ns.writePort(9, ns.pid);
-    ns.writePort(1, true);
+    ns.port.clear(9);
+    ns.port.write(9, ns.pid);
+    ns.port.write(1, true);
     ns.atExit(() => {
-        ns.clearPort(9);
-        ns.writePort(1, true);
+        ns.port.clear(9);
+        ns.port.write(1, true);
     });
     hasDivDB = [];
     researchedDB = [];
@@ -52,8 +52,8 @@ export async function main(ns) {
         for (const worker of workersWIP) worker.terminate();
         workers.length = 0;
         workersWIP = [];
-        ns.clearPort(9);
-        ns.writePort(1, 1);
+        ns.port.clear(9);
+        ns.port.write(1, 1);
     });
     //Create our proxy files
     writeProxy(ns);
@@ -1461,7 +1461,7 @@ async function setJob(ns, div, city, job, total) {
     else
         await proxy(
             ns,
-            "corporation.setAutoJobAssignment",
+            "corporation.setJobAssignment",
             div,
             city,
             job,
@@ -5343,8 +5343,8 @@ async function updateHud(ns) {
     else
         ns.printf(
             "Funds: $%s  Profit: $%s/s",
-            ns.formatNumber(cObj.funds, 3),
-            ns.formatNumber(cObj.revenue - cObj.expenses, 3),
+            ns.format.number(cObj.funds, 3),
+            ns.format.number(cObj.revenue - cObj.expenses, 3),
         );
     const invest = investOffer;
     const upgrades =
@@ -5392,8 +5392,8 @@ async function updateHud(ns) {
         ns.printf(
             "Round: %s  Offer: %s FundsReq: %s  %s",
             invest.round,
-            ns.formatNumber(invest.funds, 3),
-            ns.formatNumber(offer, 3),
+            ns.format.number(invest.funds, 3),
+            ns.format.number(offer, 3),
             minRound,
         );
     if (ns.ui.getGameInfo()?.versionNumber >= 44)
@@ -5444,12 +5444,12 @@ async function updateHud(ns) {
                 "-%s(%s)  Profit: $%s/s  Awareness: %s  Pop: %s",
                 div,
                 division.type,
-                ns.formatNumber(
+                ns.format.number(
                     division.lastCycleRevenue - division.lastCycleExpenses,
                     3,
                 ),
-                ns.formatNumber(division.awareness, 3),
-                ns.formatNumber(division.popularity, 3),
+                ns.format.number(division.awareness, 3),
+                ns.format.number(division.popularity, 3),
             );
         let wCount = 0;
         let wSpace = 0;
@@ -5492,7 +5492,7 @@ async function updateHud(ns) {
             oSize,
             ns.ui.getGameInfo()?.versionNumber >= 44
                 ? ns.format.number(division.researchPoints, 3)
-                : ns.formatNumber(division.researchPoints, 3),
+                : ns.format.number(division.researchPoints, 3),
         );
         if (indDataDB[hasDivDB[div].type] === undefined)
             indDataDB[hasDivDB[div].type] = await proxy(
@@ -5532,7 +5532,7 @@ async function updateHud(ns) {
                                       ),
                                       3,
                                   )
-                                : ns.formatNumber(
+                                : ns.format.number(
                                       await getSellPrice(
                                           ns,
                                           div,
@@ -5548,7 +5548,7 @@ async function updateHud(ns) {
                         "  %s%s - %s",
                         ns.ui.getGameInfo()?.versionNumber >= 44
                             ? ns.format.number(prog, 2)
-                            : ns.formatNumber(prog, 2),
+                            : ns.format.number(prog, 2),
                         "%",
                         product,
                     );
@@ -5562,8 +5562,8 @@ async function updateHud(ns) {
 /** @param {NS} ns */
 function getCommands(ns) {
     let silent = false;
-    while (ns.peek(19) !== "NULL PORT DATA") {
-        let result = ns.readPort(19);
+    while (ns.port.peek(19) !== "NULL PORT DATA") {
+        let result = ns.port.read(19);
         switch (result) {
             case "Reset TAII":
                 if (!silent) ns.tprintf("Corp: Resetting TAII DB!");
@@ -5672,8 +5672,8 @@ async function runIt(ns, script, scriptOverride, argmnts) {
     }
     if (threads >= 1)
         ns.tprintf("Failed to allocate all threads for script: %s", script);
-    await ns.nextPortWrite(thispid);
-    const result = ns.readPort(thispid);
+    await ns.port.nextWrite(thispid);
+    const result = ns.port.read(thispid);
     return result;
 }
 
@@ -5696,7 +5696,7 @@ export async function main(ns) {
   let nsFunction = ns
   for (let prop of func.split(".")) nsFunction = nsFunction[prop]
   const result = nsFunction(...argmnts)
-  ns.atExit(() => ns.writePort(ns.pid, result))
+  ns.atExit(() => ns.port.write(ns.pid, result))
 }`;
     ns.write("SphyxOS/extras/nsProxy.js", data, "w");
 }
@@ -5715,7 +5715,7 @@ export async function main(ns) {
     else result = true
   }
   catch { }
-  ns.atExit(() => ns.writePort(ns.pid, result))
+  ns.atExit(() => ns.port.write(ns.pid, result))
 }`;
     ns.write("SphyxOS/extras/nsProxyTry.js", data, "w");
 }
@@ -5723,7 +5723,7 @@ export async function main(ns) {
 function writeBNMults(ns) {
     const data = `/** @param {NS} ns */
 export async function main(ns) {
-  const port = ns.getPortHandle(ns.pid)
+  const port = ns.port.getHandle(ns.pid)
   let mults;
   try { mults = ns.getBitNodeMultipliers() }
   catch {
@@ -6153,7 +6153,7 @@ export async function main(ns) {
 function writeCurrentBN(ns) {
     const data = `/** @param {NS} ns */
 export async function main(ns) {
-  const port = ns.getPortHandle(ns.pid)
+  const port = ns.port.getHandle(ns.pid)
   ns.atExit(() => port.write(result))
 
   const resetInfo = ns.getResetInfo()

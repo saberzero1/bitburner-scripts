@@ -7,7 +7,7 @@ import {
 
 /** @param {NS} ns */
 export async function main(ns) {
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     //ns.args[0] is the target, 1 is batches, 2 is threads, 3 is starthacks
     const server = ns.getServer(ns.args[0]);
     const hack_chance = getHackChance(ns, ns.args[0], server.minDifficulty);

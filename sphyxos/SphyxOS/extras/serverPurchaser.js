@@ -1,25 +1,25 @@
 /** @param {NS} ns */
 export async function main(ns) {
     let upgradecost = 1e150;
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(upgradecost));
 
     const startRam = 2;
     // Iterator we'll use for our loop
-    let i = ns.getPurchasedServers().length;
-    if (ns.getPurchasedServerLimit() === 0) return;
+    let i = ns.cloud.getServerNames().length;
+    if (ns.cloud.getServerLimit() === 0) return;
 
     //Buy the base servers
-    while (i < ns.getPurchasedServerLimit()) {
+    while (i < ns.cloud.getServerLimit()) {
         // Check if we have enough money to purchase a server
         if (
             ns.getServerMoneyAvailable("home") >=
-            ns.getPurchasedServerCost(startRam)
+            ns.cloud.getServerCost(startRam)
         ) {
             const server =
                 i >= 10
-                    ? ns.purchaseServer("pserv-" + i, startRam)
-                    : ns.purchaseServer("pserv-0" + i, startRam);
+                    ? ns.cloud.purchaseServer("pserv-" + i, startRam)
+                    : ns.cloud.purchaseServer("pserv-0" + i, startRam);
             ns.scp("SphyxOS/basic/weaken.js", server, "home");
             ns.scp("SphyxOS/basic/grow.js", server, "home");
             ns.scp("SphyxOS/basic/hack.js", server, "home");
@@ -27,12 +27,12 @@ export async function main(ns) {
             ns.scp("SphyxOS/forms.js", server, "home");
             i++;
         } else {
-            upgradecost = ns.getPurchasedServerCost(startRam);
+            upgradecost = ns.cloud.getServerCost(startRam);
             return;
         }
     }
 
-    const servers = ns.getPurchasedServers();
+    const servers = ns.cloud.getServerNames();
     while (true) {
         //Cycle through every server.  Check each attribute for cost of upgrade
         //Upgrade the cheapest.  Keep upgrading indefinitally
@@ -44,12 +44,12 @@ export async function main(ns) {
         for (const server of servers) {
             //Get the cheapest one and document it
             if (
-                ns.getPurchasedServerUpgradeCost(
+                ns.cloud.getServerUpgradeCost(
                     server,
                     ns.getServerMaxRam(server) * 2,
                 ) < upgradecost
             ) {
-                upgradecost = ns.getPurchasedServerUpgradeCost(
+                upgradecost = ns.cloud.getServerUpgradeCost(
                     server,
                     ns.getServerMaxRam(server) * 2,
                 );
@@ -59,7 +59,7 @@ export async function main(ns) {
         }
         //upgrade the server if we can
         if (ns.getServerMoneyAvailable("home") >= upgradecost)
-            ns.upgradePurchasedServer(upgradeitem, ramupgrade);
+            ns.cloud.upgradeServer(upgradeitem, ramupgrade);
         else {
             upgradecost =
                 upgradecost === Number.POSITIVE_INFINITY ? 0 : upgradecost;

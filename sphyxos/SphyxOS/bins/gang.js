@@ -68,16 +68,16 @@ export async function main(ns) {
     ns.disableLog("ALL");
     ns.ui.openTail();
     ns.ui.resizeTail(WIDTH, HEIGHT);
-    ns.clearPort(6);
-    ns.writePort(6, ns.pid);
-    ns.writePort(1, true);
+    ns.port.clear(6);
+    ns.port.write(6, ns.pid);
+    ns.port.write(1, true);
     ns.atExit(() => {
-        ns.clearPort(6);
-        ns.writePort(1, 1);
+        ns.port.clear(6);
+        ns.port.write(1, 1);
         if (win) {
             win.close();
             win = false;
-            ns.writePort(1, "gang popout off");
+            ns.port.write(1, "gang popout off");
         }
     });
 
@@ -204,7 +204,7 @@ export async function main(ns) {
                 buf = ns.sprintf(
                     "Karma: %s / -54000  ETA: %s",
                     karma.toFixed(0),
-                    result === 0 ? "n/a" : ns.tFormat(result),
+                    result === 0 ? "n/a" : ns.format.time(result),
                 );
             prev = karma;
         }
@@ -272,7 +272,7 @@ function update(ns, text) {
     ns.printRaw(text);
     if (win && win.closed) {
         win = false;
-        ns.writePort(1, "gang popout off");
+        ns.port.write(1, "gang popout off");
     }
     if (win) win.update(text);
 }
@@ -600,8 +600,8 @@ async function updateDisplay(ns) {
             ns,
             ns.sprintf(
                 "Respect: %s (%s/s)",
-                ns.formatNumber(gangInfo.respect),
-                ns.formatNumber(gangInfo.respectGainRate * 5),
+                ns.format.number(gangInfo.respect),
+                ns.format.number(gangInfo.respectGainRate * 5),
             ),
         );
         update(
@@ -610,7 +610,7 @@ async function updateDisplay(ns) {
                 "Next Recruit: %s",
                 respectForNext === Number.POSITIVE_INFINITY
                     ? "MAXED"
-                    : ns.formatNumber(respectForNext),
+                    : ns.format.number(respectForNext),
             ),
         );
         update(
@@ -626,15 +626,15 @@ async function updateDisplay(ns) {
             ns,
             ns.sprintf(
                 "Wanted Level: %s (%s/s)",
-                ns.formatNumber(gangInfo.wantedLevel, 3),
-                ns.formatNumber(gangInfo.wantedLevelGainRate * 5, 2),
+                ns.format.number(gangInfo.wantedLevel, 3),
+                ns.format.number(gangInfo.wantedLevelGainRate * 5, 2),
             ),
         );
         update(
             ns,
             ns.sprintf(
                 "Wanted Penalty: %s%s",
-                ns.formatNumber((gangInfo.wantedPenalty - 1) * 100),
+                ns.format.number((gangInfo.wantedPenalty - 1) * 100),
                 "%",
             ),
         );
@@ -642,7 +642,7 @@ async function updateDisplay(ns) {
             ns,
             ns.sprintf(
                 "Money Gains: %s/s",
-                ns.formatNumber(moneyIncrease(ns) * 5),
+                ns.format.number(moneyIncrease(ns) * 5),
             ),
         );
         if (HASBN4)
@@ -650,23 +650,23 @@ async function updateDisplay(ns) {
                 ns,
                 ns.sprintf(
                     "Reputation: %s",
-                    ns.formatNumber(await getFacRep(ns, gangInfo.faction)),
+                    ns.format.number(await getFacRep(ns, gangInfo.faction)),
                 ),
             );
         update(
             ns,
             ns.sprintf(
                 "Territory: %s%s",
-                ns.formatNumber(gangInfo.territory * 100, 2),
+                ns.format.number(gangInfo.territory * 100, 2),
                 "%",
             ),
         );
-        update(ns, ns.sprintf("Power: %s", ns.formatNumber(gangInfo.power)));
+        update(ns, ns.sprintf("Power: %s", ns.format.number(gangInfo.power)));
         update(
             ns,
             ns.sprintf(
                 "Clash Win Chance: %s%s",
-                ns.formatNumber(clashwin() * 100, 2),
+                ns.format.number(clashwin() * 100, 2),
                 "%",
             ),
         );
@@ -711,16 +711,16 @@ async function updateDisplay(ns) {
                     "%10s %20s %6s %6s %6s %6s %6s %6s %6s %8s %8s %6s %2s",
                     me.name,
                     me.task.substring(0, 19),
-                    ns.formatNumber(me.hack, 1),
-                    ns.formatNumber(me.str, 1),
-                    ns.formatNumber(me.def, 1),
-                    ns.formatNumber(me.dex, 1),
-                    ns.formatNumber(me.agi, 1),
-                    ns.formatNumber(me.cha, 1),
-                    ns.formatNumber(me.moneyGain * 5, 1),
-                    ns.formatNumber(me.respectGain * 5),
-                    ns.formatNumber(me.wantedLevelGain * 5),
-                    ns.formatNumber(me.earnedRespect, 1),
+                    ns.format.number(me.hack, 1),
+                    ns.format.number(me.str, 1),
+                    ns.format.number(me.def, 1),
+                    ns.format.number(me.dex, 1),
+                    ns.format.number(me.agi, 1),
+                    ns.format.number(me.cha, 1),
+                    ns.format.number(me.moneyGain * 5, 1),
+                    ns.format.number(me.respectGain * 5),
+                    ns.format.number(me.wantedLevelGain * 5),
+                    ns.format.number(me.earnedRespect, 1),
                     geteq(ns, me),
                 ),
             );
@@ -776,13 +776,13 @@ async function displaySleeves(ns) {
                 ns.sprintf(
                     "%s: %8s %8s %8s %8s %8s %8s %8s %8s %s",
                     slv.num,
-                    ns.formatNumber(slv.me.skills.hacking, 3),
-                    ns.formatNumber(slv.me.skills.strength, 3),
-                    ns.formatNumber(slv.me.skills.defense, 3),
-                    ns.formatNumber(slv.me.skills.dexterity, 3),
-                    ns.formatNumber(slv.me.skills.agility, 3),
-                    ns.formatNumber(slv.me.skills.charisma, 3),
-                    ns.formatNumber(slv.me.shock, 2),
+                    ns.format.number(slv.me.skills.hacking, 3),
+                    ns.format.number(slv.me.skills.strength, 3),
+                    ns.format.number(slv.me.skills.defense, 3),
+                    ns.format.number(slv.me.skills.dexterity, 3),
+                    ns.format.number(slv.me.skills.agility, 3),
+                    ns.format.number(slv.me.skills.charisma, 3),
+                    ns.format.number(slv.me.shock, 2),
                     slv.task === null ? "Shock Recovery" : slv.task.type,
                     slv.task.actionType ||
                         slv.task.classType ||
@@ -930,8 +930,8 @@ async function maxRepNeeded(ns, faction) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.peek(16) !== "NULL PORT DATA") {
-        let result = ns.readPort(16);
+    while (ns.port.peek(16) !== "NULL PORT DATA") {
+        let result = ns.port.read(16);
         switch (result) {
             case "popout":
                 if (!silent) ns.tprintf("Gang: PopOut On!");

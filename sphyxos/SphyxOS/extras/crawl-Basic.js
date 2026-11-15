@@ -17,7 +17,7 @@ export async function main(ns) {
     servers.forEach((s) => (eta += ns.getHackTime(s) / 4 + 2000));
     if (ns.ui.getGameInfo()?.versionNumber >= 44)
         ns.printf("ETA: %s", ns.format.time(eta), 3);
-    else ns.printf("ETA: %s", ns.tFormat(eta), 3);
+    else ns.printf("ETA: %s", ns.format.time(eta), 3);
     for (let point of servers) {
         let target = point;
         const path = [target];
@@ -37,7 +37,7 @@ export async function main(ns) {
             ns.printf(
                 "%s - %s",
                 point,
-                ns.tFormat(ns.getHackTime(point) / 4 + 2000),
+                ns.format.time(ns.getHackTime(point) / 4 + 2000),
             );
         await ns.sleep(ns.getHackTime(point) / 4 + 2000);
     }

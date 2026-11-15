@@ -3,7 +3,7 @@ import { proxy } from "SphyxOS/util.js";
 export async function main(ns) {
     ns.disableLog("ALL");
     await ns.sleep(4); //Let the main script establish it's wait timer
-    ns.atExit(() => ns.writePort(40, true));
+    ns.atExit(() => ns.port.write(40, true));
     const doc = globalThis["document"];
     const factions = [
         ...doc.querySelectorAll(

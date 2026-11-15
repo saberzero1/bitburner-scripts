@@ -10,5 +10,5 @@ export async function main(ns) {
         if (res) result = res;
         else result = true;
     } catch {}
-    ns.atExit(() => ns.writePort(ns.pid, result));
+    ns.atExit(() => ns.port.write(ns.pid, result));
 }

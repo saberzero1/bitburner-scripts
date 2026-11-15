@@ -103,8 +103,8 @@ export async function main(ns) {
         print("Stopping automated infiltration...");
         clearInterval(wnd.tmrAutoInf);
         delete wnd.tmrAutoInf;
-        ns.clearPort(30);
-        ns.writePort(1, 1);
+        ns.port.clear(30);
+        ns.port.write(1, 1);
         if (!args.update) return;
     }
 
@@ -127,7 +127,7 @@ export async function main(ns) {
             `Auto? ${auto} ` +
             `Faction or Money? ${repFaction || "MONEY"}`,
     );
-    ns.writePort(30, ns.pid);
+    ns.port.write(30, ns.pid);
     endInfiltration();
 
     // Monitor the current screen and start infiltration once a

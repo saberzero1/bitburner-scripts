@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    let port = ns.getPortHandle(ns.pid);
+    let port = ns.port.getHandle(ns.pid);
     const result =
         ns.args[2] !== undefined
             ? ns.bladeburner.getActionEstimatedSuccessChance(

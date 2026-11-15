@@ -20,6 +20,6 @@ export async function main(ns) {
             sleeves.push(record);
         }
     }
-    let port = ns.getPortHandle(ns.pid);
+    let port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(sleeves));
 }

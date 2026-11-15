@@ -8,7 +8,7 @@ export async function main(ns) {
     }
     if (destructure) {
         const { completion, ...result } = ns.singularity.getCurrentWork();
-        ns.atExit(() => ns.writePort(ns.pid, result));
+        ns.atExit(() => ns.port.write(ns.pid, result));
     } else
-        ns.atExit(() => ns.writePort(ns.pid, ns.singularity.getCurrentWork()));
+        ns.atExit(() => ns.port.write(ns.pid, ns.singularity.getCurrentWork()));
 }

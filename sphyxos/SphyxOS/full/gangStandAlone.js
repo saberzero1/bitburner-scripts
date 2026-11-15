@@ -55,7 +55,7 @@ export async function main(ns) {
         memberNames = ns.gang.getMemberNames();
         fullMembers = memberNames.map((m) => ns.gang.getMemberInformation(m));
         gangInfo = ns.gang.getGangInformation();
-        otherGangInfo = ns.gang.getOtherGangInformation();
+        otherGangInfo = ns.gang.getAllGangInformation();
         respectForNext = ns.gang.respectForNextRecruit();
 
         BUYING_GEAR =

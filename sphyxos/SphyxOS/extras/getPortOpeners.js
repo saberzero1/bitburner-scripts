@@ -7,6 +7,6 @@ export async function main(ns) {
     if (ns.fileExists("HTTPWorm.exe", "home")) count++;
     if (ns.fileExists("SQLInject.exe", "home")) count++;
 
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     ns.atExit(() => port.write(count));
 }

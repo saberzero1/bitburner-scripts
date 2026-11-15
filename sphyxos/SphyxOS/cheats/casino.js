@@ -5,10 +5,10 @@ export async function main(ns) {
     ns.disableLog("ALL");
     await ns.sleep(100);
     ns.atExit(() => {
-        (ns.clearPort(10),
-            ns.writePort(1, 1),
+        (ns.port.clear(10),
+            ns.port.write(1, 1),
             ns.ui.closeTail(),
-            ns.writePort(40, 1));
+            ns.port.write(40, 1));
     });
     const HASBN4 = await hasBN(ns, 4, 2);
 
@@ -50,8 +50,8 @@ export async function main(ns) {
         return;
     }
     //We have officially started!
-    ns.writePort(10, ns.pid);
-    ns.writePort(1, 1);
+    ns.port.write(10, ns.pid);
+    ns.port.write(1, 1);
     ns.ui.openTail();
     ns.printf("Started.  Hold on!  Calulating sequence");
     click(coinflip);
@@ -109,7 +109,7 @@ export async function main(ns) {
         prop.onChange(event2);
     }
     ns.printf("You can do something else now.");
-    ns.writePort(40, 1);
+    ns.port.write(40, 1);
     await ns.sleep(4);
     const terminal = [
         ...globalThis["document"].querySelectorAll(

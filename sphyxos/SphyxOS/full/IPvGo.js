@@ -1922,8 +1922,8 @@ export async function main(ns) {
             else
                 ns.printf(
                     "Time: Me: %s  Them: %s",
-                    ns.tFormat(mid - START, true),
-                    ns.tFormat(END - mid, true),
+                    ns.format.time(mid - START, true),
+                    ns.format.time(END - mid, true),
                 );
         }
         START = performance.now();
@@ -1958,8 +1958,8 @@ export async function main(ns) {
                 else
                     ns.printf(
                         "Time: Me: %s  Them: %s",
-                        ns.tFormat(mid - START, true),
-                        ns.tFormat(END - mid, true),
+                        ns.format.time(mid - START, true),
+                        ns.format.time(END - mid, true),
                     );
             }
             START = performance.now();
@@ -1998,8 +1998,8 @@ export async function main(ns) {
                 else
                     ns.printf(
                         "Time: Me: %s  Them: %s",
-                        ns.tFormat(mid - START, true),
-                        ns.tFormat(END - mid, true),
+                        ns.format.time(mid - START, true),
+                        ns.format.time(END - mid, true),
                     );
             }
             START = performance.now();
@@ -2395,8 +2395,8 @@ export async function main(ns) {
         }
         if (threads >= 1)
             ns.tprintf("Failed to allocate all threads for script: %s", script);
-        await ns.nextPortWrite(thispid);
-        const result = ns.readPort(thispid);
+        await ns.port.nextWrite(thispid);
+        const result = ns.port.read(thispid);
         return result;
     }
 
@@ -2413,7 +2413,7 @@ export async function main(ns) {
     function writeGetMoves() {
         const data = `/** @param {NS} ns */
 export async function main(ns) {
-  let port = ns.getPortHandle(ns.pid)
+  let port = ns.port.getHandle(ns.pid)
   const result = ns.go.analysis.getValidMoves(undefined, undefined, ns.args[0])
   ns.atExit(() => port.write(result))
 }`;
@@ -2428,7 +2428,7 @@ export async function main(ns) {
   let nsFunction = ns
   for (let prop of func.split(".")) nsFunction = nsFunction[prop]
   const result = nsFunction(...argmnts)
-  ns.atExit(() => ns.writePort(ns.pid, result))
+  ns.atExit(() => ns.port.write(ns.pid, result))
 }`;
         ns.write("SphyxOS/extras/nsProxy.js", data, "w");
     }
@@ -2447,7 +2447,7 @@ export async function main(ns) {
     else result = true
   }
   catch { }
-  ns.atExit(() => ns.writePort(ns.pid, result))
+  ns.atExit(() => ns.port.write(ns.pid, result))
 }`;
         ns.write("SphyxOS/extras/nsProxyTry.js", data, "w");
     }

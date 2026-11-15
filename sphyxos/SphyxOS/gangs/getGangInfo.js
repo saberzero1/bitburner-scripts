@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    const port = ns.getPortHandle(ns.pid);
+    const port = ns.port.getHandle(ns.pid);
     const result = ns.gang.getGangInformation();
     ns.atExit(() => port.write(result));
 }
