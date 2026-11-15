@@ -284,11 +284,12 @@ function legalMoves(ctx, cells, toMove, ko, scratch) {
  * @param {string[]} rows ns.go.getBoardState()
  * @param {number} komi white's komi
  * @param {{x:number,y:number}[]|null} legal root moves allowed by the game (repeat rule), or null for all
- * @param {{playouts?: number, ms?: number, uct?: boolean, yieldFn?: () => Promise<void>, passWhenAhead?: boolean}} opts
+ * @param {{playouts?: number, ms?: number, uct?: boolean, yieldFn?: () => Promise<void>, toMove?: number}} opts
+ *   toMove 2 (white) values a position after one of our cheats that used our turn (value = black's win rate)
  * @returns {Promise<{move: {x:number,y:number}|null, winRate: number, playouts: number}>} null move = pass
  */
 export async function fastSearch(rows, komi, legal, opts = {}) {
-    const { playouts = 3000, ms = 0, uct = true, yieldFn = null, ko: rootKo = 0, tactics = true } = opts;
+    const { playouts = 3000, ms = 0, uct = true, yieldFn = null, ko: rootKo = 0, tactics = true, toMove = BLACK } = opts;
     const board = boardFromRows(rows);
     const ctx = makeCtx(board.n);
     const { W } = ctx;
@@ -297,9 +298,9 @@ export async function fastSearch(rows, komi, legal, opts = {}) {
     const scratch = new Int8Array(ctx.size), sim = new Int8Array(ctx.size), empties = new Int32Array(ctx.size);
     const allowed = legal ? new Set(legal.map((m) => toP(m.x, m.y))) : null;
 
-    const root = newNode(-1, BLACK);
+    const root = newNode(-1, toMove);
     // Root moves: the game's legal moves (minus our own eyes), plus pass
-    root.untried = legalMoves(ctx, board.cells, BLACK, rootKo, scratch).filter((p) => !allowed || allowed.has(p));
+    root.untried = legalMoves(ctx, board.cells, toMove, rootKo, scratch).filter((p) => !allowed || allowed.has(p));
     root.untried.push(0); // 0 = pass
     root.children = [];
     const C = 0.7;
@@ -377,6 +378,7 @@ export async function fastSearch(rows, komi, legal, opts = {}) {
     // Most visited root child
     let best = null;
     for (const ch of root.children) if (!best || ch.n > best.n) best = ch;
-    if (!best) return { move: null, winRate: 0, playouts: done };
-    return { move: best.move ? fromP(best.move) : null, winRate: best.w / Math.max(1, best.n), playouts: done };
+    const value = root.w / Math.max(1, root.n); // black's win rate from this position (any side to move)
+    if (!best) return { move: null, winRate: 0, value, playouts: done };
+    return { move: best.move ? fromP(best.move) : null, winRate: best.w / Math.max(1, best.n), value, playouts: done };
 }

@@ -13,6 +13,7 @@ const crime = opts.crime ?? 1.6;
 const cheatChance = (c) => Math.max(Math.min(0.6 * (0.7 - 0.02 * c) ** c * crime + 0.25, 1), 0);
 const seed = () => 1 + Math.floor(Math.random() * 1e9);
 const byOffline = {};
+const kindCount = {};
 let wins = 0, cpu = 0, totalTime = 0, power = 0, cheatsTotal = 0;
 for (let g = 0; g < Number(games); g++) {
   E.EnginePlayer.totalPlaytime = seed();
@@ -50,6 +51,52 @@ for (let g = 0; g < Number(games); g++) {
     let r = await pick();
     let cheat = false;
     if (r.move && cheatKind === "early") cheat = twoMoves < Number(cheatA);
+    // best:K:kinds: on our first K turns, value every option (normal move, two moves, remove a white stone, destroy an
+    // empty point) with the fast search and play the best one; kinds = subset of "two,remove,destroy"
+    if (cheatKind === "best" && cheats < Number(cheatA) && (opts.below === undefined || r.winRate < opts.below) && turn > (opts.after ?? 0)) {
+      const kinds = (cheatB ?? "two,remove,destroy").split(",");
+      const evalOpts = { ...opts, playouts: opts.evalPlayouts ?? 1500 };
+      const rows0 = E.simpleBoardFromBoard(s.board);
+      const options = [{ kind: "normal", value: r.winRate }];
+      if (kinds.includes("two") && r.move) {
+        const rows = rows0.map((row, x) => (x === r.move.x ? row.slice(0, r.move.y) + "X" + row.slice(r.move.y + 1) : row));
+        const r2 = await fastSearch(rows, KOMI[opp], null, evalOpts);
+        if (r2.move) options.push({ kind: "two", value: r2.winRate, a: r.move, b: r2.move });
+      }
+      for (let x = 0; x < rows0.length; x++) for (let y = 0; y < rows0.length; y++) {
+        const c = rows0[x][y];
+        const edit = (ch) => rows0.map((row, i) => (i === x ? row.slice(0, y) + ch + row.slice(y + 1) : row));
+        if (kinds.includes("remove") && c === "O") {
+          const v = (await fastSearch(edit("."), KOMI[opp], null, { ...evalOpts, toMove: 2 })).value;
+          options.push({ kind: "remove", value: v, a: { x, y } });
+        }
+        if (kinds.includes("destroy") && c === ".") {
+          const v = (await fastSearch(edit("#"), KOMI[opp], null, { ...evalOpts, toMove: 2 })).value;
+          options.push({ kind: "destroy", value: v, a: { x, y } });
+        }
+      }
+      options.sort((p, q) => q.value - p.value);
+      const o = options[0];
+      kindCount[o.kind] = (kindCount[o.kind] ?? 0) + 1;
+      if (o.kind !== "normal") {
+        time += 0.2 / cheatChance(cheats);
+        cheats++;
+        if (o.kind === "two") {
+          E.makeMove(s, o.a.x, o.a.y, "Black");
+          s.previousPlayer = "White";
+          E.makeMove(s, o.b.x, o.b.y, "Black");
+        } else {
+          if (o.kind === "remove") s.board[o.a.x][o.a.y].color = "Empty";
+          else s.board[o.a.x][o.a.y] = null;
+          E.updateChains(s.board);
+          s.previousPlayer = "Black";
+        }
+        const m = await E.getMove(s, "White", opp, false, seed());
+        time += 0.16;
+        if (m.type === "move" && E.makeMove(s, m.x, m.y, "White")) {} else E.passTurn(s, "White", false);
+        continue;
+      }
+    }
     if (r.move && cheatKind === "need") cheat = r.winRate < Number(cheatA) && cheats < Number(cheatB);
     if (cheat) {
       // playTwoMoves: two stones in a row (search picks the second with black to move again)
@@ -76,4 +123,4 @@ for (let g = 0; g < Number(games); g++) {
   totalTime += time; cheatsTotal += cheats;
 }
 const n = Number(games);
-console.log(`${opp} ${size}x${size} ${optsJson}: won ${wins}/${n}, ${(totalTime / n).toFixed(1)}s/game (CPU ${(cpu / n / 1000).toFixed(2)}s), cheats/g ${(cheatsTotal / n).toFixed(1)}, power/h ${(power / totalTime * 3600).toFixed(0)}  by offline nodes: ${Object.entries(byOffline).map(([k, [w, t]]) => `${k}:${w}/${t}`).join(" ")}`);
+console.log(`${opp} ${size}x${size} ${optsJson}: won ${wins}/${n}, ${(totalTime / n).toFixed(1)}s/game (CPU ${(cpu / n / 1000).toFixed(2)}s), cheats/g ${(cheatsTotal / n).toFixed(1)}, power/h ${(power / totalTime * 3600).toFixed(0)}  choices ${JSON.stringify(kindCount)}  by offline nodes: ${Object.entries(byOffline).map(([k, [w, t]]) => `${k}:${w}/${t}`).join(" ")}`);
