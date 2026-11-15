@@ -35,6 +35,9 @@ const argsSchema = [
     ["cheat-min-capture", 2], // Only cheat (play two moves) to capture an enemy group of at least this many stones
     ["max-cheats-per-game", 3], // A failed cheat after an earlier one in the same game has a 10% chance of ejection (a loss). With
     // rescue,twoMoves, min capture 2, up to 3 cheats and threshold 0.8, tools/go-sim win rates rose e.g. Tetrads 41->84%, Illuminati 30->63%
+    ["favor-factions", "Daedalus"], // While a member and before installing The Red Pill, play these factions first until Go
+    // has given its maximum favour with them (win streaks add favour, up to 400k rep's worth with SF14.3). Daedalus favour
+    // speeds up earning The Red Pill's rep, the long final wait of BN12 runs (tools/favor-model). "" = off.
     ["silent", false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
 ];
 
@@ -71,6 +74,9 @@ export async function main(ns) {
     let chooser = "marginal";
     let activeSourceFiles = {};
     let cheatMinCapture = 6;
+    let favorFactions = [];
+    let favorFocus = []; // favorFactions we're a member of, while The Red Pill isn't installed (refreshed each game)
+    let favorFocusAt = 0;
     let cheatTypes = ["twoMoves"];
     let lastStats = null; // ns.go.analysis.getStats() snapshot, to detect each game's result
     const GO_RESULTS_FILE = "/data/go-results.txt";
@@ -165,6 +171,7 @@ export async function main(ns) {
         chooser = runOptions.chooser;
         randomOpponents = runOptions["random-opponents"];
         fixedOpponent = runOptions.opponent || null;
+        favorFactions = String(runOptions["favor-factions"]).split(",").map((f) => f.trim()).filter(Boolean);
         try {
             lastStats = ns.go.analysis.getStats();
         } catch {}
@@ -296,7 +303,10 @@ export async function main(ns) {
         let lastResults = null; // The opponent's last response (type "pass" means they passed)
         while (true) {
             turn++;
-            if (turn === 1) playStyle = getStyle(ns); // A new game (possibly a different opponent) started
+            if (turn === 1) {
+                playStyle = getStyle(ns); // A new game (possibly a different opponent) started
+                await refreshFavorFocus(ns);
+            }
             [board, contested, validMove, validLibMoves, chains] = await go_getTurnData(ns);
             const size = board[0].length;
             //Build a test board with walls
@@ -945,8 +955,36 @@ export async function main(ns) {
         return Number(Object.keys(rates).reduce((a, b) => (rates[a] >= rates[b] ? a : b)));
     }
 
+    /** Which --favor-factions we're in (Go favour only counts for members), unless The Red Pill is installed. */
+    async function refreshFavorFocus(ns) {
+        if (favorFactions.length === 0 || Date.now() - favorFocusAt < 60_000) return;
+        favorFocusAt = Date.now();
+        try {
+            const [factions, hasRedPill] = await getNsDataThroughFile(ns,
+                `[ns.getPlayer().factions, ns.getResetInfo().ownedAugs.has("The Red Pill")]`,
+                { fName: "/Temp/go-favor-focus.txt", silent: true });
+            favorFocus = hasRedPill ? [] : favorFactions.filter((f) => factions.includes(f));
+        } catch {
+            favorFocus = [];
+        }
+    }
+
+    /** Most rep Go win streaks convert into favour with one faction per BitNode (Go effect.ts getMaxRep). */
+    function goMaxFavorRep() {
+        const sf14 = activeSourceFiles[14] ?? 0;
+        return sf14 >= 3 ? 400_000 : sf14 === 2 ? 300_000 : sf14 === 1 ? 200_000 : 100_000;
+    }
+
     function chooseOpponent(ns, candidates) {
         if (fixedOpponent) return fixedOpponent;
+        if (favorFocus.length > 0) {
+            let goStats = {};
+            try {
+                goStats = ns.go.analysis.getStats();
+            } catch {}
+            const unfinished = favorFocus.find((f) => candidates.includes(f) && (goStats[f]?.rep ?? 0) < goMaxFavorRep());
+            if (unfinished) return unfinished;
+        }
         if (randomOpponents) return candidates[Math.floor(Math.random() * candidates.length)];
         const komi = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5, "????????????": 9.5 };
         // Rough usefulness of each faction's bonus to this repo's automation (hacking-related bonuses matter most)

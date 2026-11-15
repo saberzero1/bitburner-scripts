@@ -3,7 +3,7 @@
  * Runs the real go.js from bitburner-scripts against the real IPvGO engine and AI. The AI's per-move UI delay
  * (waitCycle -> sleep(200ms)) resolves immediately; requested delays are summed as simulated game time.
  * Env: SIM_SCRIPT (go.js path), SIM_GAMES, SIM_ARGS (JSON go.js options), SIM_CRIME (crime_success mult, for
- * cheat success), SIM_SF14 (source-file 14 level), SIM_OUT (JSON output file).
+ * cheat success), SIM_SF14 (source-file 14 level), SIM_FACTIONS (comma-separated factions joined), SIM_OUT (JSON output file).
  */
 jest.mock("../../src/utils/Utility", () => {
   const actual = jest.requireActual("../../src/utils/Utility");
@@ -18,6 +18,7 @@ jest.mock("../../src/utils/Utility", () => {
 
 import fs from "fs";
 import { Player } from "../../src/Player";
+import { Factions } from "../../src/Faction/Factions";
 import { Go } from "../../src/Go/Go";
 import { getNS, initGameEnvironment, setupBasicTestingEnvironment } from "./Utilities";
 
@@ -44,6 +45,8 @@ test(
     setupBasicTestingEnvironment();
     Player.sourceFiles.set(14, Number(env.SIM_SF14 ?? 3));
     Player.mults.crime_success = Number(env.SIM_CRIME ?? 1.6);
+    // Factions joined (Go win streaks only give favour with factions we're in), e.g. SIM_FACTIONS=Daedalus
+    for (const f of (env.SIM_FACTIONS ?? "").split(",").filter(Boolean)) Player.factions.push(f as never);
     const realNs = getNS() as unknown as Record<string, unknown> & { go: Record<string, unknown> };
 
     let src = fs.readFileSync(SCRIPT, "utf8");
@@ -165,7 +168,7 @@ test(
       finish();
     });
     await done;
-    fs.writeFileSync(OUT, JSON.stringify({ args: ARGS, cheatProbe, simulatedMs, finalStats: Go.stats, games, scriptResults: files["/data/go-results.txt"] ?? "" }));
+    fs.writeFileSync(OUT, JSON.stringify({ args: ARGS, cheatProbe, simulatedMs, finalStats: Go.stats, favor: Object.fromEntries(Player.factions.map((f) => [f, Factions[f as never]?.favor])), games, scriptResults: files["/data/go-results.txt"] ?? "" }));
   },
   6 * 3600 * 1000,
 );
