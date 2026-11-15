@@ -30,7 +30,8 @@ const argsSchema = [
     ["study-to-hacking", 25], // Sleeves will go to university until they reach this much Hak
     ["study-to-charisma", 25], // Sleeves will go to university until they reach this much Cha
     ["training-reserve", null], // Defaults to global reserve.txt. Can be set to a negative number to allow debt. Sleeves will not train if money is below this amount.
-    ["training-cap-seconds", 2 * 60 * 60 /* 2 hours */], // Time since the start of the bitnode after which we will no longer attempt to train sleeves to their target "train-to" settings
+    ["training-cap-seconds", 3 * 60 * 60 /* 3 hours */], // Time since the start of the bitnode after which we will no longer attempt to train sleeves to their target "train-to" settings
+    // (Was 2h. tools/sleeve-sim, BN12 exp mults, 8 sleeves at 900 int: 3h reached gang karma in 6.6h instead of 7.5h; 3.5h was no better)
     ["disable-spending-hashes-for-gym-upgrades", false], // Set to true to disable spending hashes on gym upgrades when training up sleeves.
     ["disable-spending-hashes-for-study-upgrades", false], // Set to true to disable spending hashes on study upgrades when smarting up sleeves.
     ["enable-bladeburner-team-building", false], // Set to true to have one sleeve support the main sleeve, and another do recruitment. Otherwise, they will just do more "Infiltrate Synthoids"
@@ -261,6 +262,8 @@ async function getFactionWorkTargets(ns, playerInfo) {
             unownedCount: factionAugMap[name].filter(
                 (aug) => !ownedAugs.includes(aug),
             ).length,
+            // The Red Pill's rep is usually the last thing a run waits for, so its faction gets a sleeve first
+            redPill: factionAugMap[name].includes("The Red Pill") && !ownedAugs.includes("The Red Pill"),
             rep: factionRepCache[name] ?? 0,
             supportedWorks: factionWorkTypesCache[name] ?? works,
             supportedWorksLower: (factionWorkTypesCache[name] ?? works).map(
@@ -277,6 +280,7 @@ async function getFactionWorkTargets(ns, playerInfo) {
         )
         .sort(
             (a, b) =>
+                b.redPill - a.redPill ||
                 b.unownedCount - a.unownedCount ||
                 a.rep - b.rep ||
                 a.name.localeCompare(b.name),
