@@ -1,0 +1,4 @@
+orig {}
+F1_hyst_O2 {"tea-below":3,"party-below":5,"party-max":500000,"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+F2_hyst_int_O2 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+F3_hyst_int_O2_seed05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348},"support-seed":0.5}

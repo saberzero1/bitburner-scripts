@@ -320,8 +320,8 @@ async function mainLoop(ns) {
     // If the only operations left to us are "Raid" (reduces population by a %, which, counter-intuitively, is bad for us),
     // thrash the city with the lowest population (but still having some communities to enable Raid).
     if (
-        getCount("Raid") > 0 &&
-        unreservedActions.every((c) => getCount(c) == 0)
+        getCount("Raid") >= 1 &&
+        unreservedActions.every((c) => getCount(c) < 1)
     ) {
         const raidableCities = cityNames.filter(
             (c) => communitiesByCity[c] > 0,
@@ -343,11 +343,11 @@ async function mainLoop(ns) {
         //    `(--allow-raiding-highest-pop-city is set to ${options['allow-raiding-highest-pop-city']})`);
     }
     // SPECIAL CASE: GO TO HIGHEST-CHAOS CITY
-    if (!goToCity && unreservedActions.every((c) => getCount(c) == 0)) {
+    if (!goToCity && unreservedActions.every((c) => getCount(c) < 1)) {
         let [maxChaosCity, maxChaos] = getMaxKeyValue(chaosByCity, cityNames);
         // If all we have left is "Stealth Retirement Operation", switch to the city with the most chaos (if it's a decent amount), and use them up.
         if (
-            getCount("Stealth Retirement Operation") &&
+            getCount("Stealth Retirement Operation") >= 1 &&
             maxChaos > options["chaos-recovery-threshold"]
         ) {
             goToCity = maxChaosCity;
@@ -450,7 +450,7 @@ async function mainLoop(ns) {
     } // If current city chaos is greater than our threshold, keep it low with "Stealth Retirement" if odds are good
     else if (
         chaosByCity[currentCity] > options["chaos-recovery-threshold"] &&
-        getCount(antiChaosOperation) > 0 &&
+        getCount(antiChaosOperation) >= 1 &&
         minChance(antiChaosOperation) > 0.99
     ) {
         bestActionName = antiChaosOperation;
@@ -458,7 +458,7 @@ async function mainLoop(ns) {
     } // If current city chaos is very high, we should be very wary of the snowballing effects, and try to reduce it.
     else if (chaosByCity[currentCity] > options["max-chaos"]) {
         bestActionName =
-            getCount(antiChaosOperation) > 0 &&
+            getCount(antiChaosOperation) >= 1 &&
             minChance(antiChaosOperation) > 0.8
                 ? antiChaosOperation
                 : "Diplomacy";
@@ -529,7 +529,7 @@ async function mainLoop(ns) {
             ? populationActionsByEffectiveness
             : unreservedActions;
         // Filter out candidates with no contract counts remaining
-        candidateActions = candidateActions.filter((a) => getCount(a) > 0);
+        candidateActions = candidateActions.filter((a) => getCount(a) >= 1); // below 1 the action can't be started
         //log(ns, `The following actions are available: ${candidateActions}`); // Debug log to see what candidate actions are
 
         // Pick the first candidate action with a minimum chance of success that exceeds our --success-threshold
@@ -567,7 +567,9 @@ async function mainLoop(ns) {
                 reason = `High population uncertainty in ${currentCity}`;
             } // If all (non-reserved) operation counts are 0, and chaos isn't too high, Incite Violence to get more work (logic above should subsequently reduce chaos)
             else if (
-                unreservedActions.every((a) => getCount(a) == 0) &&
+                // Counts grow fractionally: below 1 an action can't be started, so treat that as none left
+                // (was "== 0", so Incite Violence never ran and ~60% of the time went to Field Analysis; tools/bb-sim)
+                unreservedActions.every((a) => getCount(a) < 1) &&
                 cityNames.every((c) => chaosByCity[c] < options["max-chaos"])
             ) {
                 bestActionName = "Incite Violence";
@@ -624,7 +626,7 @@ async function mainLoop(ns) {
     if (
         lastAssignedTask &&
         lastAssignedTask != currentAction?.name &&
-        getCount(lastAssignedTask) > 0
+        getCount(lastAssignedTask) >= 1
     ) {
         log(
             ns,

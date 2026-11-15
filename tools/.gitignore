@@ -1,0 +1,4 @@
+# The repo root ignores *.ts and *.txt (game data); simulator harnesses and sweep specs live here
+!*.ts
+!*.txt
+out/

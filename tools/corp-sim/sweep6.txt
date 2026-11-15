@@ -1,0 +1,12 @@
+B {"tea-below":3,"party-below":5,"party-max":500000,"interns":true}
+B_O2 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+B_O3 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.52,"supportOffices":0.52}}
+B_WA2 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"wilson":0.174,"advert":0.174}}
+B_WA05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"wilson":0.043,"advert":0.043}}
+B_E2 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"employeeStats":0.70}}
+B_E05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"employeeStats":0.174}}
+B_O3_WA2 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.52,"supportOffices":0.52,"wilson":0.174,"advert":0.174}}
+B_P3 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"product-share":0.03}
+B_supp05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"support-scale":0.5}
+B_seed0 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"support-seed":0}
+B_seed05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"support-seed":0.5}
