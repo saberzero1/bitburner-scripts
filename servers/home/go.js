@@ -63,6 +63,19 @@ const GO_POWER_PER_HOUR = {
 // Each faction's bonusPower (Go Constants.ts)
 const GO_BONUS_POWER = { Netburners: 1.3, "Slum Snakes": 1.2, "The Black Hand": 0.9, Tetrads: 0.7, Daedalus: 1.1, Illuminati: 0.7, "????????????": 2 };
 
+/** Cheats roll their success with new WHRNG(Player.totalPlaytime) the moment they're called, and play time only
+ * changes on engine ticks (200 ms). So this temp script reads the play time, computes that roll, and calls the cheat
+ * in the same tick only when it succeeds (otherwise it waits for the next tick): cheats never fail, so they can't
+ * get us ejected either. Gives up (null) after ~15s without a successful tick. Constant source; values via ns.args. */
+const TIMED_CHEAT =
+    `await (async () => { const a = ns.args; ` +
+    `const roll = (t) => { const v = (t / 1000) % 30000; return ((171 * v) % 30269 / 30269 + (172 * v) % 30307 / 30307 + (170 * v) % 30323 / 30323) % 1; }; ` +
+    `for (let i = 0; i < 750; i++) { ` +
+    `if (roll(ns.getPlayer().totalPlaytime) <= ns.go.cheat.getCheatSuccessChance()) return a[0] === "playTwoMoves" ? await ns.go.cheat.playTwoMoves(a[1], a[2], a[3], a[4]) ` +
+    `: a[0] === "removeRouter" ? await ns.go.cheat.removeRouter(a[1], a[2]) : a[0] === "destroyNode" ? await ns.go.cheat.destroyNode(a[1], a[2]) ` +
+    `: await ns.go.cheat.repairOfflineNode(a[1], a[2]); ` +
+    `await ns.sleep(20); } return null; })()`;
+
 export async function main(ns) {
     let cheats = false;
     let cheatChanceThreshold = 1.0;
@@ -260,12 +273,7 @@ export async function main(ns) {
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
     async function go_cheat_playTwoMoves(ns, x1, y1, x2, y2) {
-        return await getNsDataThroughFile(
-            ns,
-            `await ns.go.cheat.playTwoMoves(...ns.args)`,
-            null,
-            [x1, y1, x2, y2],
-        );
+        return await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt", ["playTwoMoves", x1, y1, x2, y2]);
     }
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
@@ -2562,12 +2570,12 @@ export async function main(ns) {
         const chance = await go_cheat_getCheatSuccessChance(ns);
         if (chance < cheatChanceThreshold) return false;
         cheatsThisGame++;
-        const command =
-            kind === "removeRouter" ? `await ns.go.cheat.removeRouter(...ns.args)`
-            : kind === "destroyNode" ? `await ns.go.cheat.destroyNode(...ns.args)`
-            : `await ns.go.cheat.repairOfflineNode(...ns.args)`;
         try {
-            const results = await getNsDataThroughFile(ns, command, null, target.coords);
+            const results = await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt", [kind, ...target.coords]);
+            if (!results) {
+                cheatsThisGame--; // no successful tick: nothing was attempted
+                return false;
+            }
             ns.printf("%s  Chance: %.2f%%  Result: %s", target.msg, chance * 100, results?.type);
             return results;
         } catch (err) {
@@ -2598,6 +2606,10 @@ export async function main(ns) {
         try {
             let mid = performance.now();
             const results = await go_cheat_playTwoMoves(ns, s1x, s1y, s2x, s2y);
+            if (!results) {
+                cheatsThisGame--; // no successful tick: nothing was attempted
+                return false;
+            }
             ns.printf(
                 "%s  Chance: %.2f%%  Result: %s",
                 attack.msg,

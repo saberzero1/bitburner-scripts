@@ -53,7 +53,11 @@ test(
     src = src.replace(/^import\s*\{[\s\S]*?\}\s*from\s*"[^"]+";/m, "");
     src = src.replace(/^export\s+/gm, "");
     const files: Record<string, string> = {};
-    const opNs = (args: unknown[]) => new Proxy(realNs, { get: (t, k) => (k === "args" ? args : t[k as string]) });
+    // Temp scripts share the simulated clock and the wrapped go API (overrides is defined below; read at call time)
+    const opNs = (args: unknown[]) =>
+      new Proxy(realNs, {
+        get: (t, k) => (k === "args" ? args : k === "sleep" || k === "go" ? overrides[k as string] : t[k as string]),
+      });
     const getNsDataThroughFile = async (_ns: unknown, command: string, fName: unknown, args: unknown[] = []) => {
       if (fName && typeof fName === "object") args = (fName as { args?: unknown[] }).args ?? [];
       const result = await new Function("ns", "return (async () => " + command + ")()")(opNs(args));
