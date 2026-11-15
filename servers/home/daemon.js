@@ -69,9 +69,10 @@ const argsSchema = [
     ["cycle-timing-delay", 4000], // (ms) Length of a hack cycle. The smaller this is, the more batches (HWGW) we can schedule before the first cycle fires, but the greater the chance of a misfire
     ["queue-delay", 1000], // (ms) Delay before the first script begins, to give time for all scripts to be scheduled
     ["recovery-thread-padding", 1], // Multiply the number of grow/weaken threads needed by this amount to automatically recover more quickly from misfires.
-    ["max-batches", 40], // Maximum overlapping cycles to schedule in advance. Note that once scheduled, we must wait for all batches to complete before we can schedule mor
+    ["max-batches", 40], // Maximum overlapping cycles to schedule in advance per stream. (With --no-continuous-batching, we must wait for all batches to complete before we can schedule more)
     ["max-steal-percentage", 0.75], // Don't steal more than this in case something goes wrong with timing or scheduling, it's hard to recover frome
 
+    ["no-continuous-batching", false], // Restore the old behaviour of waiting for all of a target's batches to finish before scheduling more
     ["looping-mode", false], // Set to true to attempt to schedule perpetually-looping tasks.
 
     // Special-situation flags
@@ -133,6 +134,8 @@ export async function main(ns) {
     let cycleTimingDelay = 0; // (Set in command line args)
     let queueDelay = 0; // (Set in command line args) The delay that it can take for a script to start, used to pessimistically schedule things in advance
     let maxBatches = 0; // (Set in command line args) The max number of batches this daemon will spool up to avoid running out of IRL ram
+    let continuousBatching = false; // (Set in command line args) Schedule a target's next stream of batches while the previous one is still in flight
+    let continuationScheduledFor = {}; // target name -> landing time of the first in-flight job when we last appended batches (one append per quiet window)
     let maxTargets = 0; // (Set in command line args) Initial value, will grow if there is an abundance of RAM
     let maxPreppingAtMaxTargets = 3; // The max servers we can prep when we're at our current max targets and have spare RAM
     // Allows some home ram to be reserved for ad-hoc terminal script running and when home is explicitly set as the "preferred server" for starting a helper
@@ -406,6 +409,13 @@ export async function main(ns) {
         cycleTimingDelay = options["cycle-timing-delay"];
         queueDelay = options["queue-delay"];
         maxBatches = options["max-batches"];
+        // Continuous batching relies on job timing being fixed at exec (additionalMsec), so it is not used with looping / hack-only / manual-hack modes
+        continuousBatching =
+            !options["no-continuous-batching"] &&
+            !loopingMode &&
+            !hackOnly &&
+            !options.i;
+        continuationScheduledFor = {};
         homeReservedRam = options["reserved-ram"];
         maxTargets = options["initial-max-targets"] ?? 0;
         if (stockFocus) {
@@ -1351,6 +1361,14 @@ export async function main(ns) {
                     } else if (await server.isTargeting()) {
                         // Note servers already being targeted from a prior loop
                         targeting.push(server);
+                        // If enabled, append the next stream of batches while this one is still in flight (only in a safe "quiet" window)
+                        if (
+                            continuousBatching &&
+                            !xpOnly &&
+                            failed.length == 0 &&
+                            false === (await tryContinueBatching(ns, server))
+                        )
+                            failed.push(server);
                     } else if (await server.isPrepping()) {
                         // Note servers already being prepped from a prior loop
                         prepping.push(server);
@@ -1971,6 +1989,33 @@ export async function main(ns) {
             );
             return this._isTargeting;
         }
+        /** (Continuous batching) The earliest and latest planned landing times (start + duration args) of all in-flight
+         * batch jobs against this server, or null if there are none or any have unexpected args. */
+        getBatchLandingWindow(useCache = true) {
+            let first = Infinity,
+                last = -Infinity;
+            const hostNames = dictServerMaxRam
+                ? allHostNames.filter(
+                      (host) => (dictServerMaxRam[host] ?? 0) > 1.6,
+                  )
+                : allHostNames;
+            for (const hostname of hostNames)
+                for (const process of processList(ns, hostname, useCache)) {
+                    const a = process.args;
+                    if (
+                        a.length <= 3 ||
+                        a[0] != this.name ||
+                        typeof a[3] != "string" ||
+                        !a[3].startsWith("Batch")
+                    )
+                        continue;
+                    const landsAt = Number(a[1]) + Number(a[2]);
+                    if (!Number.isFinite(landsAt)) return null; // Can't reason about this job's timing
+                    first = Math.min(first, landsAt);
+                    last = Math.max(last, landsAt);
+                }
+            return first === Infinity ? null : { first, last };
+        }
         async isXpFarming(useCache = true) {
             this._isXpFarming ??= await this.isSubjectOfRunningScript(
                 (process) =>
@@ -2477,8 +2522,55 @@ export async function main(ns) {
         return 0.0;
     }
 
-    /** @param {NS} ns **/
-    async function performScheduling(ns, currentTarget, snapshot) {
+    /** Continuous batching: if the target is in a "quiet" window (every job that has landed so far has left it at min security /
+     * max money, and no in-flight job lands before the jobs we exec now are guaranteed to have started), append another stream of
+     * batches that lands after everything already in flight. Job durations are fixed at exec time (additionalMsec), so they are
+     * computed at min security, exactly as for the first stream. We wait for the *last* quiet moment before landings resume (so each
+     * stream is as long as possible), and leave a gap before the new stream that becomes the next quiet window.
+     * @param {NS} ns
+     * @param {Server} currentTarget
+     * @returns {Promise<boolean|null>} true if batches were scheduled, false if scheduling failed, null if there was nothing (safe) to do. */
+    async function tryContinueBatching(ns, currentTarget) {
+        const landings = currentTarget.getBatchLandingWindow();
+        if (!landings) return null;
+        // All new jobs must be running (and have computed their durations) this long before the next in-flight job lands
+        const guard = queueDelay + cycleTimingDelay / 4;
+        // Width of the window in which we act. Must exceed one targeting loop so that we don't miss it.
+        const catchWindow = 2 * loopInterval + maxLoopTime;
+        const untilNextLanding = landings.first - Date.now();
+        // A job is about to land, or is overdue / still finishing: security / money may not be at min / max. Wait.
+        if (untilNextLanding <= guard) return null;
+        // Too early: wait until just before landings resume, so the stream we append can extend as far as possible
+        if (untilNextLanding > guard + catchWindow) return null;
+        // Only append once per quiet window
+        if (continuationScheduledFor[currentTarget.name] === landings.first)
+            return null;
+        if (!currentTarget.isPrepped()) return null; // Something misfired. Let the batches drain so the target gets re-prepped.
+        if (getTotalNetworkUtilization() >= maxUtilization) return null; // Respect the "hard cap" on RAM utilization
+        const snapshot = optimizePerformanceMetrics(ns, currentTarget);
+        if (!snapshot || currentTarget.actualPercentageToSteal() === 0)
+            return null;
+        // Gap between the last in-flight landing and our first landing. It becomes the quiet window for appending the next stream.
+        const streamGap = guard + catchWindow + cycleTimingDelay / 4;
+        const result = await performScheduling(ns, currentTarget, snapshot, {
+            earliestStart:
+                landings.last + streamGap - currentTarget.timeToWeaken(),
+            quietUntil: landings.first - guard,
+        });
+        if (result !== null)
+            continuationScheduledFor[currentTarget.name] = landings.first;
+        return result;
+    }
+
+    /** @param {NS} ns
+     * @param {{earliestStart: number, quietUntil: number}?} continuation - (continuous batching only) No batch may start before
+     *        earliestStart, and no batch may be exec'd at or after quietUntil (shortly before in-flight jobs resume landing). **/
+    async function performScheduling(
+        ns,
+        currentTarget,
+        snapshot,
+        continuation = null,
+    ) {
         const start = Date.now();
         const scheduledTasks = [];
         const maxCycles = Math.min(
@@ -2509,7 +2601,10 @@ export async function main(ns) {
         while (cyclesScheduled < maxCycles) {
             const newBatchStart = new Date(
                 cyclesScheduled === 0
-                    ? Date.now() + queueDelay
+                    ? Math.max(
+                          Date.now() + queueDelay,
+                          continuation?.earliestStart ?? 0,
+                      )
                     : lastBatch.getTime() + cycleTimingDelay,
             );
             if (newBatchStart.getTime() > scheduleCutoff) break;
@@ -2529,7 +2624,9 @@ export async function main(ns) {
             if (lastStart === null || lastStart < newBatch.lastFire) {
                 lastStart = new Date(newBatch.lastFire.valueOf());
             }
-            if (cyclesScheduled > 0 && lastStart >= firstEnding) {
+            // Workers call hack/grow/weaken immediately with additionalMsec, so every duration is fixed at exec time (at min
+            // security), long before the first hack lands. Only looping mode recomputes timings later, so only it needs this cap.
+            if (loopingMode && cyclesScheduled > 0 && lastStart >= firstEnding) {
                 if (verbose)
                     log(
                         ns,
@@ -2540,8 +2637,20 @@ export async function main(ns) {
             scheduledTasks.push(newBatch);
             cyclesScheduled++;
         }
+        if (continuation && cyclesScheduled === 0) return null; // Nothing fits within the lookahead yet
 
         for (const schedObj of scheduledTasks) {
+            // Continuous batching: never exec once in-flight jobs may start landing. Only whole batches are exec'd.
+            if (continuation && Date.now() >= continuation.quietUntil) {
+                if (schedObj.batchNumber === 0) return null;
+                log(
+                    ns,
+                    `INFO: Ran out of time to exec continuation batches for ${currentTarget.name} ` +
+                        `(${schedObj.batchNumber} of ${cyclesScheduled} scheduled).`,
+                );
+                cyclesScheduled = schedObj.batchNumber;
+                break;
+            }
             for (const schedItem of schedObj.scheduleItems) {
                 const discriminationArg = `Batch ${schedObj.batchNumber}-${schedItem.description}`;
                 const args = [
