@@ -21,7 +21,8 @@ const normalUpdateCycles = 10; // Cycles processed per gang update without bonus
 const maxUpdateCycles = 25; // Max cycles processed per gang update (bonus time). With bonus, updates happen every engine cycle (200ms real time)
 const wantedPenaltyThreshold = 0.0001; // Don't let the wanted penalty get worse than this
 const offStatCostPenalty = 50; // Equipment that doesn't contribute to our main stats suffers a percieved cost penalty of this multiple
-const defaultMaxSpendPerTickTransientEquipment = 0.002; // If the --equipment-budget is not specified, spend up to this percent of non-reserved cash on temporary upgrades (equipment)
+const defaultMaxSpendPerTickTransientEquipment = 0.02; // If the --equipment-budget is not specified, spend up to this percent of non-reserved cash on temporary upgrades (equipment)
+// (Was 0.002. tools/gang-sim, BN12 at $1m/s income: 0.002 -> 34h to 1.875m faction rep, 0.02 -> ~18h, 0.05 -> ~15h.)
 const defaultMaxSpendPerTickPermanentEquipment = 0.2; // If the --augmentation-budget is not specified, spend up to this percent of non-reserved cash on permanent member upgrades
 
 // Territory-related variables
@@ -99,6 +100,8 @@ const argsSchema = [
     ["reserve", null], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
     ["augmentations-budget", null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickPermanentEquipment)
     ["equipment-budget", null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickTransientEquipment)
+    ["pre-4s-budget-divisor", 1], // Divide equipment budgets by this until the 4S TIX API is bought (was 100, to save for stocks).
+    // tools/gang-sim (BN12, $10m/s income): /100 took 33h to reach 1.875m faction rep and held territory at ~16% for a day; /1 took 13h.
     ["money-focus", false], // Always optimize gang crimes for maximum monetary gain. Is otherwise balanced.
     ["reputation-focus", false], // Always optimize gang crimes for maximum reputation gain. Is otherwise balanced.
 ];
@@ -947,9 +950,12 @@ async function tryUpgradeMembers(ns, dictMembers) {
             ns,
             `ns.stock.has4SDataTixApi()`,
         );
-    if (!is4sBought || resetInfo.currentNode === 8) {
+    if (resetInfo.currentNode === 8) {
         budget /= 100;
         augBudget /= 100;
+    } else if (!is4sBought && options["pre-4s-budget-divisor"] > 1) {
+        budget /= options["pre-4s-budget-divisor"];
+        augBudget /= options["pre-4s-budget-divisor"];
     }
     const gangSoftcap = bitNodeMults?.GangSoftcap ?? 1;
     if (gangSoftcap <= 0.3) {
