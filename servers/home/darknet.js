@@ -39,6 +39,7 @@ const argsSchema = [
     ["interval", 5000], // Main loop interval in ms
     ["max-probes", 10], // Maximum number of probe scripts running simultaneously
     ["enable-phishing", true], // Enable phishing attacks for money/charisma
+    ["worker", "auto"], // Probes' spare RAM: "auto" (promoteStock for charisma while below the labyrinth's requirement, else phishing), "cha", "money", "off"
     ["enable-stock-manipulation", false], // Enable stock manipulation via promoteStock
     ["target-stock", ""], // Stock symbol to manipulate (if enabled)
     ["hack-target", ""], // Target server for hack/grow/weaken on freed darknet RAM
@@ -85,62 +86,59 @@ const STASIS_SWAP_REQUEST_PORT = 21; // Legacy: probe stasis swap requests (drai
 const ANCHOR_COMMAND_PORT = 22; // Orchestrator -> probes: {link: [hostnames]} (peeked, not consumed)
 const STASIS_PWD_PORT = 19; // Netscript port for probe-reported stasis server passwords
 
-// Self-contained labyrinth solver script. Deployed to a stasis-linked neighbor of a
-// labyrinth server. Uses DFS with backtracking. Position is per-PID so we must solve
-// entirely within one exec. Args: [labHostname, resultPort]
+// Self-contained labyrinth solver script. Deployed to a neighbor of a labyrinth server; position is per-PID, so it
+// solves within one process. Args: [labHostname, resultPort, aimX, aimY].
+// tools/lab-sim (the game's maze generator, Final labyrinth size, 200 mazes): the old solver called labreport before
+// every move (each call costs as long as a move) and tried directions in a fixed order: 970 steps on average. Reading
+// the walls from each move's own response and trying directions toward the far corner first: 264 (p90 354).
+// It also runs with as many threads as its host allows: each step takes 1 / (1 + 0.2 * (threads - 1)) as long.
 const LAB_SOLVER_CONTENT = [
     `/** @param {NS} ns */ export async function main(ns) {`,
-    `  const hostname = ns.args[0];`,
-    `  const port = ns.args[1];`,
-    `  const visited = new Set();`,
-    `  const stack = [];`,
-    `  const dirs = ["north", "south", "east", "west"];`,
-    `  const delta = { north: [0,-2], south: [0,2], west: [-2,0], east: [2,0] };`,
+    `  const [hostname, port, aimX, aimY] = ns.args;`,
+    `  const D = { north: [0,-1], south: [0,1], east: [1,0], west: [-1,0] };`,
     `  const rev = { north: "south", south: "north", west: "east", east: "west" };`,
-    `  let pos = [1,1];`,
-    `  for (let i = 0; i < 5000; i++) {`,
-    `    let report;`,
-    `    try { report = await ns.dnet.labreport(); } catch { await ns.sleep(200); continue; }`,
-    `    if (!report || !report.success) { await ns.sleep(200); continue; }`,
-    `    pos = [report.coords[0], report.coords[1]];`,
-    `    const key = pos[0] + "," + pos[1];`,
-    `    visited.add(key);`,
-    `    let moved = false;`,
-    `    for (const d of dirs) {`,
-    `      if (!report[d]) continue;`,
-    `      const nk = (pos[0]+delta[d][0]) + "," + (pos[1]+delta[d][1]);`,
-    `      if (visited.has(nk)) continue;`,
-    `      const r = await ns.dnet.authenticate(hostname, "go " + d);`,
-    `      if (r.success) {`,
-    `        (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, password: r.data ?? r.message }));`,
-    `        return;`,
-    `      }`,
-    `      const mm = (r.message || "").match(/moved to (\\d+),(\\d+)/);`,
-    `      if (mm) {`,
-    `        stack.push({ pos: [...pos], dir: d });`,
-    `        pos = [parseInt(mm[1],10), parseInt(mm[2],10)];`,
-    `        moved = true;`,
-    `        break;`,
-    `      }`,
-    `    }`,
-    `    if (!moved) {`,
-    `      if (stack.length === 0) { (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "stuck" })); return; }`,
-    `      const back = stack.pop();`,
-    `      const br = await ns.dnet.authenticate(hostname, "go " + rev[back.dir]);`,
-    `      if (br.success) {`,
-    `        (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, password: br.data ?? br.message }));`,
-    `        return;`,
-    `      }`,
-    `      const bm = (br.message || "").match(/moved to (\\d+),(\\d+)/);`,
-    `      if (bm) { pos = [parseInt(bm[1],10), parseInt(bm[2],10)]; }`,
-    `      else { (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "backtrack failed" })); return; }`,
-    `    }`,
-    `    await ns.sleep(50);`,
+    `  const send = (o) => (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify(Object.assign({ host: hostname }, o)));`,
+    `  const parse = (data) => { const r = String(data ?? "").split("\\n"); return r.length >= 3 && r[1].length >= 3 ? { north: r[0][1] === " ", south: r[2][1] === " ", west: r[1][0] === " ", east: r[1][2] === " " } : null; };`,
+    `  let rep = null;`,
+    `  for (let i = 0; i < 20 && !rep; i++) { try { rep = await ns.dnet.labreport(); } catch {} if (!rep || !rep.success) { rep = null; await ns.sleep(1000); } }`,
+    `  if (!rep) { send({ error: "no labreport" }); return; }`,
+    `  let pos = [rep.coords[0], rep.coords[1]];`,
+    `  let open = { north: rep.north, south: rep.south, east: rep.east, west: rep.west };`,
+    `  const visited = new Set([pos.join(",")]);`,
+    `  const stack = [];`,
+    `  const score = (d) => (aimX - pos[0]) * D[d][0] + (aimY - pos[1]) * D[d][1];`,
+    `  for (let i = 0; i < 50000; i++) {`,
+    `    const order = Object.keys(D).sort((a, b) => score(b) - score(a));`,
+    `    let dir = order.find((d) => open[d] && !visited.has((pos[0] + 2 * D[d][0]) + "," + (pos[1] + 2 * D[d][1])));`,
+    `    let back = false;`,
+    `    if (!dir) { if (stack.length === 0) { send({ error: "stuck" }); return; } dir = rev[stack[stack.length - 1]]; back = true; }`,
+    `    const r = await ns.dnet.authenticate(hostname, "go " + dir);`,
+    `    if (r.success) { send({ password: r.data ?? r.message }); return; }`,
+    `    const msg = r.message || "";`,
+    `    const m = msg.match(/moved to (\\d+),(\\d+)/);`,
+    `    if (m) {`,
+    `      if (back) stack.pop(); else stack.push(dir);`,
+    `      pos = [parseInt(m[1], 10), parseInt(m[2], 10)];`,
+    `      visited.add(pos.join(","));`,
+    `      const seen = parse(r.data);`,
+    `      if (seen) open = seen;`,
+    `      else { const lr = await ns.dnet.labreport(); open = { north: lr.north, south: lr.south, east: lr.east, west: lr.west }; }`,
+    `    } else if (/cannot go that way/i.test(msg)) {`,
+    `      if (back) { send({ error: "backtrack blocked" }); return; }`,
+    `      open[dir] = false;`,
+    `    } else if (/charism|moxie|charming/i.test(msg)) { send({ error: "charisma" }); return; }`,
+    `    else await ns.sleep(200); // timeout (network instability): retry`,
     `  }`,
-    `  (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
+    `  send({ error: "max iterations" });`,
     `}`,
 ].join("\n");
-const PROBE_VERSION = 44;
+// Maze grid size per labyrinth (labyrinth.ts labData sizes, stitched from 4 odd-sized mazes): the solver aims for the
+// far corner, where the exit is (minus a small random offset). Unknown labyrinths: aim far south-east.
+const LAB_GRID = {
+    th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
+    et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
+};
+const PROBE_VERSION = 45;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -193,8 +191,8 @@ export async function main(ns) {
     // Main loop
     while (true) {
         try {
-            writeProbeOptions(ns, options);
             await state.refresh(ns);
+            await writeProbeOptions(ns, options, state);
             await orchestrateDarknet(ns, state, options);
         } catch (err) {
             log(
@@ -882,8 +880,10 @@ async function orchestrateDarknet(ns, state, options) {
                 try {
                     ns.rm(LAB_SOLVER_SCRIPT, info.solverHost);
                 } catch {}
-            } else if (Date.now() - info.deployedAt > 300000) {
-                // Solver running >5 min — likely stuck, kill it
+            } else if (Date.now() - info.deployedAt > 3 * 3600 * 1000) {
+                // The solver always ends by itself (solved, stuck, charisma, max iterations); this only catches a hang.
+                // (Was 5 minutes, but a large labyrinth takes hundreds of ~3 s steps, and a restarted solver starts
+                // over at the entrance: positions are per process.)
                 log(
                     ns,
                     `WARN: Killing stuck labyrinth solver for ${labHost} (PID ${info.pid})`,
@@ -1345,6 +1345,7 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
     }
 
     let solverHost = null;
+    let solverFree = 0;
     const rejectionReasons = [];
     for (const neighbor of neighbors) {
         // Must be reachable via exec from home: stasis-linked, darkweb, or connected
@@ -1362,8 +1363,11 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
                 const maxRam = ns.getServerMaxRam(neighbor);
                 const usedRam = ns.getServerUsedRam(neighbor);
                 if (maxRam - usedRam >= 4) {
-                    solverHost = neighbor;
-                    break;
+                    // The neighbor with the most free RAM: the solver's speed grows with its thread count
+                    if (!solverHost || maxRam - usedRam > solverFree) {
+                        solverHost = neighbor;
+                        solverFree = maxRam - usedRam;
+                    }
                 } else {
                     rejectionReasons.push(
                         `${neighbor}: reachable but low RAM (${(maxRam - usedRam).toFixed(1)}/${maxRam}GB free, need 4GB)`,
@@ -1404,12 +1408,18 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
         }
         ns.write(LAB_SOLVER_SCRIPT, LAB_SOLVER_CONTENT, "w");
         ns.scp(LAB_SOLVER_SCRIPT, solverHost, "home");
+        const threadRam = ns.getScriptRam(LAB_SOLVER_SCRIPT, "home") || 2;
+        const freeRam = ns.getServerMaxRam(solverHost) - ns.getServerUsedRam(solverHost);
+        const threads = Math.max(1, Math.floor((freeRam - 0.5) / threadRam));
+        const [gridW, gridH] = LAB_GRID[hostname] ?? [1e4, 1e4];
         const pid = ns.exec(
             LAB_SOLVER_SCRIPT,
             solverHost,
-            1,
+            threads,
             hostname,
             LAB_SOLVER_RESULT_PORT,
+            gridW - 2,
+            gridH - 2,
         );
         if (pid <= 0) {
             log(
@@ -2572,8 +2582,41 @@ function cleanupOrphanedProbes(ns, state) {
 
 // ─── Probe Options ───────────────────────────────────────────────────────────
 
-function writeProbeOptions(ns, options) {
+/** What probes do with their host's spare RAM (see manageWorker in darknet-probe.js): charisma (promoteStock) while
+ * it's below the current labyrinth's requirement, else phishing for money. Charisma restarts at every install. */
+async function chooseWorkerMode(ns, options, state) {
+    if (options["worker"] === "off") return { workerMode: "off", workerStock: "" };
+    if (!state.workerCheckedAt || Date.now() - state.workerCheckedAt > 60 * 1000) {
+        state.workerCheckedAt = Date.now();
+        try {
+            state.playerCharisma = await getNsDataThroughFile(ns, "ns.getPlayer().skills.charisma", "/Temp/player-charisma.txt");
+        } catch {}
+        // promoteStock raises a stock's volatility: use one we hold no position in
+        try {
+            state.workerStock = await getNsDataThroughFile(ns,
+                "ns.stock.hasTixApiAccess() ? (ns.stock.getSymbols().find(s => { const p = ns.stock.getPosition(s); return p[0] === 0 && p[2] === 0; }) ?? '') : ''",
+                "/Temp/darknet-worker-stock.txt");
+        } catch {
+            state.workerStock = "";
+        }
+        const unsolvedLab = [...state.labyrinthServers].find((h) => !isServerAuthenticated(state, h));
+        if (unsolvedLab) {
+            try {
+                state.labCharismaRequired = ns.dnet.getServerRequiredCharismaLevel(unsolvedLab);
+            } catch {}
+        }
+    }
+    const needCharisma = (state.labCharismaRequired ?? 0) > (state.playerCharisma ?? Infinity);
+    if (options["worker"] === "cha" || (options["worker"] === "auto" && needCharisma && state.workerStock))
+        return { workerMode: "cha", workerStock: state.workerStock ?? "" };
+    return { workerMode: "money", workerStock: "" };
+}
+
+async function writeProbeOptions(ns, options, state) {
+    const labNeighbors = [...state.labyrinthNeighbors.values()].flatMap((set) => [...set]);
     const payload = {
+        ...(await chooseWorkerMode(ns, options, state)),
+        labNeighbors,
         enablePhishing: Boolean(options["enable-phishing"]),
         enableStockManipulation: Boolean(options["enable-stock-manipulation"]),
         targetStock: options["target-stock"] ?? "",

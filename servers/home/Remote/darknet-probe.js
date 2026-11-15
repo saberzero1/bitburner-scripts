@@ -1,4 +1,4 @@
-const PROBE_VERSION = 44;
+const PROBE_VERSION = 45;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -110,6 +110,7 @@ export async function main(ns) {
 
             await handleCacheFiles(ns, HOST);
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
+            await manageWorker(ns, OPTIONS_FILE, HOST);
             await manageStasis(ns, OPTIONS_FILE, HOST, passwords);
             await attemptMigrationCharging(ns, OPTIONS_FILE, HOST);
             await checkAndUnleashStormSeed(ns, HOST);
@@ -1117,6 +1118,50 @@ async function handleCacheFiles(ns, hostname) {
     } catch {}
 }
 
+// ===== WORKER: the host's spare RAM =====
+// Darknet-only work with all spare RAM, as one multi-threaded script: promoteStock while our charisma is below the
+// current labyrinth's requirement (4x the charisma exp of phishing; the labyrinth refuses moves below it, and the
+// last BN12 labyrinth rewards The Red Pill), otherwise phishingAttack for money. Both scale linearly with threads.
+// Servers next to a labyrinth keep their RAM free for the solver. Script sources are constant (module cache).
+const WORKER_SCRIPTS = {
+    cha: "/Temp/darknet-worker-cha.js",
+    money: "/Temp/darknet-worker-money.js",
+};
+const WORKER_SOURCES = {
+    cha: `export async function main(ns){const d=ns.dnet;while(true){try{await d.${["promote", "Stock"].join("")}(ns.args[0]);}catch{await ns.sleep(5000);}}}`,
+    money: `export async function main(ns){const d=ns.dnet;while(true){try{await d.${["phishing", "Attack"].join("")}();}catch{await ns.sleep(5000);}}}`,
+};
+const WORKER_THREAD_RAM = 3.6; // 1.6 base + 2.0 for the dnet call
+const WORKER_RESERVE_GB = 16; // left free for the probe's temp scripts and setStasisLink (13.6 GB)
+
+async function manageWorker(ns, optionsFile, host) {
+    const options = loadProbeOptions(ns, optionsFile);
+    const mode = options.workerMode === "cha" && options.workerStock ? "cha" : options.workerMode === "money" ? "money" : "off";
+    const procs = (await nsPs(ns, host)) || [];
+    const workers = procs.filter((p) => /darknet-worker-/.test(p.filename));
+    const wantedScript = mode === "off" ? null : WORKER_SCRIPTS[mode];
+    const wantedArgs = mode === "cha" ? [options.workerStock] : [];
+    const keepFree = options.labNeighbors.includes(host);
+    const workerRam = workers.reduce((total, p) => total + p.threads * WORKER_THREAD_RAM, 0);
+    const maxRam = nsGetServerMaxRam(ns, host);
+    const spare = maxRam - nsGetServerUsedRam(ns, host) + workerRam - Math.max(WORKER_RESERVE_GB, 0.1 * maxRam);
+    const threads = keepFree || !wantedScript ? 0 : Math.max(0, Math.floor(spare / WORKER_THREAD_RAM));
+    const current = workers.find((p) => normalizeScriptName(p.filename) === normalizeScriptName(wantedScript ?? "") &&
+        JSON.stringify(p.args) === JSON.stringify(wantedArgs));
+    const currentThreads = current?.threads ?? 0;
+    // Leave a running worker alone unless the mode changed or its thread count is off by more than 25%
+    if (current && workers.length === 1 && Math.abs(threads - currentThreads) <= Math.max(1, 0.25 * currentThreads)) return;
+    for (const p of workers) await nsKill(ns, p.pid);
+    if (threads < 1) return;
+    ns.write(wantedScript, WORKER_SOURCES[mode], "w");
+    const pid = ns.exec(wantedScript, host, threads, ...wantedArgs);
+    if (pid) ns.print(`Worker on ${host}: ${mode} x${threads}`);
+}
+
+function normalizeScriptName(name) {
+    return String(name).replace(/^\//, "");
+}
+
 async function runOptionalActions(ns, optionsFile, hostname) {
     const options = loadProbeOptions(ns, optionsFile);
     // phishingAttack and promoteStock temp scripts each cost 3.6GB (1.6 base + 2.0 dnet API)
@@ -1125,9 +1170,9 @@ async function runOptionalActions(ns, optionsFile, hostname) {
     const freeRam =
         (await nsGetServerMaxRam(ns, host)) -
         (await nsGetServerUsedRam(ns, host));
-    if (options.enablePhishing && freeRam >= expensiveOpCost) {
+    if (options.enablePhishing && options.workerMode === "off" && freeRam >= expensiveOpCost) {
         await runPhishing(ns, hostname);
-    } else if (options.enablePhishing) {
+    } else if (options.enablePhishing && options.workerMode === "off") {
         ns.print(
             `WARN: Phishing skipped on ${hostname} — insufficient RAM (${freeRam.toFixed(1)}GB free, need ${expensiveOpCost}GB)`,
         );
@@ -1153,6 +1198,9 @@ function loadProbeOptions(ns, filePath) {
         enableMigration: true,
         targetStock: "",
         hackTarget: "",
+        workerMode: "off",
+        workerStock: "",
+        labNeighbors: [],
     };
     try {
         const data = ns.read(filePath);
@@ -1172,6 +1220,9 @@ function loadProbeOptions(ns, filePath) {
                     : "",
             hackTarget:
                 typeof parsed.hackTarget === "string" ? parsed.hackTarget : "",
+            workerMode: ["cha", "money"].includes(parsed.workerMode) ? parsed.workerMode : "off",
+            workerStock: typeof parsed.workerStock === "string" ? parsed.workerStock : "",
+            labNeighbors: Array.isArray(parsed.labNeighbors) ? parsed.labNeighbors : [],
         };
     } catch {
         return defaults;
