@@ -187,6 +187,32 @@ export async function main(ns) {
     async function go_analysis_getChains(ns) {
         return await getNsDataThroughFile(ns, `ns.go.analysis.getChains()`);
     }
+    /** Fetch the five per-turn board lookups. One combined temp script (61.6 GB) starts one process per turn
+     * instead of five, but is only used when home has that much RAM free with room to spare; otherwise (or if it
+     * fails) the lookups run separately, peaking at 17.6 GB.
+     * @param {NS} ns */
+    async function go_getTurnData(ns) {
+        const combinedRam = 61.6, headroom = 32;
+        const freeHomeRam = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+        if (freeHomeRam >= combinedRam + headroom) {
+            try {
+                const data = await getNsDataThroughFile(ns,
+                    `[ns.go.getBoardState(), ns.go.analysis.getControlledEmptyNodes(), ns.go.analysis.getValidMoves(), ` +
+                    `ns.go.analysis.getLiberties(), ns.go.analysis.getChains()]`,
+                    { fName: "/Temp/go-turn-data", maxRetries: 1, silent: true });
+                if (Array.isArray(data) && data.length === 5) return data;
+            } catch {
+                // Fall through to separate lookups (RAM was taken between the check and the launch)
+            }
+        }
+        return [
+            await go_getBoardState(ns),
+            await go_analysis_getControlledEmptyNodes(ns),
+            await go_analysis_getValidMoves(ns),
+            await go_analysis_getLiberties(ns),
+            await go_analysis_getChains(ns),
+        ];
+    }
     /** @param {NS} ns @returns {Promise<number>} */
     async function go_cheat_getCheatSuccessChance(ns) {
         return await getNsDataThroughFile(
@@ -241,11 +267,7 @@ export async function main(ns) {
         while (true) {
             turn++;
             if (turn === 1) playStyle = getStyle(ns); // A new game (possibly a different opponent) started
-            board = await go_getBoardState(ns);
-            contested = await go_analysis_getControlledEmptyNodes(ns);
-            validMove = await go_analysis_getValidMoves(ns);
-            validLibMoves = await go_analysis_getLiberties(ns);
-            chains = await go_analysis_getChains(ns);
+            [board, contested, validMove, validLibMoves, chains] = await go_getTurnData(ns);
             const size = board[0].length;
             //Build a test board with walls
             let testWall = "W".repeat(size + 2);

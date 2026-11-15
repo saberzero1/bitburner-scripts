@@ -1431,6 +1431,9 @@ export async function main(ns) {
             true,
             "--on-completion-script",
             ns.getScriptName(),
+            // One JSON-array arg, so autopilot's own flags (which start with --) survive casino.js's flag parsing
+            "--on-completion-script-args",
+            JSON.stringify(ns.args),
         ]);
         if (pid) {
             await waitForProcessToComplete(ns, pid);

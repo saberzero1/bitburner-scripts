@@ -1,5 +1,6 @@
 import {
     log,
+    unEscapeArrayArgs,
     getConfiguration,
     getFilePath,
     waitForProcessToComplete,
@@ -232,7 +233,7 @@ export async function main(ns) {
     const runCompletionScript = () => {
         const completionScript = options["on-completion-script"];
         if (!completionScript) return;
-        const completionArgs = options["on-completion-script-args"];
+        const completionArgs = unEscapeArrayArgs(options["on-completion-script-args"].map(String));
         if (ns.run(completionScript, 1, ...completionArgs))
             log(ns, `INFO: Launching ${completionScript}...`);
         else log(ns, `WARNING: Failed to launch ${completionScript}...`, false, "warning");

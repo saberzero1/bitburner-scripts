@@ -92,6 +92,9 @@ export async function main(ns) {
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     disableLogs(ns, ["getServerMoneyAvailable"]);
     // Ensure the global state is reset (e.g. after entering a new bitnode)
+    // Module state persists across runs (and installs), so don't reuse faction caches from a previous run
+    factionWorkCacheExpiry = 0;
+    factionWorkTypesCacheExpiry = 0;
     ((task = []),
         (lastStatusUpdateTime = []),
         (lastPurchaseTime = []),
@@ -682,8 +685,9 @@ async function pickSleeveTask(
     const reservedForBladeburner = playerInBladeburner && i >= 1 && i <= 3;
     if (i != followPlayerSleeve && !needGangKarma && !reservedForBladeburner) {
         const factionTargets = await getFactionWorkTargets(ns, playerInfo);
+        const joined = playerInfo.factions ?? [];
         const nextFaction = factionTargets.find(
-            (f) => !takenByOtherSleeve(assignedFactions, f.name, i),
+            (f) => joined.includes(f.name) && !takenByOtherSleeve(assignedFactions, f.name, i),
         );
         if (nextFaction) {
             const faction = nextFaction.name;

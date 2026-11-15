@@ -526,22 +526,38 @@ export function jsonReviver(key, val) {
     return val;
 }
 
-export async function measureRepGainRate(ns, fnSampleReputation, ticks = 1) {
+/** Measure reputation gained per second. Waits for a first change (so the timer starts aligned with a game update),
+ * then times the next `ticks` changes. Timing from a random point to the first change over-estimated by up to ~5x. */
+export async function measureRepGainRate(ns, fnSampleReputation, ticks = 3) {
     checkNsInstance(ns, '"measureRepGainRate"');
-    const initial = await fnSampleReputation();
-    let last = initial;
-    let count = 0;
-    const start = Date.now();
-    while (count < ticks && Date.now() - start < 2000 * ticks) {
-        await ns.sleep(50);
+    let last = await fnSampleReputation();
+    const syncDeadline = Date.now() + 2000;
+    let synced = false;
+    while (Date.now() < syncDeadline) {
+        await ns.sleep(20);
         const current = await fnSampleReputation();
         if (current !== last) {
             last = current;
+            synced = true;
+            break;
+        }
+    }
+    if (!synced) return 0; // Rep isn't changing
+    const initial = last;
+    const start = Date.now();
+    let count = 0;
+    let lastChangeTime = start;
+    while (count < ticks && Date.now() - start < 2000 * ticks) {
+        await ns.sleep(20);
+        const current = await fnSampleReputation();
+        if (current !== last) {
+            last = current;
+            lastChangeTime = Date.now();
             count++;
         }
     }
-    const elapsed = (Date.now() - start) / 1000;
-    return elapsed > 0 ? (last - initial) / elapsed : 0;
+    const elapsed = (lastChangeTime - start) / 1000;
+    return count > 0 && elapsed > 0 ? (last - initial) / elapsed : 0;
 }
 
 /** Evaluate an arbitrary ns command by writing it to a new script and then running or executing it.

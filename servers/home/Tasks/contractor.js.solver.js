@@ -245,18 +245,23 @@ export async function main(ns) {
             ]);
 
             // Backpressure: if too many contracts are in-flight, wait for some to complete
-            if (inFlight - completed > 50) await ns.asleep(100);
+            while (inFlight - completed > 50) await ns.asleep(100);
         }
 
-        // Wait for all in-flight workers to complete
-        while (completed < inFlight) {
+        // Wait for all in-flight workers to complete (but not forever: a hung worker would block every future run)
+        const waitDeadline = Date.now() + 60_000;
+        while (completed < inFlight && Date.now() < waitDeadline) {
             heartbeat = performance.now();
             await ns.asleep(100);
         }
+        if (completed < inFlight)
+            ns.print(`WARNING: ${inFlight - completed} contract solver(s) didn't finish within 60s; giving up on them.`);
 
-        // Keep tabs of failed contracts
-        if (notified.length > 0)
-            await ns.write(fUnsolvedContracts, JSON.stringify(notified), "w");
+        // Keep tabs of failed contracts, dropping ones that no longer exist (the file would otherwise grow forever)
+        const stillPresent = new Set(contractsDb.map((c) => c.contract));
+        const unsolved = notified.filter((c) => stillPresent.has(c));
+        if (unsolved.length > 0 || fContents)
+            await ns.write(fUnsolvedContracts, JSON.stringify(unsolved), "w");
         // Let the user know when we're done solving a large number of contracts.
         if (quietSolve) {
             const message = `Done solving ${contractsDb.length}. ${solvedCount} succeeded, and ${failureCount} failed. See tail logs for errors.`;
