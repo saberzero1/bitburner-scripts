@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export function main(ns) {
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(hackingTime));
 
     const host = ns.getServer(ns.args[0]);

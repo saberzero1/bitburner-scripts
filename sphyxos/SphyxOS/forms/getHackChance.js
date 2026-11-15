@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export function getHackChance(ns) {
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(Math.min(1, Math.max(chance, 0))));
 
     const person = ns.getPlayer();

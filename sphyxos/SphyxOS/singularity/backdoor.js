@@ -4,5 +4,5 @@ export async function main(ns) {
         await ns.singularity.installBackdoor();
     } catch {}
     await ns.sleep(100); //Give the other script time to set up the listener
-    ns.atExit(() => ns.port.write(ns.pid, true));
+    ns.atExit(() => ns.writePort(ns.pid, true));
 }

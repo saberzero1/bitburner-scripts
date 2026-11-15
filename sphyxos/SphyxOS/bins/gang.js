@@ -68,16 +68,16 @@ export async function main(ns) {
     ns.disableLog("ALL");
     ns.ui.openTail();
     ns.ui.resizeTail(WIDTH, HEIGHT);
-    ns.port.clear(6);
-    ns.port.write(6, ns.pid);
-    ns.port.write(1, true);
+    ns.clearPort(6);
+    ns.writePort(6, ns.pid);
+    ns.writePort(1, true);
     ns.atExit(() => {
-        ns.port.clear(6);
-        ns.port.write(1, 1);
+        ns.clearPort(6);
+        ns.writePort(1, 1);
         if (win) {
             win.close();
             win = false;
-            ns.port.write(1, "gang popout off");
+            ns.writePort(1, "gang popout off");
         }
     });
 
@@ -272,7 +272,7 @@ function update(ns, text) {
     ns.printRaw(text);
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "gang popout off");
+        ns.writePort(1, "gang popout off");
     }
     if (win) win.update(text);
 }
@@ -930,8 +930,8 @@ async function maxRepNeeded(ns, faction) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(16) !== "NULL PORT DATA") {
-        let result = ns.port.read(16);
+    while (ns.peek(16) !== "NULL PORT DATA") {
+        let result = ns.readPort(16);
         switch (result) {
             case "popout":
                 if (!silent) ns.tprintf("Gang: PopOut On!");

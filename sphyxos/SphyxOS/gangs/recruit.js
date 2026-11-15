@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     let result = false;
     ns.atExit(() => port.write(result));
     if (ns.gang.canRecruitMember()) {

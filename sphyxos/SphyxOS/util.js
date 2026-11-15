@@ -3,8 +3,8 @@ export const reservedRam = 256;
 export async function ramDodge(ns, scriptName, persistent, argmts) {
     const pidof = await runIt(ns, scriptName, persistent, argmts, 0);
     if (pidof === 0) throw new Error("Failed to run " + scriptName);
-    await ns.port.nextWrite(pidof);
-    return ns.port.read(pidof);
+    await ns.nextPortWrite(pidof);
+    return ns.readPort(pidof);
 }
 /** @param {NS} ns */
 export async function ramDodgeProxy(ns, script, func, argmts) {
@@ -17,8 +17,8 @@ export async function ramDodgeProxy(ns, script, func, argmts) {
         ns.getFunctionRamCost(func) + 1.6,
     );
     if (pidof === 0) throw new Error("Failed to run proxy " + func);
-    await ns.port.nextWrite(pidof);
-    return ns.port.read(pidof);
+    await ns.nextPortWrite(pidof);
+    return ns.readPort(pidof);
 }
 /** @param {NS} ns */
 export async function ramDodgeLocal(ns, scriptName, argmts) {
@@ -30,8 +30,8 @@ export async function ramDodgeLocal(ns, scriptName, argmts) {
     );
     if (pidof === 0)
         throw new Error("Failed to run " + scriptName + " locally");
-    await ns.port.nextWrite(pidof);
-    return ns.port.read(pidof);
+    await ns.nextPortWrite(pidof);
+    return ns.readPort(pidof);
 }
 
 /** @param {NS} ns */

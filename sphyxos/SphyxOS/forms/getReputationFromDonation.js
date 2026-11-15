@@ -16,6 +16,6 @@ export async function main(ns) {
         result = (ns.args[0] / 1e6) * ns.getPlayer().mults.faction_rep;
     }
 
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(result));
 }

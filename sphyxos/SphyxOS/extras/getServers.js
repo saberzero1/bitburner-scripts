@@ -15,6 +15,6 @@ export async function main(ns) {
         return a.maxRam - a.ramUsed - (b.maxRam - b.ramUsed);
     });
 
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(serverDetails));
 }

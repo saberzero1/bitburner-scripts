@@ -102,13 +102,13 @@ export async function main(ns) {
     ns.ui.openTail();
     win = false;
     ns.atExit(() => {
-        ns.port.clear(8);
-        ns.port.write(1, 1);
+        ns.clearPort(8);
+        ns.writePort(1, 1);
         if (win) win.close();
     });
-    ns.port.clear(8);
-    ns.port.write(8, ns.pid);
-    ns.port.write(1, true);
+    ns.clearPort(8);
+    ns.writePort(8, ns.pid);
+    ns.writePort(1, true);
 
     await getCommands(ns);
     await init(ns);
@@ -1459,7 +1459,7 @@ function clearLogs(ns) {
     if (win && win.closed) {
         win.close();
         win = false;
-        ns.port.write(1, "bb popout off");
+        ns.writePort(1, "bb popout off");
     }
     if (win) win.clear();
 }
@@ -1470,8 +1470,8 @@ function update(ns, text) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let quiet = false;
-    while (ns.port.peek(18) !== "NULL PORT DATA") {
-        let result = ns.port.read(18);
+    while (ns.peek(18) !== "NULL PORT DATA") {
+        let result = ns.readPort(18);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("BladeBurner", ns.ui.getTheme());

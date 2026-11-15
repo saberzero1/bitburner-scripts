@@ -3,10 +3,10 @@ export async function main(ns) {
     //arg[0] is Type; money, corp, min, max, study, train, research, bbrank, bbsp, coding, favor,
     //Target needs to be determined.  peek(3) for current hacking target
     //Will need to figure out Target for company favor - working for should do it but it's singularity
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(1));
 
-    const hackTarget = ns.port.peek(3);
+    const hackTarget = ns.peek(3);
     switch (ns.args[0]) {
         case "money":
             while (ns.hacknet.spendHashes("Sell for Money", "home")) {}

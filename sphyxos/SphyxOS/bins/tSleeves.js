@@ -24,14 +24,14 @@ let win;
 /** @param {NS} ns */
 export async function main(ns) {
     ns.disableLog("ALL");
-    ns.port.clear(7);
-    ns.port.write(7, ns.pid);
+    ns.clearPort(7);
+    ns.writePort(7, ns.pid);
     ns.atExit(() => {
-        ns.port.clear(7);
-        ns.port.write(1, 1);
+        ns.clearPort(7);
+        ns.writePort(1, 1);
         if (win) {
             win.close();
-            ns.port.write(1, "sleeves popout off");
+            ns.writePort(1, "sleeves popout off");
         }
     });
     win = false;
@@ -370,8 +370,8 @@ async function displaySleeves(ns, sleeves) {
 }
 async function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(17) !== "NULL PORT DATA") {
-        let result = ns.port.read(17);
+    while (ns.peek(17) !== "NULL PORT DATA") {
+        let result = ns.readPort(17);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("Sleeves", ns.ui.getTheme());
@@ -464,7 +464,7 @@ function update(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "sleeves popout off");
+        ns.writePort(1, "sleeves popout off");
     }
     if (win) win.update(text);
 }

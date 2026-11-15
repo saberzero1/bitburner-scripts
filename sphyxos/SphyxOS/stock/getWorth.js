@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    let port = ns.port.getHandle(ns.pid);
+    let port = ns.getPortHandle(ns.pid);
     let worth = 0;
     ns.atExit(() => port.write(worth > 0 ? worth : 1));
     for (let sym of ns.stock.getSymbols()) {

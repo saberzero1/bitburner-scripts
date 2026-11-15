@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(1));
     const weaps =
         ns.ui.getGameInfo()?.versionNumber >= 44 ? weaps_new : weaps_old;

@@ -5,7 +5,7 @@ export async function main(ns) {
         ns.singularity.purchaseTor();
         result = 1;
     } catch {}
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(result));
 }
 

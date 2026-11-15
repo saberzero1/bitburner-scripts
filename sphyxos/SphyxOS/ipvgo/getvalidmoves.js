@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    let port = ns.port.getHandle(ns.pid);
+    let port = ns.getPortHandle(ns.pid);
     const result = ns.go.analysis.getValidMoves(
         undefined,
         undefined,

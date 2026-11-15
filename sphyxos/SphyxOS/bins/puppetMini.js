@@ -97,12 +97,12 @@ export async function main(ns) {
     ns.disableLog("ALL");
     ns.ui.openTail();
     win = false;
-    ns.port.clear(2);
-    ns.port.write(2, ns.pid);
+    ns.clearPort(2);
+    ns.writePort(2, ns.pid);
     ns.atExit(() => {
-        ns.port.clear(2);
-        ns.port.clear(3);
-        ns.port.write(1, 1);
+        ns.clearPort(2);
+        ns.clearPort(3);
+        ns.writePort(1, 1);
         if (win) win.close();
     });
     if (!hackReady || !growReady || !weakenReady) {
@@ -141,10 +141,10 @@ export async function main(ns) {
 
     //Get the batch info.  Contains: H1 W1 G1 W2 Type Take HackP
     BATCHINFO = await getHackP(ns, TARGET.hostname, -1, -1, 1);
-    ns.port.clear(3);
-    ns.port.write(3, TARGET.hostname); //emit our target/next target for Hash targets
-    ns.port.write(1, 1);
-    ns.port.clear(1);
+    ns.clearPort(3);
+    ns.writePort(3, TARGET.hostname); //emit our target/next target for Hash targets
+    ns.writePort(1, 1);
+    ns.clearPort(1);
     let spending = true;
     let new_ports_open = 0;
     PORTS_OPEN = 0;
@@ -411,7 +411,7 @@ export async function main(ns) {
         if (AUTOBUYHACKNET) {
             if (!(await hacknetPurchaser(ns))) {
                 AUTOBUYHACKNET = false;
-                ns.port.write(1, "puppet hacknet off");
+                ns.writePort(1, "puppet hacknet off");
             }
         }
         //Charge Stanek here
@@ -483,8 +483,8 @@ export async function main(ns) {
             BATCHINFO = await getHackP(ns, TARGET.hostname, -1, -1, 1);
             TARGETUPDATE = true;
         }
-        ns.port.clear(3);
-        ns.port.write(3, TARGET.hostname); //emit our target/next target for Hash targets
+        ns.clearPort(3);
+        ns.writePort(3, TARGET.hostname); //emit our target/next target for Hash targets
 
         if (RECALC_BAD) {
             BATCHINFO = await getHackP(
@@ -651,7 +651,7 @@ function update_hud(ns) {
     }
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "puppet popout off");
+        ns.writePort(1, "puppet popout off");
     }
     if (win) {
         win.clear();
@@ -968,9 +968,9 @@ async function generateXP(ns, threads, player) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(12) !== "NULL PORT DATA") {
+    while (ns.peek(12) !== "NULL PORT DATA") {
         //1-4  1: noHacknet, 2: !noHacknet, 3: buyServers, 4: !buyServers
-        let result = ns.port.read(12);
+        let result = ns.readPort(12);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("Batcher", ns.ui.getTheme());

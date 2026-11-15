@@ -3,7 +3,7 @@ import { getServersLight, runIt } from "SphyxOS/util.js";
 export async function main(ns) {
     ns.disableLog("ALL");
     ns.clearLog();
-    ns.atExit(() => ns.port.write(40, true));
+    ns.atExit(() => ns.writePort(40, true));
     if (!ns.args.includes("quiet")) ns.ui.openTail();
     const all = ns.args.includes("all");
     const allServers = await getServersLight(ns);
@@ -86,7 +86,7 @@ export async function main(ns) {
                     point,
                     ns.format.time(ns.getHackTime(point) / 4),
                 );
-            ns.port.nextWrite(runningPid).then(() => {
+            ns.nextPortWrite(runningPid).then(() => {
                 ns.printf("Installed backdoor on %s", point);
                 runningScripts--;
             });

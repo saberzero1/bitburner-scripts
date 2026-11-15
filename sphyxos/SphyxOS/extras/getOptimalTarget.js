@@ -69,7 +69,7 @@ export async function main(ns) {
             bestserver = server;
         }
     }
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(bestserver));
 }
 

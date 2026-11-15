@@ -66,12 +66,12 @@ export async function main(ns) {
     you = me === "X" ? "O" : "X";
 
     ns.atExit(() => {
-        ns.port.clear(5);
-        ns.port.write(1, 1);
+        ns.clearPort(5);
+        ns.writePort(1, 1);
         if (win) win.close();
     });
-    ns.port.clear(5);
-    ns.port.write(5, ns.pid); //We are running!
+    ns.clearPort(5);
+    ns.writePort(5, ns.pid); //We are running!
     const startBoard = await getBState(ns);
     let inProgress = false;
     turn = 0;
@@ -490,7 +490,7 @@ function update(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "ipvgo popout off");
+        ns.writePort(1, "ipvgo popout off");
     }
     if (win) win.update(text);
 }
@@ -524,9 +524,9 @@ function getStyle(ns) {
 async function getCommands(ns) {
     let changed = false;
     let silent = false;
-    while (ns.port.peek(15) !== "NULL PORT DATA") {
+    while (ns.peek(15) !== "NULL PORT DATA") {
         changed = true;
-        switch (ns.port.read(15)) {
+        switch (ns.readPort(15)) {
             case "popout":
                 win = await makeNewWindow("Go", ns.ui.getTheme());
                 if (!silent) ns.tprintf("IPvGo:  Popout On!");

@@ -4,15 +4,15 @@ let win;
 export async function main(ns) {
     ns.disableLog("ALL");
     ns.atExit(() => {
-        ns.port.clear(20);
-        ns.port.write(1, true);
+        ns.clearPort(20);
+        ns.writePort(1, true);
         if (win) {
             win.close();
-            ns.port.write(1, "grafting popout off");
+            ns.writePort(1, "grafting popout off");
         }
     });
-    ns.port.clear(20);
-    ns.port.write(20, ns.pid);
+    ns.clearPort(20);
+    ns.writePort(20, ns.pid);
     win = false;
     let graftable = await getGraftable(ns);
     const specificQueue = [];
@@ -525,15 +525,15 @@ function update(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "grafting popout off");
+        ns.writePort(1, "grafting popout off");
     }
     if (win) win.update(text);
 }
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(23) !== "NULL PORT DATA") {
-        let result = ns.port.read(23);
+    while (ns.peek(23) !== "NULL PORT DATA") {
+        let result = ns.readPort(23);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("Grafting", ns.ui.getTheme());

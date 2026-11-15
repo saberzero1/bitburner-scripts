@@ -1,7 +1,7 @@
 /** @param {NS} ns */
 export async function main(ns) {
     let upgradecost = 1e150;
-    const port = ns.port.getHandle(ns.pid);
+    const port = ns.getPortHandle(ns.pid);
     ns.atExit(() => port.write(upgradecost));
 
     const startRam = 2;

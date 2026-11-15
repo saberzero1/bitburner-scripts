@@ -18,7 +18,7 @@ import {
 /** @param {NS} ns */
 export async function main(ns) {
     ns.disableLog("ALL");
-    ns.atExit(() => ns.port.write(40, true));
+    ns.atExit(() => ns.writePort(40, true));
     const FAVOR = await proxy(ns, "getFavorToDonate");
     const player = await getPlay(ns);
     const factions = player.factions;

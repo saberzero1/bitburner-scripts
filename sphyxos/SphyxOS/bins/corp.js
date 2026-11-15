@@ -36,12 +36,12 @@ export async function main(ns) {
     if (!ns.args.includes("quiet")) ns.ui.openTail();
     ns.ui.resizeTail(WIDTH, HEIGHT);
     ns.clearLog();
-    ns.port.clear(9);
-    ns.port.write(9, ns.pid);
-    ns.port.write(1, true);
+    ns.clearPort(9);
+    ns.writePort(9, ns.pid);
+    ns.writePort(1, true);
     ns.atExit(() => {
-        ns.port.clear(9);
-        ns.port.write(1, true);
+        ns.clearPort(9);
+        ns.writePort(1, true);
     });
     hasDivDB = [];
     researchedDB = [];
@@ -52,8 +52,8 @@ export async function main(ns) {
         for (const worker of workersWIP) worker.terminate();
         workers.length = 0;
         workersWIP = [];
-        ns.port.clear(9);
-        ns.port.write(1, 1);
+        ns.clearPort(9);
+        ns.writePort(1, 1);
     });
     //Create our proxy files
     writeProxy(ns);
@@ -5562,8 +5562,8 @@ async function updateHud(ns) {
 /** @param {NS} ns */
 function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(19) !== "NULL PORT DATA") {
-        let result = ns.port.read(19);
+    while (ns.peek(19) !== "NULL PORT DATA") {
+        let result = ns.readPort(19);
         switch (result) {
             case "Reset TAII":
                 if (!silent) ns.tprintf("Corp: Resetting TAII DB!");
@@ -5672,8 +5672,8 @@ async function runIt(ns, script, scriptOverride, argmnts) {
     }
     if (threads >= 1)
         ns.tprintf("Failed to allocate all threads for script: %s", script);
-    await ns.port.nextWrite(thispid);
-    const result = ns.port.read(thispid);
+    await ns.nextPortWrite(thispid);
+    const result = ns.readPort(thispid);
     return result;
 }
 
@@ -5696,7 +5696,7 @@ export async function main(ns) {
   let nsFunction = ns
   for (let prop of func.split(".")) nsFunction = nsFunction[prop]
   const result = nsFunction(...argmnts)
-  ns.atExit(() => ns.port.write(ns.pid, result))
+  ns.atExit(() => ns.writePort(ns.pid, result))
 }`;
     ns.write("SphyxOS/extras/nsProxy.js", data, "w");
 }
@@ -5715,7 +5715,7 @@ export async function main(ns) {
     else result = true
   }
   catch { }
-  ns.atExit(() => ns.port.write(ns.pid, result))
+  ns.atExit(() => ns.writePort(ns.pid, result))
 }`;
     ns.write("SphyxOS/extras/nsProxyTry.js", data, "w");
 }
@@ -5723,7 +5723,7 @@ export async function main(ns) {
 function writeBNMults(ns) {
     const data = `/** @param {NS} ns */
 export async function main(ns) {
-  const port = ns.port.getHandle(ns.pid)
+  const port = ns.getPortHandle(ns.pid)
   let mults;
   try { mults = ns.getBitNodeMultipliers() }
   catch {
@@ -6153,7 +6153,7 @@ export async function main(ns) {
 function writeCurrentBN(ns) {
     const data = `/** @param {NS} ns */
 export async function main(ns) {
-  const port = ns.port.getHandle(ns.pid)
+  const port = ns.getPortHandle(ns.pid)
   ns.atExit(() => port.write(result))
 
   const resetInfo = ns.getResetInfo()

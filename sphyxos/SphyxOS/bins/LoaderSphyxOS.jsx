@@ -72,8 +72,8 @@ export async function main(ns) {
     if (ns.args.includes("autoPilot")) {
         //Restart from autoPilot
         if (hasBN(resetInfo, sourceFiles, 4, 2)) {
-            ns.port.write(22, "silent");
-            ns.port.write(
+            ns.writePort(22, "silent");
+            ns.writePort(
                 22,
                 optionsDB["AutoPilotMoveOn"] ? "moveon" : "nomoveon",
             );
@@ -283,13 +283,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(2) !== "NULL PORT DATA"
+                            ns.peek(2) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonBatcherStart(ns)}
                     >
-                        {ns.port.peek(2) === "NULL PORT DATA"
+                        {ns.peek(2) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -376,7 +376,7 @@ export async function main(ns) {
                     </button>
                     <button
                         style={
-                            ns.port.peek(3) !== "NULL PORT DATA"
+                            ns.peek(3) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
@@ -386,7 +386,7 @@ export async function main(ns) {
                     </button>
                     <button
                         style={
-                            ns.port.peek(3) !== "NULL PORT DATA"
+                            ns.peek(3) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
@@ -460,19 +460,19 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(4) !== "NULL PORT DATA"
+                            ns.peek(4) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonStocksStart(ns)}
                     >
-                        {ns.port.peek(4) === "NULL PORT DATA"
+                        {ns.peek(4) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
                     <button
                         style={
-                            ns.port.peek(4) !== "NULL PORT DATA"
+                            ns.peek(4) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
@@ -482,7 +482,7 @@ export async function main(ns) {
                     </button>
                     <button
                         style={
-                            ns.port.peek(4) !== "NULL PORT DATA"
+                            ns.peek(4) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
@@ -570,7 +570,7 @@ export async function main(ns) {
                     {!optionsDB["DisplayToggleCollapse"] && mainBuffer}
                     <button
                         style={
-                            ns.port.peek(21) !== "NULL PORT DATA"
+                            ns.peek(21) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
@@ -605,13 +605,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(5) !== "NULL PORT DATA"
+                            ns.peek(5) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonIPvGoStart(ns)}
                     >
-                        {ns.port.peek(5) === "NULL PORT DATA"
+                        {ns.peek(5) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -741,13 +741,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(6) !== "NULL PORT DATA"
+                            ns.peek(6) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonGangStart(ns)}
                     >
-                        {ns.port.peek(6) === "NULL PORT DATA"
+                        {ns.peek(6) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -833,13 +833,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(9) !== "NULL PORT DATA"
+                            ns.peek(9) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonCorpStart(ns)}
                     >
-                        {ns.port.peek(9) === "NULL PORT DATA"
+                        {ns.peek(9) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -868,13 +868,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(8) !== "NULL PORT DATA"
+                            ns.peek(8) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonBBStart(ns)}
                     >
-                        {ns.port.peek(8) === "NULL PORT DATA"
+                        {ns.peek(8) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -909,13 +909,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(11) !== "NULL PORT DATA"
+                            ns.peek(11) !== "NULL PORT DATA"
                                 ? redStyle
                                 : greenStyle
                         }
                         onClick={() => buttonStanekStart(ns)}
                     >
-                        {ns.port.peek(11) === "NULL PORT DATA"
+                        {ns.peek(11) === "NULL PORT DATA"
                             ? "Charge"
                             : "Pls Wait"}
                     </button>
@@ -950,13 +950,13 @@ export async function main(ns) {
                 <span>
                     <button
                         style={
-                            ns.port.peek(7) !== "NULL PORT DATA"
+                            ns.peek(7) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonSleeveStart(ns)}
                     >
-                        {ns.port.peek(7) === "NULL PORT DATA"
+                        {ns.peek(7) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -1102,13 +1102,13 @@ export async function main(ns) {
                     {"Casino" + getBuffer(6)}
                     <button
                         style={
-                            ns.port.peek(10) !== "NULL PORT DATA"
+                            ns.peek(10) !== "NULL PORT DATA"
                                 ? greenStyle
                                 : redStyle
                         }
                         onClick={() => buttonCasinoStart(ns)}
                     >
-                        {ns.port.peek(10) === "NULL PORT DATA"
+                        {ns.peek(10) === "NULL PORT DATA"
                             ? "Activate"
                             : "De-Activate"}
                     </button>
@@ -1184,12 +1184,12 @@ export async function main(ns) {
                     ></Row>,
                 );
         }
-        await ns.port.nextWrite(1);
+        await ns.nextPortWrite(1);
     }
 }
 function processCommands(ns) {
-    while (ns.port.peek(1) !== "NULL PORT DATA") {
-        const result = ns.port.read(1);
+    while (ns.peek(1) !== "NULL PORT DATA") {
+        const result = ns.readPort(1);
         if (result !== 1 && result !== true) {
             // 1 and true are used to just cycle the display, anythign else is state communication
             //ns.tprintf(result)
@@ -1413,64 +1413,64 @@ function getBuffer(startValue, endValue = 12) {
 }
 function buttonDisplayToggleHelper(ns) {
     optionsDB["DisplayToggleHelper"] = !optionsDB["DisplayToggleHelper"];
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonDisplayToggleCollapse(ns) {
     optionsDB["DisplayToggleCollapse"] = !optionsDB["DisplayToggleCollapse"];
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonDisplayRefresh(ns) {
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonDisplayOpenLogs(ns) {
-    if (ns.port.peek(2) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(2)); // Puppet
-    if (ns.port.peek(4) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(4)); // Stocks
-    if (ns.port.peek(5) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(5)); // IPvGo
-    if (ns.port.peek(6) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(6)); // Gangs
-    if (ns.port.peek(7) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(7)); // Sleeves
-    if (ns.port.peek(8) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(8)); // BB
-    if (ns.port.peek(9) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(9)); // Corps
-    if (ns.port.peek(10) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(10)); // Casino
-    if (ns.port.peek(20) !== "NULL PORT DATA") ns.ui.openTail(ns.port.peek(20)); // Casino
-    ns.port.write(1, true);
+    if (ns.peek(2) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(2)); // Puppet
+    if (ns.peek(4) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(4)); // Stocks
+    if (ns.peek(5) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(5)); // IPvGo
+    if (ns.peek(6) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(6)); // Gangs
+    if (ns.peek(7) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(7)); // Sleeves
+    if (ns.peek(8) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(8)); // BB
+    if (ns.peek(9) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(9)); // Corps
+    if (ns.peek(10) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(10)); // Casino
+    if (ns.peek(20) !== "NULL PORT DATA") ns.ui.openTail(ns.peek(20)); // Casino
+    ns.writePort(1, true);
 }
 async function buttonDisplayClearActive(ns) {
-    if (ns.port.peek(2) !== "NULL PORT DATA" && ns.port.peek(2) > 0)
-        await proxy(ns, "kill", ns.port.peek(2)); // Puppet
-    if (ns.port.peek(4) !== "NULL PORT DATA" && ns.port.peek(4) > 0)
-        await proxy(ns, "kill", ns.port.peek(4)); // Stocks
-    if (ns.port.peek(5) !== "NULL PORT DATA" && ns.port.peek(5) > 0)
-        await proxy(ns, "kill", ns.port.peek(5)); // IPvGo
-    if (ns.port.peek(6) !== "NULL PORT DATA" && ns.port.peek(6) > 0)
-        await proxy(ns, "kill", ns.port.peek(6)); // Gangs
-    if (ns.port.peek(7) !== "NULL PORT DATA" && ns.port.peek(7) > 0)
-        await proxy(ns, "kill", ns.port.peek(7)); // Sleeves
-    if (ns.port.peek(8) !== "NULL PORT DATA" && ns.port.peek(8) > 0)
-        await proxy(ns, "kill", ns.port.peek(8)); // BB
-    if (ns.port.peek(9) !== "NULL PORT DATA" && ns.port.peek(9) > 0)
-        await proxy(ns, "kill", ns.port.peek(9)); // Corps
-    if (ns.port.peek(10) !== "NULL PORT DATA" && ns.port.peek(10) > 0)
-        await proxy(ns, "kill", ns.port.peek(10)); // Casino
-    if (ns.port.peek(20) !== "NULL PORT DATA" && ns.port.peek(20) > 0)
-        await proxy(ns, "kill", ns.port.peek(20)); // Casino
-    if (ns.port.peek(30) !== "NULL PORT DATA" && ns.port.peek(30) > 0)
+    if (ns.peek(2) !== "NULL PORT DATA" && ns.peek(2) > 0)
+        await proxy(ns, "kill", ns.peek(2)); // Puppet
+    if (ns.peek(4) !== "NULL PORT DATA" && ns.peek(4) > 0)
+        await proxy(ns, "kill", ns.peek(4)); // Stocks
+    if (ns.peek(5) !== "NULL PORT DATA" && ns.peek(5) > 0)
+        await proxy(ns, "kill", ns.peek(5)); // IPvGo
+    if (ns.peek(6) !== "NULL PORT DATA" && ns.peek(6) > 0)
+        await proxy(ns, "kill", ns.peek(6)); // Gangs
+    if (ns.peek(7) !== "NULL PORT DATA" && ns.peek(7) > 0)
+        await proxy(ns, "kill", ns.peek(7)); // Sleeves
+    if (ns.peek(8) !== "NULL PORT DATA" && ns.peek(8) > 0)
+        await proxy(ns, "kill", ns.peek(8)); // BB
+    if (ns.peek(9) !== "NULL PORT DATA" && ns.peek(9) > 0)
+        await proxy(ns, "kill", ns.peek(9)); // Corps
+    if (ns.peek(10) !== "NULL PORT DATA" && ns.peek(10) > 0)
+        await proxy(ns, "kill", ns.peek(10)); // Casino
+    if (ns.peek(20) !== "NULL PORT DATA" && ns.peek(20) > 0)
+        await proxy(ns, "kill", ns.peek(20)); // Casino
+    if (ns.peek(30) !== "NULL PORT DATA" && ns.peek(30) > 0)
         await runIt(ns, "SphyxOS/cheats/autoInfil.js", false, []);
     if (optionsDB["ShareMode"]) {
         optionsDB["ShareMode"] = false;
         await runIt(ns, "SphyxOS/bins/startShare.js", false, ["stop"]);
     }
-    ns.port.clear(2); // Puppet
-    ns.port.clear(4); // Stocks
-    ns.port.clear(5); // IPvGo
-    ns.port.clear(6); // Gangs
-    ns.port.clear(7); // Sleeves
-    ns.port.clear(8); // BB
-    ns.port.clear(9); // Corps
-    ns.port.clear(10); // Casino
-    ns.port.clear(11); //Stanek
-    ns.port.clear(20); //Stanek
-    ns.port.clear(30); //AutoInfil
-    ns.port.write(1, 1);
+    ns.clearPort(2); // Puppet
+    ns.clearPort(4); // Stocks
+    ns.clearPort(5); // IPvGo
+    ns.clearPort(6); // Gangs
+    ns.clearPort(7); // Sleeves
+    ns.clearPort(8); // BB
+    ns.clearPort(9); // Corps
+    ns.clearPort(10); // Casino
+    ns.clearPort(11); //Stanek
+    ns.clearPort(20); //Stanek
+    ns.clearPort(30); //AutoInfil
+    ns.writePort(1, 1);
 }
 /** @param {NS} ns */
 async function buttonDisplayUpdate(ns) {
@@ -1536,60 +1536,60 @@ async function buttonPopout(ns, program) {
     switch (program) {
         case "Batcher":
             optionsDB["BatcherPopout"] = !optionsDB["BatcherPopout"];
-            if (ns.port.peek(2) !== "NULL PORT DATA")
+            if (ns.peek(2) !== "NULL PORT DATA")
                 optionsDB["BatcherPopout"] === true
-                    ? ns.port.write(12, "popout")
-                    : ns.port.write(12, "nopopout");
+                    ? ns.writePort(12, "popout")
+                    : ns.writePort(12, "nopopout");
             break;
         case "AutoPilot":
             optionsDB["AutoPilotPopOut"] = !optionsDB["AutoPilotPopOut"];
-            if (ns.port.peek(21) !== "NULL PORT DATA")
-                ns.port.write(
+            if (ns.peek(21) !== "NULL PORT DATA")
+                ns.writePort(
                     22,
                     optionsDB["AutoPilotPopOut"] ? "popout" : "nopopout",
                 );
             break;
         case "Stocks":
             optionsDB["StocksPopOut"] = !optionsDB["StocksPopOut"];
-            if (ns.port.peek(4) !== "NULL PORT DATA")
-                ns.port.write(
+            if (ns.peek(4) !== "NULL PORT DATA")
+                ns.writePort(
                     13,
                     optionsDB["StocksPopOut"] ? "popout" : "nopopout",
                 );
             break;
         case "IPvGo":
             optionsDB["IPvGoPopOut"] = !optionsDB["IPvGoPopOut"];
-            if (ns.port.peek(5) !== "NULL PORT DATA")
-                ns.port.write(
+            if (ns.peek(5) !== "NULL PORT DATA")
+                ns.writePort(
                     15,
                     optionsDB["IPvGoPopOut"] ? "popout" : "nopopout",
                 );
             break;
         case "BB":
             optionsDB["BBPopOut"] = !optionsDB["BBPopOut"];
-            if (ns.port.peek(8) !== "NULL PORT DATA")
-                ns.port.write(18, optionsDB["BBPopOut"] ? "popout" : "nopopout");
+            if (ns.peek(8) !== "NULL PORT DATA")
+                ns.writePort(18, optionsDB["BBPopOut"] ? "popout" : "nopopout");
             break;
         case "Gang":
             optionsDB["GangPopOut"] = !optionsDB["GangPopOut"];
-            if (ns.port.peek(6) !== "NULL PORT DATA")
-                ns.port.write(
+            if (ns.peek(6) !== "NULL PORT DATA")
+                ns.writePort(
                     16,
                     optionsDB["GangPopOut"] ? "popout" : "nopopout",
                 );
             break;
         case "Grafting":
             optionsDB["GraftingPopOut"] = !optionsDB["GraftingPopOut"];
-            if (ns.port.peek(20) !== "NULL PORT DATA")
-                ns.port.write(
+            if (ns.peek(20) !== "NULL PORT DATA")
+                ns.writePort(
                     23,
                     optionsDB["GraftingPopOut"] ? "popout" : "nopopout",
                 );
             break;
         case "Sleeve":
             optionsDB["SleevePopOut"] = !optionsDB["SleevePopOut"];
-            if (ns.port.peek(7) !== "NULL PORT DATA")
-                ns.port.write(
+            if (ns.peek(7) !== "NULL PORT DATA")
+                ns.writePort(
                     17,
                     optionsDB["SleevePopOut"] ? "popout" : "nopopout",
                 );
@@ -1598,11 +1598,11 @@ async function buttonPopout(ns, program) {
             ns.tprintf("Invalid program for popout: " + program);
             break;
     }
-    ns.port.write(1, 1);
+    ns.writePort(1, 1);
 }
 async function buttonBatcherStart(ns) {
-    if (ns.port.peek(2) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(2));
+    if (ns.peek(2) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(2));
     } else {
         const commands = [];
         if (optionsDB["BatcherUseHacknet"]) commands.push("usehacknet");
@@ -1612,73 +1612,73 @@ async function buttonBatcherStart(ns) {
         if (!optionsDB["BatcherMoney"]) commands.push("nomoney");
         if (!optionsDB["BatcherXP"]) commands.push("noxp");
         if (optionsDB["BatcherStanek"]) commands.push("stanek");
-        ns.port.write(12, "silent");
+        ns.writePort(12, "silent");
         optionsDB["BatcherPopout"] === true
-            ? ns.port.write(12, "popout")
-            : ns.port.write(12, "nopopout");
+            ? ns.writePort(12, "popout")
+            : ns.writePort(12, "nopopout");
         optionsDB["BatcherLog"] === true
-            ? ns.port.write(12, "log")
-            : ns.port.write(12, "nolog");
+            ? ns.writePort(12, "log")
+            : ns.writePort(12, "nolog");
         optionsDB["BatcherPad"] === true
-            ? ns.port.write(12, "pad")
-            : ns.port.write(12, "nopad");
+            ? ns.writePort(12, "pad")
+            : ns.writePort(12, "nopad");
         await runIt(ns, "SphyxOS/bins/puppetMini.js", true, commands);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBatcherAutoBuyServers(ns) {
     optionsDB["BatcherAutoBuyServers"] = !optionsDB["BatcherAutoBuyServers"];
-    if (optionsDB["BatcherAutoBuyServers"] && ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "purchaseservers");
-    } else if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "nopurchaseservers");
+    if (optionsDB["BatcherAutoBuyServers"] && ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "purchaseservers");
+    } else if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "nopurchaseservers");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBatcherUseHacknet(ns) {
     optionsDB["BatcherUseHacknet"] = !optionsDB["BatcherUseHacknet"];
-    if (optionsDB["BatcherUseHacknet"] && ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "hacknet");
-    } else if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "nohacknet");
+    if (optionsDB["BatcherUseHacknet"] && ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "hacknet");
+    } else if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "nohacknet");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBatcherAutoHash(ns) {
     optionsDB["BatcherAutoHash"] = !optionsDB["BatcherAutoHash"];
-    if (optionsDB["BatcherAutoHash"] && ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "autohash");
-    } else if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "noautohash");
+    if (optionsDB["BatcherAutoHash"] && ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "autohash");
+    } else if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "noautohash");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBatcherAutoBuyHacknet(ns) {
     optionsDB["BatcherAutoBuyHacknet"] = !optionsDB["BatcherAutoBuyHacknet"];
-    if (optionsDB["BatcherAutoBuyHacknet"] && ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "autobuyhacknet");
-    } else if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, "noautobuyhacknet");
+    if (optionsDB["BatcherAutoBuyHacknet"] && ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "autobuyhacknet");
+    } else if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, "noautobuyhacknet");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBatcherToggleMoney(ns) {
     optionsDB["BatcherMoney"] = !optionsDB["BatcherMoney"];
     if (!optionsDB["BatcherMoney"] && !optionsDB["BatcherXP"])
         optionsDB["BatcherMoney"] = true;
-    if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, optionsDB["BatcherMoney"] ? "money" : "nomoney");
+    if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, optionsDB["BatcherMoney"] ? "money" : "nomoney");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBatcherToggleXP(ns) {
     optionsDB["BatcherXP"] = !optionsDB["BatcherXP"];
     if (!optionsDB["BatcherMoney"] && !optionsDB["BatcherXP"])
         optionsDB["BatcherMoney"] = true;
-    if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, optionsDB["BatcherXP"] ? "xp" : "noxp");
+    if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, optionsDB["BatcherXP"] ? "xp" : "noxp");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonBatcherToggleStanek(ns) {
     const frags = await proxy(ns, "stanek.activeFragments");
@@ -1688,53 +1688,53 @@ async function buttonBatcherToggleStanek(ns) {
         return;
     }
     optionsDB["BatcherStanek"] = !optionsDB["BatcherStanek"];
-    if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, optionsDB["BatcherStanek"] ? "stanek" : "nostanek");
+    if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, optionsDB["BatcherStanek"] ? "stanek" : "nostanek");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonBatcherLog(ns) {
     optionsDB["BatcherLog"] = !optionsDB["BatcherLog"];
-    if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, optionsDB["BatcherLog"] ? "log" : "nolog");
+    if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, optionsDB["BatcherLog"] ? "log" : "nolog");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonBatcherPad(ns) {
     optionsDB["BatcherPad"] = !optionsDB["BatcherPad"];
-    if (ns.port.peek(2) !== "NULL PORT DATA") {
-        ns.port.write(12, optionsDB["BatcherPad"] ? "pad" : "nopad");
+    if (ns.peek(2) !== "NULL PORT DATA") {
+        ns.writePort(12, optionsDB["BatcherPad"] ? "pad" : "nopad");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonHacknetBuyHacknet(ns) {
     await runIt(ns, "SphyxOS/bins/hacknetPurchaser.js", false, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonMiscBackdoorBasic(ns) {
     await runIt(ns, "SphyxOS/extras/crawl-Basic.js", true, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonMiscBackdoorSing(ns, all = false) {
     if (all)
         await runIt(ns, "SphyxOS/bins/singularityBackdoor.js", true, ["all"]);
     else await runIt(ns, "SphyxOS/bins/singularityBackdoor.js", true, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonMiscTeleport(ns) {
     await runIt(ns, "SphyxOS/extras/teleport.js", false, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonMiscSolveContracts(ns) {
     await runIt(ns, "SphyxOS/bins/codingContracts.js", false, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonMiscShareRam(ns) {
     optionsDB["ShareMode"] = !optionsDB["ShareMode"];
     if (optionsDB["ShareMode"])
         await runIt(ns, "SphyxOS/bins/startShare.js", false, []);
     else await runIt(ns, "SphyxOS/bins/startShare.js", false, ["stop"]);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonMiscKeepAlive(ns) {
     if (wnd.keepAlive) {
@@ -1754,273 +1754,273 @@ async function buttonMiscKeepAlive(ns) {
         osc.start();
         wnd.keepAlive = ctx;
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonHashing(ns, mode) {
     const p = await runIt(ns, "SphyxOS/extras/hashIt.js", false, [mode]);
-    if (p > 0) await ns.port.nextWrite(p);
-    ns.port.clear(p);
-    ns.port.write(1, true);
+    if (p > 0) await ns.nextPortWrite(p);
+    ns.clearPort(p);
+    ns.writePort(1, true);
 }
 async function buttonStocksStart(ns) {
-    if (ns.port.peek(4) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(4));
+    if (ns.peek(4) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(4));
     } else {
         const commands = [];
         if (optionsDB["StocksToggleAutoBuy"]) commands.push("autobuy");
-        ns.port.write(13, "silent");
-        ns.port.write(13, optionsDB["StocksPopOut"] ? "popout" : "nopopout");
+        ns.writePort(13, "silent");
+        ns.writePort(13, optionsDB["StocksPopOut"] ? "popout" : "nopopout");
         await runIt(ns, "SphyxOS/bins/tStocks.js", true, commands);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonStocksBuy(ns) {
-    if (ns.port.peek(4) !== "NULL PORT DATA") ns.port.write(13, "buy");
-    ns.port.write(1, true);
+    if (ns.peek(4) !== "NULL PORT DATA") ns.writePort(13, "buy");
+    ns.writePort(1, true);
 }
 function buttonStocksSell(ns) {
-    if (ns.port.peek(4) !== "NULL PORT DATA") ns.port.write(13, "sell");
-    ns.port.write(1, true);
+    if (ns.peek(4) !== "NULL PORT DATA") ns.writePort(13, "sell");
+    ns.writePort(1, true);
 }
 function buttonStocksToggleAutoBuy(ns) {
     optionsDB["StocksToggleAutoBuy"] = !optionsDB["StocksToggleAutoBuy"];
-    if (optionsDB["StocksToggleAutoBuy"] && ns.port.peek(4) !== "NULL PORT DATA") {
-        ns.port.write(13, "autobuy");
-    } else if (ns.port.peek(4) !== "NULL PORT DATA") {
-        ns.port.write(13, "autobuyoff");
+    if (optionsDB["StocksToggleAutoBuy"] && ns.peek(4) !== "NULL PORT DATA") {
+        ns.writePort(13, "autobuy");
+    } else if (ns.peek(4) !== "NULL PORT DATA") {
+        ns.writePort(13, "autobuyoff");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonStocksReset(ns) {
-    if (ns.port.peek(4) !== "NULL PORT DATA") {
-        ns.port.write(13, "reset");
+    if (ns.peek(4) !== "NULL PORT DATA") {
+        ns.writePort(13, "reset");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonAutoPilot(ns) {
-    if (ns.port.peek(21) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(21));
+    if (ns.peek(21) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(21));
     } else {
-        ns.port.write(22, "silent");
-        ns.port.write(22, optionsDB["AutoPilotPopOut"] ? "popout" : "nopopout");
-        ns.port.write(22, optionsDB["AutoPilotMoveOn"] ? "moveon" : "nomoveon");
+        ns.writePort(22, "silent");
+        ns.writePort(22, optionsDB["AutoPilotPopOut"] ? "popout" : "nopopout");
+        ns.writePort(22, optionsDB["AutoPilotMoveOn"] ? "moveon" : "nomoveon");
         globalThis["document"].autopilot = optionsDB["AutoPilotMoveOn"];
         await runIt(ns, "SphyxOS/bins/autopilot.js", true, []);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonAutoPilotMoveOn(ns) {
     optionsDB["AutoPilotMoveOn"] = !optionsDB["AutoPilotMoveOn"];
-    if (ns.port.peek(21) !== "NULL PORT DATA") {
+    if (ns.peek(21) !== "NULL PORT DATA") {
         globalThis["document"].autopilot = optionsDB["AutoPilotMoveOn"];
-        ns.port.write(22, optionsDB["AutoPilotMoveOn"] ? "moveon" : "nomoveon");
+        ns.writePort(22, optionsDB["AutoPilotMoveOn"] ? "moveon" : "nomoveon");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonIPvGoStart(ns) {
-    if (ns.port.peek(5) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(5));
+    if (ns.peek(5) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(5));
     } else {
-        ns.port.write(15, "Silent");
-        ns.port.write(15, optionsDB["IPvGoRepeat"] ? "Repeat On" : "Repeat Off");
-        ns.port.write(
+        ns.writePort(15, "Silent");
+        ns.writePort(15, optionsDB["IPvGoRepeat"] ? "Repeat On" : "Repeat Off");
+        ns.writePort(
             15,
             optionsDB["IPvGoPlayAsWhite"]
                 ? "Play as White On"
                 : "Play as White Off",
         );
-        ns.port.write(15, optionsDB["IPvGoCheats"] ? "Cheats On" : "Cheats Off");
-        ns.port.write(
+        ns.writePort(15, optionsDB["IPvGoCheats"] ? "Cheats On" : "Cheats Off");
+        ns.writePort(
             15,
             optionsDB["IPvGoLogging"] ? "Logging On" : "Logging Off",
         );
-        ns.port.write(15, optionsDB["IPvGoNetburners"] ? "Net On" : "Net Off");
-        ns.port.write(15, optionsDB["IPvGoSlumSnakes"] ? "Slum On" : "Slum Off");
-        ns.port.write(15, optionsDB["IPvGoTheBlackHand"] ? "BH On" : "BH Off");
-        ns.port.write(
+        ns.writePort(15, optionsDB["IPvGoNetburners"] ? "Net On" : "Net Off");
+        ns.writePort(15, optionsDB["IPvGoSlumSnakes"] ? "Slum On" : "Slum Off");
+        ns.writePort(15, optionsDB["IPvGoTheBlackHand"] ? "BH On" : "BH Off");
+        ns.writePort(
             15,
             optionsDB["IPvGoTetrads"] ? "Tetrad On" : "Tetrad Off",
         );
-        ns.port.write(15, optionsDB["IPvGoDaedalus"] ? "Daed On" : "Daed Off");
-        ns.port.write(
+        ns.writePort(15, optionsDB["IPvGoDaedalus"] ? "Daed On" : "Daed Off");
+        ns.writePort(
             15,
             optionsDB["IPvGoIlluminati"] ? "Illum On" : "Illum Off",
         );
-        ns.port.write(15, optionsDB["IPvGoUnknown"] ? "???? On" : "???? Off");
-        ns.port.write(15, optionsDB["IPvGoNoAI"] ? "No AI On" : "No AI Off");
+        ns.writePort(15, optionsDB["IPvGoUnknown"] ? "???? On" : "???? Off");
+        ns.writePort(15, optionsDB["IPvGoNoAI"] ? "No AI On" : "No AI Off");
         const port = await runIt(ns, "SphyxOS/bins/go.js", true, []);
-        if (port > 0) ns.port.write(5, port);
+        if (port > 0) ns.writePort(5, port);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonIPvGoPlayWhite(ns) {
     optionsDB["IPvGoPlayAsWhite"] = !optionsDB["IPvGoPlayAsWhite"];
     if (!optionsDB["IPvGoPlayAsWhite"]) {
-        if (ns.port.peek(5) !== "NULL PORT DATA")
-            ns.port.write(15, "Play as White Off");
+        if (ns.peek(5) !== "NULL PORT DATA")
+            ns.writePort(15, "Play as White Off");
     } else {
         optionsDB["IPvGoNoAI"] = true;
-        if (ns.port.peek(5) !== "NULL PORT DATA")
-            ns.port.write(15, "Play as White On");
-        if (ns.port.peek(5) !== "NULL PORT DATA") ns.port.write(15, "No AI On");
+        if (ns.peek(5) !== "NULL PORT DATA")
+            ns.writePort(15, "Play as White On");
+        if (ns.peek(5) !== "NULL PORT DATA") ns.writePort(15, "No AI On");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonIPvGoRepeat(ns) {
     optionsDB["IPvGoRepeat"] = !optionsDB["IPvGoRepeat"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoRepeat"] ? "Repeat On" : "Repeat Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoRepeat"] ? "Repeat On" : "Repeat Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoCheats(ns) {
     optionsDB["IPvGoCheats"] = !optionsDB["IPvGoCheats"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoCheats"] ? "Cheats On" : "Cheats Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoCheats"] ? "Cheats On" : "Cheats Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoLogging(ns) {
     optionsDB["IPvGoLogging"] = !optionsDB["IPvGoLogging"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(
             15,
             optionsDB["IPvGoLogging"] ? "Logging On" : "Logging Off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonIPvGoNetburners(ns) {
     optionsDB["IPvGoNetburners"] = !optionsDB["IPvGoNetburners"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoNetburners"] ? "Net On" : "Net Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoNetburners"] ? "Net On" : "Net Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoSlumSnakes(ns) {
     optionsDB["IPvGoSlumSnakes"] = !optionsDB["IPvGoSlumSnakes"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoSlumSnakes"] ? "Slum On" : "Slum Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoSlumSnakes"] ? "Slum On" : "Slum Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoTheBlackHand(ns) {
     optionsDB["IPvGoTheBlackHand"] = !optionsDB["IPvGoTheBlackHand"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoTheBlackHand"] ? "BH On" : "BH Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoTheBlackHand"] ? "BH On" : "BH Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoTetrads(ns) {
     optionsDB["IPvGoTetrads"] = !optionsDB["IPvGoTetrads"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(
             15,
             optionsDB["IPvGoTetrads"] ? "Tetrad On" : "Tetrad Off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonIPvGoDaedalus(ns) {
     optionsDB["IPvGoDaedalus"] = !optionsDB["IPvGoDaedalus"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoDaedalus"] ? "Daed On" : "Daed Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoDaedalus"] ? "Daed On" : "Daed Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoIlluminati(ns) {
     optionsDB["IPvGoIlluminati"] = !optionsDB["IPvGoIlluminati"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(
             15,
             optionsDB["IPvGoIlluminati"] ? "Illum On" : "Illum Off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonIPvGoUnknown(ns) {
     optionsDB["IPvGoUnknown"] = !optionsDB["IPvGoUnknown"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(15, optionsDB["IPvGoUnknown"] ? "???? On" : "???? Off");
-    ns.port.write(1, true);
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(15, optionsDB["IPvGoUnknown"] ? "???? On" : "???? Off");
+    ns.writePort(1, true);
 }
 function buttonIPvGoNoAI(ns) {
     optionsDB["IPvGoNoAI"] = !optionsDB["IPvGoNoAI"];
     if (!optionsDB["IPvGoNoAI"]) {
         optionsDB["IPvGoPlayAsWhite"] = false;
-        if (ns.port.peek(5) !== "NULL PORT DATA")
-            ns.port.write(15, "Play as White Off");
-        if (ns.port.peek(5) !== "NULL PORT DATA") ns.port.write(15, "No AI Off");
+        if (ns.peek(5) !== "NULL PORT DATA")
+            ns.writePort(15, "Play as White Off");
+        if (ns.peek(5) !== "NULL PORT DATA") ns.writePort(15, "No AI Off");
     } else {
-        if (ns.port.peek(5) !== "NULL PORT DATA")
-            ns.port.write(
+        if (ns.peek(5) !== "NULL PORT DATA")
+            ns.writePort(
                 15,
                 optionsDB["IPvGoPlayAsWhite"]
                     ? "Play as White On"
                     : "Play as White Off",
             );
-        if (ns.port.peek(5) !== "NULL PORT DATA") ns.port.write(15, "No AI On");
+        if (ns.peek(5) !== "NULL PORT DATA") ns.writePort(15, "No AI On");
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonIPvGoSlowMode(ns) {
     optionsDB["IPvGoSlowMode"] = !optionsDB["IPvGoSlowMode"];
-    if (ns.port.peek(5) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(5) !== "NULL PORT DATA")
+        ns.writePort(
             15,
             optionsDB["IPvGoSlowMode"] ? "SlowMode On" : "SlowMode Off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonGangStart(ns) {
-    if (ns.port.peek(6) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(6));
+    if (ns.peek(6) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(6));
     } else {
-        ns.port.write(16, "Silent");
-        ns.port.write(
+        ns.writePort(16, "Silent");
+        ns.writePort(
             16,
             optionsDB["GangAutoAscend"] ? "AutoAscend On" : "AutoAscend Off",
         );
-        ns.port.write(16, optionsDB["GangAutoEQ"] ? "AutoEQ On" : "AutoEQ Off");
-        ns.port.write(16, optionsDB["GangMode"]);
-        ns.port.write(
+        ns.writePort(16, optionsDB["GangAutoEQ"] ? "AutoEQ On" : "AutoEQ Off");
+        ns.writePort(16, optionsDB["GangMode"]);
+        ns.writePort(
             16,
             optionsDB["SleeveMode"] === "Gangs" ? "Sleeves On" : "Sleeves Off",
         );
         const port = await runIt(ns, "SphyxOS/bins/gang.js", true, []);
-        if (port) ns.port.write(6, port);
+        if (port) ns.writePort(6, port);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonGangAutoAscend(ns) {
     optionsDB["GangAutoAscend"] = !optionsDB["GangAutoAscend"];
-    ns.port.write(
+    ns.writePort(
         16,
         optionsDB["GangAutoAscend"] ? "AutoAscend On" : "AutoAscend Off",
     );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonGangAutoEQ(ns) {
     optionsDB["GangAutoEQ"] = !optionsDB["GangAutoEQ"];
-    ns.port.write(16, optionsDB["GangAutoEQ"] ? "AutoEQ On" : "AutoEQ Off");
-    ns.port.write(1, true);
+    ns.writePort(16, optionsDB["GangAutoEQ"] ? "AutoEQ On" : "AutoEQ Off");
+    ns.writePort(1, true);
 }
 function buttonGangMode(ns, mode) {
     optionsDB["GangMode"] = mode;
-    if (ns.port.peek(6) !== "NULL PORT DATA")
-        ns.port.write(16, optionsDB["GangMode"]);
-    ns.port.write(1, true);
+    if (ns.peek(6) !== "NULL PORT DATA")
+        ns.writePort(16, optionsDB["GangMode"]);
+    ns.writePort(1, true);
 }
 function buttonGangBuyEQ(ns) {
-    if (ns.port.peek(6) !== "NULL PORT DATA") ns.port.write(16, "Buy EQ");
-    ns.port.write(1, true);
+    if (ns.peek(6) !== "NULL PORT DATA") ns.writePort(16, "Buy EQ");
+    ns.writePort(1, true);
 }
 function buttonGangAscend(ns) {
-    if (ns.port.peek(6) !== "NULL PORT DATA") ns.port.write(16, "Ascend");
-    ns.port.write(1, true);
+    if (ns.peek(6) !== "NULL PORT DATA") ns.writePort(16, "Ascend");
+    ns.writePort(1, true);
 }
 async function buttonCorpStart(ns) {
-    if (ns.port.peek(9) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(9));
+    if (ns.peek(9) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(9));
     } else {
         await runIt(ns, "SphyxOS/bins/corp.js", true, []);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonCorpResetTAII(ns) {
-    if (ns.port.peek(9) !== "NULL PORT DATA") ns.port.write(19, "Reset TAII");
-    ns.port.write(1, true);
+    if (ns.peek(9) !== "NULL PORT DATA") ns.writePort(19, "Reset TAII");
+    ns.writePort(1, true);
 }
 async function buttonCorpBribe(ns) {
     const player = await proxy(ns, "getPlayer");
@@ -2035,46 +2035,46 @@ async function buttonCorpBribe(ns) {
         await proxyTry(ns, "corporation.bribe", faction, corp.funds / 100);
         ns.tprintf("Corp: Attempted to bribe: %s", faction);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonSingDumpMoney(ns) {
     await runIt(ns, "SphyxOS/bins/dumpMoney.js", false, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonSleeveStart(ns) {
-    if (ns.port.peek(7) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(7));
+    if (ns.peek(7) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(7));
     } else {
-        ns.port.write(17, "Silent");
-        ns.port.write(17, optionsDB["SleeveMode"]);
-        ns.port.write(
+        ns.writePort(17, "Silent");
+        ns.writePort(17, optionsDB["SleeveMode"]);
+        ns.writePort(
             17,
             optionsDB["SleeveInstall"] ? "Install On" : "Install Off",
         );
         await runIt(ns, "SphyxOS/bins/tSleeves.js", true, []);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonSleevesInstallAugments(ns) {
     optionsDB["SleeveInstall"] = !optionsDB["SleeveInstall"];
-    if (ns.port.peek(7) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(7) !== "NULL PORT DATA")
+        ns.writePort(
             17,
             optionsDB["SleeveInstall"] ? "Install On" : "Install Off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonSleevesToggle(ns, mode) {
     switch (
         optionsDB["SleeveMode"] // Turn off the one that's on since it's changing
     ) {
         case "Gangs":
-            if (ns.port.peek(6) !== "NULL PORT DATA")
-                ns.port.write(16, "Sleeves Off");
+            if (ns.peek(6) !== "NULL PORT DATA")
+                ns.writePort(16, "Sleeves Off");
             break;
         case "BB":
-            if (ns.port.peek(8) !== "NULL PORT DATA")
-                ns.port.write(18, "sleeves off");
+            if (ns.peek(8) !== "NULL PORT DATA")
+                ns.writePort(18, "sleeves off");
             break;
         case "Training":
         case "Recovery":
@@ -2084,7 +2084,7 @@ async function buttonSleevesToggle(ns, mode) {
         case "Idle":
         case "Int":
             if (
-                ns.port.peek(7) !== "NULL PORT DATA" &&
+                ns.peek(7) !== "NULL PORT DATA" &&
                 ![
                     "Training",
                     "Idle",
@@ -2095,7 +2095,7 @@ async function buttonSleevesToggle(ns, mode) {
                     "Int",
                 ].includes(mode)
             )
-                await proxy(ns, "kill", ns.port.peek(7));
+                await proxy(ns, "kill", ns.peek(7));
             break;
 
         default:
@@ -2113,12 +2113,12 @@ async function buttonSleevesToggle(ns, mode) {
             mode // Turn on the new one
         ) {
             case "Gangs":
-                if (ns.port.peek(6) !== "NULL PORT DATA")
-                    ns.port.write(16, "Sleeves On");
+                if (ns.peek(6) !== "NULL PORT DATA")
+                    ns.writePort(16, "Sleeves On");
                 break;
             case "BB":
-                if (ns.port.peek(8) !== "NULL PORT DATA")
-                    ns.port.write(18, "sleeves on");
+                if (ns.peek(8) !== "NULL PORT DATA")
+                    ns.writePort(18, "sleeves on");
                 break;
             case "Training":
             case "Recovery":
@@ -2126,7 +2126,7 @@ async function buttonSleevesToggle(ns, mode) {
             case "Money":
             case "Karma":
             case "Int":
-                if (ns.port.peek(7) !== "NULL PORT DATA") ns.port.write(17, mode);
+                if (ns.peek(7) !== "NULL PORT DATA") ns.writePort(17, mode);
                 break;
             case "Idle":
                 for (let i = 0; i < numSleeves; i++)
@@ -2137,7 +2137,7 @@ async function buttonSleevesToggle(ns, mode) {
         }
         optionsDB["SleeveMode"] = mode;
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonGrafting(ns) {
     resetInfo = await getResetInf(ns);
@@ -2149,65 +2149,65 @@ async function buttonGrafting(ns) {
     } else {
         pidof = await runIt(ns, "SphyxOS/bins/graftingBasic.js", true, []);
     }
-    if (pidof > 0) ns.port.write(20, pidof);
-    ns.port.write(1, true);
+    if (pidof > 0) ns.writePort(20, pidof);
+    ns.writePort(1, true);
 }
 async function buttonBBStart(ns) {
-    if (ns.port.peek(8) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(8));
+    if (ns.peek(8) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(8));
     } else {
-        ns.port.write(18, "quiet");
-        ns.port.write(
+        ns.writePort(18, "quiet");
+        ns.writePort(
             18,
             optionsDB["BBFinisher"] ? "finisher on" : "finisher off",
         );
-        ns.port.write(
+        ns.writePort(
             18,
             optionsDB["BBIntMode"] ? "int mode on" : "int mode off",
         );
-        ns.port.write(
+        ns.writePort(
             18,
             optionsDB["SleeveMode"] === "BB" ? "sleeves on" : "sleeves off",
         );
-        ns.port.write(
+        ns.writePort(
             18,
             optionsDB["BBInfilOnly"] ? "sleeve infil on" : "sleeve infil off",
         );
         const value = await runIt(ns, "SphyxOS/bins/bb.js", true, []);
-        if (value > 0) ns.port.write(8, value);
+        if (value > 0) ns.writePort(8, value);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBBFinisher(ns) {
     optionsDB["BBFinisher"] = !optionsDB["BBFinisher"];
-    if (ns.port.peek(8) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(8) !== "NULL PORT DATA")
+        ns.writePort(
             18,
             optionsDB["BBFinisher"] ? "finisher on" : "finisher off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBBIntMode(ns) {
     optionsDB["BBIntMode"] = !optionsDB["BBIntMode"];
-    if (ns.port.peek(8) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(8) !== "NULL PORT DATA")
+        ns.writePort(
             18,
             optionsDB["BBIntMode"] ? "int mode on" : "int mode off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonBBInfilOnly(ns) {
     optionsDB["BBInfilOnly"] = !optionsDB["BBInfilOnly"];
-    if (ns.port.peek(8) !== "NULL PORT DATA")
-        ns.port.write(
+    if (ns.peek(8) !== "NULL PORT DATA")
+        ns.writePort(
             18,
             optionsDB["BBInfilOnly"] ? "sleeve infil on" : "sleeve infil off",
         );
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 /** @param {NS} ns */
 async function buttonStanekStart(ns) {
-    if (ns.port.peek(11) === "NULL PORT DATA") {
+    if (ns.peek(11) === "NULL PORT DATA") {
         const frags = await proxyTry(ns, "stanek.activeFragments");
 
         if (frags.length > 0) {
@@ -2217,62 +2217,62 @@ async function buttonStanekStart(ns) {
                 true,
                 [],
             );
-            if (val > 0) ns.port.write(11, val);
-            ns.port.write(1, true);
+            if (val > 0) ns.writePort(11, val);
+            ns.writePort(1, true);
         } else ns.toast("Please select a loadout first", "error", 3000);
     }
 }
 async function buttonStanekSaveConfig(ns) {
     ns.exec("SphyxOS/stanek/saveStanek.js", "home", 1);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonStanekLoadConfig(ns) {
     if (optionsDB["StanekDefault"])
         ns.exec("SphyxOS/stanek/loadStanek.js", "home", 1, "default");
     else ns.exec("SphyxOS/stanek/loadStanek.js", "home", 1);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 function buttonStanekUseDefault(ns) {
     optionsDB["StanekDefault"] = !optionsDB["StanekDefault"];
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonDevMenu(ns) {
     await runIt(ns, "SphyxOS/cheats/devMenu.js", false, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonUnlockAll(ns) {
     await runIt(ns, "SphyxOS/cheats/achievements.js", false, []);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonCasinoStart(ns) {
-    if (ns.port.peek(10) !== "NULL PORT DATA") {
-        await proxy(ns, "kill", ns.port.peek(10));
+    if (ns.peek(10) !== "NULL PORT DATA") {
+        await proxy(ns, "kill", ns.peek(10));
     } else {
         await runIt(ns, "SphyxOS/cheats/casino.js", true, []);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonAutoInfilStart(ns) {
     if (wnd.tmrAutoInf) {
         //Stop it
         await runIt(ns, "SphyxOS/cheats/autoInfil.js", false, []);
-        ns.port.clear(30);
+        ns.clearPort(30);
     } else {
         //Start it
         if (!optionsDB["AutoInfilAuto"])
-            ns.port.write(
+            ns.writePort(
                 30,
                 await runIt(ns, "SphyxOS/cheats/autoInfil.js", false, []),
             );
         else if (optionsDB["AutoInfilMoneyMode"])
-            ns.port.write(
+            ns.writePort(
                 30,
                 await runIt(ns, "SphyxOS/cheats/autoInfil.js", false, [
                     "--auto",
                 ]),
             );
         else
-            ns.port.write(
+            ns.writePort(
                 30,
                 await runIt(ns, "SphyxOS/cheats/autoInfil.js", false, [
                     "--auto",
@@ -2281,7 +2281,7 @@ async function buttonAutoInfilStart(ns) {
                 ]),
             );
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonAutoInfilAuto(ns) {
     optionsDB["AutoInfilAuto"] = !optionsDB["AutoInfilAuto"];
@@ -2305,7 +2305,7 @@ async function buttonAutoInfilAuto(ns) {
                 "--quiet",
             ]);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonAutoInfilMoney(ns) {
     optionsDB["AutoInfilMoneyMode"] = !optionsDB["AutoInfilMoneyMode"];
@@ -2325,7 +2325,7 @@ async function buttonAutoInfilMoney(ns) {
                 "--quiet",
             ]);
     }
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 async function buttonAutoInfilFaction(ns) {
     const player = await proxy(ns, "getPlayer");
@@ -2345,7 +2345,7 @@ async function buttonAutoInfilFaction(ns) {
     if (factions.length === 0) {
         optionsDB["AutoInfilMoneyMode"] = true;
         optionsDB["AutoInfilFactionMode"] = false;
-        ns.port.write(1, true);
+        ns.writePort(1, true);
         return;
     } else if (factions.length > 1)
         optionsDB["AutoInfilFaction"] = await ns.prompt("Select Faction", {
@@ -2357,7 +2357,7 @@ async function buttonAutoInfilFaction(ns) {
     if (optionsDB["AutoInfilFaction"] === "") {
         optionsDB["AutoInfilMoneyMode"] = true;
         optionsDB["AutoInfilFactionMode"] = false;
-        ns.port.write(1, true);
+        ns.writePort(1, true);
         return;
     }
     optionsDB["AutoInfilAuto"] = true;
@@ -2371,7 +2371,7 @@ async function buttonAutoInfilFaction(ns) {
             "--update",
             "--quiet",
         ]);
-    ns.port.write(1, true);
+    ns.writePort(1, true);
 }
 /** @param {NS} ns */
 async function setOptionsDB(ns) {

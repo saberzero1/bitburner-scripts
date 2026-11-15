@@ -2,7 +2,7 @@ import { getServersLight, proxy } from "SphyxOS/util.js";
 const chargeScript = "SphyxOS/stanek/charge.js";
 /** @param {NS} ns */
 export async function main(ns) {
-    ns.port.write(11, ns.pid);
+    ns.writePort(11, ns.pid);
     const quietMode = ns.args.includes("quiet");
     const servers = await getServersLight(ns);
     const promises = [];
@@ -28,7 +28,7 @@ export async function main(ns) {
             threads,
             JSON.stringify(fragments),
         );
-        promises.push(ns.port.nextWrite(scriptPid));
+        promises.push(ns.nextPortWrite(scriptPid));
     }
     if (!quietMode)
         ns.toast(
@@ -46,7 +46,7 @@ export async function main(ns) {
     await Promise.all(promises);
     if (!quietMode) ns.toast("Done Charging", "success", 2000);
     ns.atExit(() => {
-        ns.port.clear(11);
-        ns.port.write(1, true);
+        ns.clearPort(11);
+        ns.writePort(1, true);
     });
 }

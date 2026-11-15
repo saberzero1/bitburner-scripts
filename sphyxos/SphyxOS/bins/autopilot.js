@@ -45,12 +45,12 @@ export async function main(ns) {
     ns.disableLog("ALL");
     ns.ui.openTail();
     ns.ui.resizeTail(WIDTH, HEIGHT);
-    ns.port.clear(21);
-    ns.port.write(21, ns.pid);
-    ns.port.write(1, true);
+    ns.clearPort(21);
+    ns.writePort(21, ns.pid);
+    ns.writePort(1, true);
     ns.atExit(() => {
-        ns.port.clear(21);
-        ns.port.write(1, true);
+        ns.clearPort(21);
+        ns.writePort(1, true);
         if (win) win.close();
         UPGRADED = false;
     });
@@ -93,9 +93,9 @@ export async function main(ns) {
     if (HASBN13 && currentNode !== 8) {
         activeFrags = await proxy(ns, "stanek.activeFragments");
         if (activeFrags.length === 0) await loadStanek(ns);
-        ns.port.write(12, "silent");
-        ns.port.write(12, "stanek");
-        ns.port.write(1, "puppet stanek on");
+        ns.writePort(12, "silent");
+        ns.writePort(12, "stanek");
+        ns.writePort(1, "puppet stanek on");
     }
     //Currently supported BN's, 1, 2, 3, 4, 5, 6, 7, 9, 10, 14
     //To do: 8, 11, 12, 13
@@ -107,28 +107,28 @@ export async function main(ns) {
         case 9:
         case 10:
         default:
-            if (HASBN3 && ns.port.peek(9) === "NULL PORT DATA")
+            if (HASBN3 && ns.peek(9) === "NULL PORT DATA")
                 await runIt(ns, "SphyxOS/bins/corp.js", true, ["quiet"]);
             break;
         case 2:
-            if (ns.port.peek(6) === "NULL PORT DATA") {
-                ns.port.write(16, "Silent");
-                ns.port.write(16, "AutoAscend On");
-                ns.port.write(1, "gang autoascend on");
-                ns.port.write(16, "AutoEQ Off");
-                ns.port.write(1, "gang autoeq off");
-                ns.port.write(16, "AutoMode");
-                ns.port.write(1, "gang mode automode");
-                ns.port.write(16, "Sleeves Off");
-                ns.port.write(16, "NoTrain");
-                ns.port.write(1, "sleeves idle"); //Needed for now?
+            if (ns.peek(6) === "NULL PORT DATA") {
+                ns.writePort(16, "Silent");
+                ns.writePort(16, "AutoAscend On");
+                ns.writePort(1, "gang autoascend on");
+                ns.writePort(16, "AutoEQ Off");
+                ns.writePort(1, "gang autoeq off");
+                ns.writePort(16, "AutoMode");
+                ns.writePort(1, "gang mode automode");
+                ns.writePort(16, "Sleeves Off");
+                ns.writePort(16, "NoTrain");
+                ns.writePort(1, "sleeves idle"); //Needed for now?
                 await runIt(ns, "SphyxOS/bins/gang.js", true, []);
             }
-            if (HASBN3 && ns.port.peek(9) === "NULL PORT DATA")
+            if (HASBN3 && ns.peek(9) === "NULL PORT DATA")
                 await runIt(ns, "SphyxOS/bins/corp.js", true, ["quiet"]);
             break;
         case 3:
-            if (ns.port.peek(9) === "NULL PORT DATA")
+            if (ns.peek(9) === "NULL PORT DATA")
                 await runIt(ns, "SphyxOS/bins/corp.js", true, []);
             break;
         case 6:
@@ -145,61 +145,61 @@ export async function main(ns) {
                 if (await proxy(ns, "stock.hasWseAccount")) hasWSE = true;
                 if (await proxy(ns, "stock.hasTixApiAccess")) hasTIX = true;
             }
-            if (ns.port.peek(4) === "NULL PORT DATA" && hasWSE && hasTIX) {
-                ns.port.write(13, "silent");
-                ns.port.write(13, "autobuyoff");
-                ns.port.write(1, "stocks autobuy off");
+            if (ns.peek(4) === "NULL PORT DATA" && hasWSE && hasTIX) {
+                ns.writePort(13, "silent");
+                ns.writePort(13, "autobuyoff");
+                ns.writePort(1, "stocks autobuy off");
                 await runIt(ns, "SphyxOS/bins/tStocks.js", true, []);
             }
             break;
     }
 
     //Always started up
-    if (ns.port.peek(5) === "NULL PORT DATA") {
-        ns.port.write(15, "Silent");
-        ns.port.write(15, "No Logfile");
-        ns.port.write(15, "Repeat On");
-        ns.port.write(1, "ipvgo repeat on");
-        ns.port.write(15, "Play as White Off");
-        ns.port.write(1, "ipvgo playaswhite off");
-        ns.port.write(15, HASBN14_3 ? "Cheats On" : "Cheats Off");
-        ns.port.write(1, HASBN14_3 ? "ipvgo cheats on" : "ipvgo cheats off");
-        ns.port.write(15, "Logging Off");
-        ns.port.write(1, "ipvgo logging off");
-        ns.port.write(15, "Net Off");
-        ns.port.write(1, "ipvgo net off");
-        ns.port.write(15, "Slum Off");
-        ns.port.write(1, "ipvgo slum off");
-        ns.port.write(15, "BH Off");
-        ns.port.write(1, "ipvgo bh off");
-        ns.port.write(15, "Tetrad Off");
-        ns.port.write(1, "ipvgo tetrad off");
-        ns.port.write(15, "Daed On");
-        ns.port.write(1, "ipvgo daed on");
-        ns.port.write(15, "Illum Off");
-        ns.port.write(1, "ipvgo illum off");
-        ns.port.write(15, "???? Off");
-        ns.port.write(1, "ipvgo ???? off");
-        ns.port.write(15, "No AI Off");
-        ns.port.write(1, "ipvgo noai off");
-        ns.port.write(15, "SlowMode Off");
-        ns.port.write(1, "ipvgo slowmode off");
+    if (ns.peek(5) === "NULL PORT DATA") {
+        ns.writePort(15, "Silent");
+        ns.writePort(15, "No Logfile");
+        ns.writePort(15, "Repeat On");
+        ns.writePort(1, "ipvgo repeat on");
+        ns.writePort(15, "Play as White Off");
+        ns.writePort(1, "ipvgo playaswhite off");
+        ns.writePort(15, HASBN14_3 ? "Cheats On" : "Cheats Off");
+        ns.writePort(1, HASBN14_3 ? "ipvgo cheats on" : "ipvgo cheats off");
+        ns.writePort(15, "Logging Off");
+        ns.writePort(1, "ipvgo logging off");
+        ns.writePort(15, "Net Off");
+        ns.writePort(1, "ipvgo net off");
+        ns.writePort(15, "Slum Off");
+        ns.writePort(1, "ipvgo slum off");
+        ns.writePort(15, "BH Off");
+        ns.writePort(1, "ipvgo bh off");
+        ns.writePort(15, "Tetrad Off");
+        ns.writePort(1, "ipvgo tetrad off");
+        ns.writePort(15, "Daed On");
+        ns.writePort(1, "ipvgo daed on");
+        ns.writePort(15, "Illum Off");
+        ns.writePort(1, "ipvgo illum off");
+        ns.writePort(15, "???? Off");
+        ns.writePort(1, "ipvgo ???? off");
+        ns.writePort(15, "No AI Off");
+        ns.writePort(1, "ipvgo noai off");
+        ns.writePort(15, "SlowMode Off");
+        ns.writePort(1, "ipvgo slowmode off");
         await runIt(ns, "SphyxOS/bins/go.js", true, []);
     }
-    if (ns.port.peek(2) === "NULL PORT DATA") {
+    if (ns.peek(2) === "NULL PORT DATA") {
         await runIt(ns, "SphyxOS/bins/puppetMini.js", true, []);
     }
-    ns.port.write(12, "silent");
-    ns.port.write(12, "nopurchaseservers");
-    ns.port.write(1, "puppet autobuyservers off");
-    ns.port.write(12, "noautohash");
-    ns.port.write(1, "puppet autohash off");
-    ns.port.write(12, "xp");
-    ns.port.write(1, "puppet xp on");
-    ns.port.write(12, "nolog");
-    ns.port.write(1, "puppet log off");
-    ns.port.write(12, "nopad");
-    ns.port.write(1, "puppet pad off");
+    ns.writePort(12, "silent");
+    ns.writePort(12, "nopurchaseservers");
+    ns.writePort(1, "puppet autobuyservers off");
+    ns.writePort(12, "noautohash");
+    ns.writePort(1, "puppet autohash off");
+    ns.writePort(12, "xp");
+    ns.writePort(1, "puppet xp on");
+    ns.writePort(12, "nolog");
+    ns.writePort(1, "puppet log off");
+    ns.writePort(12, "nopad");
+    ns.writePort(1, "puppet pad off");
 
     //Requires individualizing:  8, 11, 12
     let MONEYCHANGE1 = true;
@@ -330,17 +330,17 @@ export async function main(ns) {
                         GANG_EQ_UPDATE
                     ) {
                         GANG_EQ_UPDATE = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ Off");
-                        ns.port.write(1, "gang autoeq off");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ Off");
+                        ns.writePort(1, "gang autoeq off");
                     } else if (
                         GANG_EQ_UPDATE2 &&
                         moneySources?.sinceInstall.hacking > 10e9
                     ) {
                         GANG_EQ_UPDATE2 = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ On");
-                        ns.port.write(1, "gang autoeq on");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ On");
+                        ns.writePort(1, "gang autoeq on");
                     }
                     if (gangCreation) {
                         gangCreation = false;
@@ -367,17 +367,17 @@ export async function main(ns) {
                         GANG_EQ_UPDATE
                     ) {
                         GANG_EQ_UPDATE = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ Off");
-                        ns.port.write(1, "gang autoeq off");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ Off");
+                        ns.writePort(1, "gang autoeq off");
                     } else if (
                         GANG_EQ_UPDATE2 &&
                         moneySources?.sinceInstall.hacking > 10e9
                     ) {
                         GANG_EQ_UPDATE2 = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ On");
-                        ns.port.write(1, "gang autoeq on");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ On");
+                        ns.writePort(1, "gang autoeq on");
                     }
 
                     await factionWork(
@@ -412,17 +412,17 @@ export async function main(ns) {
                         GANG_EQ_UPDATE
                     ) {
                         GANG_EQ_UPDATE = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ Off");
-                        ns.port.write(1, "gang autoeq off");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ Off");
+                        ns.writePort(1, "gang autoeq off");
                     } else if (
                         GANG_EQ_UPDATE2 &&
                         moneySources?.sinceInstall.hacking > 10e9
                     ) {
                         GANG_EQ_UPDATE2 = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ On");
-                        ns.port.write(1, "gang autoeq on");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ On");
+                        ns.writePort(1, "gang autoeq on");
                     }
                     await gangCheck(ns);
                     await factionWork(
@@ -438,9 +438,9 @@ export async function main(ns) {
                 } else {
                     if (GANG_EQ_UPDATE) {
                         GANG_EQ_UPDATE = false;
-                        ns.port.write(16, "Silent");
-                        ns.port.write(16, "AutoEQ Off");
-                        ns.port.write(1, "gang autoeq off");
+                        ns.writePort(16, "Silent");
+                        ns.writePort(16, "AutoEQ Off");
+                        ns.writePort(1, "gang autoeq off");
                     }
                     await farmFaction(
                         ns,
@@ -475,21 +475,21 @@ export async function main(ns) {
                     printLogs(ns, "Training for BB entrance.");
                 }
                 if (
-                    ns.port.peek(8) === "NULL PORT DATA" &&
+                    ns.peek(8) === "NULL PORT DATA" &&
                     moneySources?.sinceInstall.casino >= 10000000000
                 ) {
-                    ns.port.write(18, "quiet");
-                    ns.port.write(18, "finisher off");
-                    ns.port.write(1, "bb finisher off");
-                    ns.port.write(18, "int mode off");
-                    ns.port.write(1, "bb int mode off");
-                    ns.port.write(18, HASBN10 ? "sleeves on" : "sleeves off");
-                    ns.port.write(
+                    ns.writePort(18, "quiet");
+                    ns.writePort(18, "finisher off");
+                    ns.writePort(1, "bb finisher off");
+                    ns.writePort(18, "int mode off");
+                    ns.writePort(1, "bb int mode off");
+                    ns.writePort(18, HASBN10 ? "sleeves on" : "sleeves off");
+                    ns.writePort(
                         1,
                         HASBN10 ? "bb sleeves on" : "bb sleeves off",
                     );
-                    ns.port.write(18, "sleeve infil off");
-                    ns.port.write(1, "bb sleeve infil off");
+                    ns.writePort(18, "sleeve infil off");
+                    ns.writePort(1, "bb sleeve infil off");
                     await runIt(ns, "SphyxOS/bins/bb.js", true, []);
                     clearLogs(ns);
                     printLogs(ns, "Training for BB entrance.");
@@ -527,9 +527,9 @@ export async function main(ns) {
                 await ns.sleep(1000);
             }
         case 8:
-            ns.port.write(12, "silent");
-            ns.port.write(12, "nomoney");
-            ns.port.write(1, "puppet money off");
+            ns.writePort(12, "silent");
+            ns.writePort(12, "nomoney");
+            ns.writePort(1, "puppet money off");
             let data4SCost;
             if (ns.ui.getGameInfo()?.versionNumber >= 44)
                 data4SCost = (await proxy(ns, "stock.has4SDataTixApi"))
@@ -550,9 +550,9 @@ export async function main(ns) {
                     moneySources?.sinceInstall.casino >= 10000000000 &&
                     MONEYCHANGE1
                 ) {
-                    ns.port.write(13, "silent");
-                    ns.port.write(13, "autobuy");
-                    ns.port.write(1, "stocks autobuy on");
+                    ns.writePort(13, "silent");
+                    ns.writePort(13, "autobuy");
+                    ns.writePort(1, "stocks autobuy on");
                     MONEYCHANGE1 = false;
                 }
                 if (
@@ -568,16 +568,16 @@ export async function main(ns) {
                 if (!(await hasAllAugs(ns, "Tian Di Hui"))) {
                     //14b for all augments and neuroflux.  + 25b for 4s = 39b minimum to move on.
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 290000000 + 1000000); //Set reserve.  Need 1m to enter faction
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 290000000 + 1000000); //Set reserve.  Need 1m to enter faction
                         MONEYCHANGE2 = false;
                     }
                     if (
                         MONEYCHANGE4 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.  Need 1m to enter faction
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.  Need 1m to enter faction
                         MONEYCHANGE4 = false;
                     }
                     await factionWork(
@@ -615,10 +615,10 @@ export async function main(ns) {
                                 data4SCost +
                                 moneySources?.sinceInstall.augmentations
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE3 = false;
                     }
                     if (
@@ -635,13 +635,13 @@ export async function main(ns) {
                 } else if (!(await hasAllAugs(ns, "CyberSec"))) {
                     //CyberSec
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 290000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 290000000); //Set reserve.
                         MONEYCHANGE2 = false;
                     }
                     if (MONEYCHANGE4 && player.factions.includes("CyberSec")) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.
                         MONEYCHANGE4 = false;
                     }
                     await factionWork(
@@ -675,10 +675,10 @@ export async function main(ns) {
                                 data4SCost +
                                 moneySources?.sinceInstall.augmentations
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE3 = false;
                     }
                     if (
@@ -695,13 +695,13 @@ export async function main(ns) {
                     }
                 } else if (!(await hasAllAugs(ns, "NiteSec"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 290000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 290000000); //Set reserve.
                         MONEYCHANGE2 = false;
                     }
                     if (MONEYCHANGE4 && player.factions.includes("NiteSec")) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.  Need 1m to enter faction
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.  Need 1m to enter faction
                         MONEYCHANGE4 = false;
                     }
                     await factionWork(
@@ -735,10 +735,10 @@ export async function main(ns) {
                                 data4SCost +
                                 moneySources?.sinceInstall.augmentations
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE3 = false;
                     }
                     if (
@@ -755,16 +755,16 @@ export async function main(ns) {
                     }
                 } else if (!(await hasAllAugs(ns, "The Black Hand"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 290000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 290000000); //Set reserve.
                         MONEYCHANGE2 = false;
                     }
                     if (
                         MONEYCHANGE4 &&
                         player.factions.includes("The Black Hand")
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.  Need 1m to enter faction
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.  Need 1m to enter faction
                         MONEYCHANGE4 = false;
                     }
                     await factionWork(
@@ -798,10 +798,10 @@ export async function main(ns) {
                                 data4SCost +
                                 moneySources?.sinceInstall.augmentations
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE3 = false;
                     }
                     if (
@@ -818,16 +818,16 @@ export async function main(ns) {
                     }
                 } else if (!(await hasAllAugs(ns, "BitRunners"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 290000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 290000000); //Set reserve.
                         MONEYCHANGE2 = false;
                     }
                     if (
                         MONEYCHANGE4 &&
                         player.factions.includes("BitRunners")
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.  Need 1m to enter faction
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.  Need 1m to enter faction
                         MONEYCHANGE4 = false;
                     }
                     await factionWork(
@@ -861,10 +861,10 @@ export async function main(ns) {
                                 data4SCost +
                                 moneySources?.sinceInstall.augmentations
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE3 = false;
                     }
                     if (
@@ -881,8 +881,8 @@ export async function main(ns) {
                     }
                 } else if (!(await hasAllAugs(ns, "Daedalus"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.
                         MONEYCHANGE2 = false;
                     }
                     if (
@@ -892,10 +892,10 @@ export async function main(ns) {
                             (await getWorth(ns)) >
                             102000000000
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE4 = false;
                     }
                     await factionWork(
@@ -929,10 +929,10 @@ export async function main(ns) {
                                 data4SCost +
                                 moneySources?.sinceInstall.augmentations
                     ) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuyoff");
-                        ns.port.write(1, "stocks autobuy off");
-                        ns.port.write(13, "sell");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuyoff");
+                        ns.writePort(1, "stocks autobuy off");
+                        ns.writePort(13, "sell");
                         MONEYCHANGE3 = false;
                     }
                     if (
@@ -948,29 +948,29 @@ export async function main(ns) {
                         MONEYCHANGE5 = false;
                     }
                     if (MONEYCHANGE6 && player.factions.includes("Daedalus")) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, "autobuy");
-                        ns.port.write(1, "stocks autobuy on");
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, "autobuy");
+                        ns.writePort(1, "stocks autobuy on");
                         MONEYCHANGE6 = false;
                     }
                 } else {
                     if (MONEYCHANGE2) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 290000000); //Set reserve.
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 290000000); //Set reserve.
                         MONEYCHANGE2 = false;
                     }
                     if (MONEYCHANGE4 && player.factions.includes("Daedalus")) {
-                        ns.port.write(13, "silent");
-                        ns.port.write(13, 1000000); //Set reserve.  Need 1m to enter faction
+                        ns.writePort(13, "silent");
+                        ns.writePort(13, 1000000); //Set reserve.  Need 1m to enter faction
                         MONEYCHANGE4 = false;
                     }
                     await farmFaction(ns, "8/8", "Daedalus", false, true);
                 }
             }
         case 9:
-            ns.port.write(12, "silent");
-            ns.port.write(12, "nomoney");
-            ns.port.write(1, "puppet money off");
+            ns.writePort(12, "silent");
+            ns.writePort(12, "nomoney");
+            ns.writePort(1, "puppet money off");
             while (true) {
                 await casino(ns); //Break the Casino
                 await prime(ns, false);
@@ -1011,8 +1011,8 @@ export async function main(ns) {
                         [],
                     );
                     if (pidof) {
-                        await ns.port.nextWrite(40);
-                        ns.port.clear(40);
+                        await ns.nextPortWrite(40);
+                        ns.clearPort(40);
                     }
                 }
                 //Netburners has 5 augments.  We want to buy 6 or more NFG.  Means 11 min in float
@@ -1255,9 +1255,9 @@ export async function main(ns) {
                         )) < (await maxRepNeeded(ns, "NiteSec"))
                     ) {
                         if (MONEYCHANGE2) {
-                            ns.port.write(12, "silent");
-                            ns.port.write(12, "money");
-                            ns.port.write(1, "puppet money on");
+                            ns.writePort(12, "silent");
+                            ns.writePort(12, "money");
+                            ns.writePort(1, "puppet money on");
                             MONEYCHANGE2 = false;
                         }
                         await factionWork(
@@ -1294,9 +1294,9 @@ export async function main(ns) {
                 else if (neuroAmount < 51) {
                     const player = await proxy(ns, "getPlayer");
                     if (MONEYCHANGE2 && player.skills.hacking >= 230) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     if (maxHomeRam < 4096) {
@@ -1529,15 +1529,15 @@ export async function main(ns) {
                 //Farm for a while
                 else if (maxHomeRam < 32768 || neuroAmount < 100) {
                     if (MONEYCHANGE2 && player.skills.hacking >= 1100) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
-                    if (MONEYCHANGE3 && ns.port.peek(3) !== "n00dles") {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "autohash");
-                        ns.port.write(1, "puppet autohash on");
+                    if (MONEYCHANGE3 && ns.peek(3) !== "n00dles") {
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "autohash");
+                        ns.writePort(1, "puppet autohash on");
                         MONEYCHANGE3 = false;
                         hashMode = "None";
                     }
@@ -1546,9 +1546,9 @@ export async function main(ns) {
                         minHash > capacity &&
                         maxHash > capacity
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "noautohash");
-                        ns.port.write(1, "puppet autohash off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "noautohash");
+                        ns.writePort(1, "puppet autohash off");
                         MONEYCHANGE4 = false;
                         hashMode = "money";
                     }
@@ -1587,9 +1587,9 @@ export async function main(ns) {
                     await restart(ns, 6);
                 } else if (!(await hasAllAugs(ns, "Daedalus"))) {
                     if (MONEYCHANGE2 && player.skills.hacking >= 2500) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     if (
@@ -1629,9 +1629,9 @@ export async function main(ns) {
                         );
                 } else if (!(await hasAllAugs(ns, "The Syndicate"))) {
                     if (MONEYCHANGE2 && player.skills.hacking >= 2500) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     if (
@@ -1679,9 +1679,9 @@ export async function main(ns) {
                         );
                 } else if (!(await hasAllAugs(ns, "Speakers for the Dead"))) {
                     if (MONEYCHANGE2 && player.skills.hacking >= 2500) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     if (
@@ -1727,9 +1727,9 @@ export async function main(ns) {
                         );
                 } else if (!(await hasAllAugs(ns, "The Covenant"))) {
                     if (MONEYCHANGE2 && player.skills.hacking >= 3000) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     if (
@@ -1775,9 +1775,9 @@ export async function main(ns) {
                         );
                 } else if (!(await hasAllAugs(ns, "Illuminati"))) {
                     if (MONEYCHANGE2 && player.skills.hacking >= 3000) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     if (
@@ -1828,9 +1828,9 @@ export async function main(ns) {
                     );
                 } else {
                     if (MONEYCHANGE2 && player.skills.hacking >= 4000) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await farmFaction(ns, "18/18", "Netburners", false, true);
@@ -2010,8 +2010,8 @@ export async function main(ns) {
                                     [],
                                 );
                                 if (pidof) {
-                                    await ns.port.nextWrite(40);
-                                    ns.port.clear(40);
+                                    await ns.nextPortWrite(40);
+                                    ns.clearPort(40);
                                 }
                             }
                             await factionWork(
@@ -2139,9 +2139,9 @@ export async function main(ns) {
                         MONEYCHANGE1 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await restart(ns, 1);
@@ -2161,9 +2161,9 @@ export async function main(ns) {
                         MONEYCHANGE1 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await restart(ns, 1);
@@ -2182,9 +2182,9 @@ export async function main(ns) {
                         MONEYCHANGE1 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await restart(ns, 3);
@@ -2200,9 +2200,9 @@ export async function main(ns) {
                     );
                 } else if (neuroAmount < 8) {
                     if (MONEYCHANGE1) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2219,9 +2219,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "CyberSec"))) {
                     if (MONEYCHANGE1 && player.factions.includes("CyberSec")) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await factionWork(
@@ -2238,9 +2238,9 @@ export async function main(ns) {
                         MONEYCHANGE1 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2257,9 +2257,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "NiteSec"))) {
                     if (MONEYCHANGE1 && player.factions.includes("NiteSec")) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await restart(ns, 2);
@@ -2278,9 +2278,9 @@ export async function main(ns) {
                         MONEYCHANGE1 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2297,20 +2297,20 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "The Black Hand"))) {
                     if (MONEYCHANGE3) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nomoney");
-                        ns.port.write(1, "puppet money off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nomoney");
+                        ns.writePort(1, "puppet money off");
                         MONEYCHANGE3 = false;
                     }
                     if (
                         MONEYCHANGE1 &&
                         player.factions.includes("The Black Hand")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE1 = false;
                     }
                     await restart(ns, 1);
@@ -2354,11 +2354,11 @@ export async function main(ns) {
                         MONEYCHANGE2 &&
                         player.factions.includes("The Black Hand")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await dump(ns);
@@ -2374,18 +2374,18 @@ export async function main(ns) {
                     ); //, 0, "None", 1e12, 64, 0, 0, "none", 0, false)
                 } else if (!(await hasAllAugs(ns, "BitRunners"))) {
                     if (MONEYCHANGE3) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nomoney");
-                        ns.port.write(1, "puppet money off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nomoney");
+                        ns.writePort(1, "puppet money off");
                         MONEYCHANGE3 = false;
                     }
                     if (
                         MONEYCHANGE1 &&
                         player.factions.includes("BitRunners")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE1 = false;
                     }
                     if (
@@ -2420,18 +2420,18 @@ export async function main(ns) {
                     }
                 } else if (neuroAmount < 90) {
                     if (MONEYCHANGE3) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nomoney");
-                        ns.port.write(1, "puppet money off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nomoney");
+                        ns.writePort(1, "puppet money off");
                         MONEYCHANGE3 = false;
                     }
                     if (
                         MONEYCHANGE1 &&
                         player.factions.includes("BitRunners")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE1 = false;
                     }
                     const numAugs = 90 - neuroAmount > 8 ? 8 : 90 - neuroAmount;
@@ -2446,15 +2446,15 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "Daedalus"))) {
                     if (MONEYCHANGE3) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nomoney");
-                        ns.port.write(1, "puppet money off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nomoney");
+                        ns.writePort(1, "puppet money off");
                         MONEYCHANGE3 = false;
                     }
                     if (MONEYCHANGE1 && player.skills.hacking >= 2500) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE1 = false;
                     }
                     await factionWork(
@@ -2468,17 +2468,17 @@ export async function main(ns) {
                     );
                 } else {
                     if (MONEYCHANGE3) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nomoney");
-                        ns.port.write(1, "puppet money off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nomoney");
+                        ns.writePort(1, "puppet money off");
                         MONEYCHANGE3 = false;
                     }
                     if (MONEYCHANGE1 && player.skills.hacking >= 2500) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
-                        ns.port.write(12, "pad");
-                        ns.port.write(1, "puppet pad on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
+                        ns.writePort(12, "pad");
+                        ns.writePort(1, "puppet pad on");
                         MONEYCHANGE1 = false;
                     }
                     await farmFaction(ns, "14/14", "Daedalus", false, true);
@@ -2611,9 +2611,9 @@ export async function main(ns) {
                     );
                 else if (neuroAmount < 5) {
                     if (MONEYCHANGE1) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2641,9 +2641,9 @@ export async function main(ns) {
                     );
                 else if (neuroAmount < 11) {
                     if (MONEYCHANGE1 && myAugs.length - augments.length >= 10) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2660,9 +2660,9 @@ export async function main(ns) {
                 } else if (neuroAmount < 42) {
                     //CyberSec should be donatable after
                     if (MONEYCHANGE1 && myAugs.length - augments.length >= 6) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2678,9 +2678,9 @@ export async function main(ns) {
                     );
                 } else if (neuroAmount < 47) {
                     if (MONEYCHANGE1 && myAugs.length - augments.length >= 3) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await dump(ns);
@@ -2722,18 +2722,18 @@ export async function main(ns) {
                     );
                 else if (!(await hasAllAugs(ns, "The Syndicate"))) {
                     if (MONEYCHANGE1 && player.skills.hacking > 160) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nomoney");
-                        ns.port.write(1, "puppet money off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nomoney");
+                        ns.writePort(1, "puppet money off");
                         MONEYCHANGE1 = false;
                     }
                     if (
                         MONEYCHANGE2 &&
                         player.factions.includes("The Syndicate")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -2748,9 +2748,9 @@ export async function main(ns) {
                     );
                 } else if (neuroAmount < 55) {
                     if (MONEYCHANGE1 && myAugs.length - augments.length >= 2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     await restart(ns, 4);
@@ -2764,9 +2764,9 @@ export async function main(ns) {
                     );
                 } else if (neuroAmount < 80) {
                     if (MONEYCHANGE1 && myAugs.length - augments.length >= 4) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "nopurchaseservers");
-                        ns.port.write(1, "puppet autobuyservers off");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "nopurchaseservers");
+                        ns.writePort(1, "puppet autobuyservers off");
                         MONEYCHANGE1 = false;
                     }
                     const amt = 80 - neuroAmount > 8 ? 8 : 80 - neuroAmount;
@@ -2871,9 +2871,9 @@ export async function main(ns) {
                     );
             }
         case 14:
-            ns.port.write(12, "silent");
-            ns.port.write(12, "nomoney");
-            ns.port.write(1, "puppet money off");
+            ns.writePort(12, "silent");
+            ns.writePort(12, "nomoney");
+            ns.writePort(1, "puppet money off");
             while (true) {
                 //const resetInfo = await proxy(ns, "getResetInfo")
                 //const neuroLevel = resetInfo.ownedAugs.get("NeuroFlux Governor") ?? 0
@@ -2885,9 +2885,9 @@ export async function main(ns) {
                 if (HASBN9 && !(await hasAllAugs(ns, "Netburners"))) {
                     //Netburners
                     if (MONEYCHANGE2 && player.skills.hacking >= 80) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -2905,9 +2905,9 @@ export async function main(ns) {
                         MONEYCHANGE2 &&
                         player.factions.includes("Tian Di Hui")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -2923,9 +2923,9 @@ export async function main(ns) {
                 } else if (!(await hasAllAugs(ns, "NiteSec"))) {
                     //NiteSec
                     if (MONEYCHANGE2 && player.factions.includes("NiteSec")) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -2941,9 +2941,9 @@ export async function main(ns) {
                 } else if (!(await hasAllAugs(ns, "CyberSec"))) {
                     //CyberSec
                     if (MONEYCHANGE2 && player.factions.includes("CyberSec")) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -2964,9 +2964,9 @@ export async function main(ns) {
                         MONEYCHANGE2 &&
                         player.factions.includes("The Black Hand")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -2985,9 +2985,9 @@ export async function main(ns) {
                         MONEYCHANGE2 &&
                         player.factions.includes("BitRunners")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3005,17 +3005,17 @@ export async function main(ns) {
                         MONEYCHANGE2 &&
                         player.factions.includes("BitRunners")
                     ) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await farmFaction(ns, "07/15", "BitRunners", true, false);
                 } else if (!(await hasAllAugs(ns, "Slum Snakes"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3030,9 +3030,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "Tetrads"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3052,9 +3052,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "The Syndicate"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3074,9 +3074,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "Speakers for the Dead"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3091,9 +3091,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "The Covenant"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3113,9 +3113,9 @@ export async function main(ns) {
                     );
                 } else if (!(await hasAllAugs(ns, "Illuminati"))) {
                     if (MONEYCHANGE2) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3131,9 +3131,9 @@ export async function main(ns) {
                 } else if (!(await hasAllAugs(ns, "Daedalus"))) {
                     //Daedalus
                     if (MONEYCHANGE2 && player.skills.hacking >= 2000) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await factionWork(
@@ -3148,9 +3148,9 @@ export async function main(ns) {
                 } else {
                     //Daedalus after Red Pill
                     if (MONEYCHANGE2 && player.skills.hacking >= 2000) {
-                        ns.port.write(12, "silent");
-                        ns.port.write(12, "money");
-                        ns.port.write(1, "puppet money on");
+                        ns.writePort(12, "silent");
+                        ns.writePort(12, "money");
+                        ns.writePort(1, "puppet money on");
                         MONEYCHANGE2 = false;
                     }
                     await farmFaction(ns, "15/15", "Daedalus", false, true);
@@ -3179,8 +3179,8 @@ async function restart(ns, augNum) {
 async function dump(ns) {
     const pidof = await runIt(ns, "SphyxOS/bins/dumpMoney.js", false, []);
     if (pidof) {
-        await ns.port.nextWrite(40);
-        ns.port.clear(40);
+        await ns.nextPortWrite(40);
+        ns.clearPort(40);
     }
 }
 /** @param {NS} ns */
@@ -3192,7 +3192,7 @@ function printLogs(ns, text) {
     ns.printf(text);
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "autopilot popout off");
+        ns.writePort(1, "autopilot popout off");
     }
     if (win) win.update(text);
 }
@@ -3253,9 +3253,9 @@ async function prime(ns, purchaseServersOn = true, stocks = false) {
         !moneySwitch
     ) {
         moneySwitch = true;
-        ns.port.write(12, "silent");
-        ns.port.write(12, "purchaseservers");
-        ns.port.write(1, "puppet autobuyservers on");
+        ns.writePort(12, "silent");
+        ns.writePort(12, "purchaseservers");
+        ns.writePort(1, "puppet autobuyservers on");
     }
 }
 async function hashes(ns, moneyCeiling, type = "coding") {
@@ -3270,8 +3270,8 @@ async function hashes(ns, moneyCeiling, type = "coding") {
             [],
         );
         if (pidof) {
-            await ns.port.nextWrite(40);
-            ns.port.clear(40);
+            await ns.nextPortWrite(40);
+            ns.clearPort(40);
         }
     }
     if (HASBN9) await runIt(ns, "SphyxOS/extras/hashIt.js", false, [type]);
@@ -3280,7 +3280,7 @@ async function casino(ns) {
     const moneySources = await proxy(ns, "getMoneySources");
     let CASINO = moneySources.sinceInstall?.casino >= 10e9 ? "Done" : "Need";
     if (CASINO === "Done") return true;
-    if (CASINO === "Need" && ns.port.peek(10) === "NULL PORT DATA") {
+    if (CASINO === "Need" && ns.peek(10) === "NULL PORT DATA") {
         const player = await proxy(ns, "getPlayer");
         if (
             player.city !== "Aevum" &&
@@ -3294,8 +3294,8 @@ async function casino(ns) {
                     [],
                 );
                 if (pidof) {
-                    await ns.port.nextWrite(40); //We can do something else now
-                    ns.port.clear(40);
+                    await ns.nextPortWrite(40); //We can do something else now
+                    ns.clearPort(40);
                 }
             }
         } else if (
@@ -3309,8 +3309,8 @@ async function casino(ns) {
                 [],
             );
             if (pidof) {
-                await ns.port.nextWrite(40); //We can do something else now
-                ns.port.clear(40);
+                await ns.nextPortWrite(40); //We can do something else now
+                ns.clearPort(40);
             }
         }
     }
@@ -3342,8 +3342,8 @@ async function farmFaction(
                 if (pidof) {
                     clearLogs(ns);
                     printLogs(ns, step + " Backdooring...");
-                    await ns.port.nextWrite(40);
-                    ns.port.clear(40);
+                    await ns.nextPortWrite(40);
+                    ns.clearPort(40);
                 }
             }
             if (city !== "None") {
@@ -3395,8 +3395,8 @@ async function farmFaction(
             ["quiet"],
         );
         if (pidof) {
-            await ns.port.nextWrite(40);
-            ns.port.clear(40);
+            await ns.nextPortWrite(40);
+            ns.clearPort(40);
         }
     }
     if (end) await endIt(ns);
@@ -3449,82 +3449,82 @@ async function farmFaction(
     const TRP = augments.includes("The Red Pill");
     if (GO_CHANGE && (ipvgoOpponents.includes(faction) || TRP)) {
         GO_CHANGE = false;
-        ns.port.write(15, "Silent");
-        ns.port.write(15, "Net Off");
-        ns.port.write(1, "ipvgo net off");
-        ns.port.write(15, "Slum Off");
-        ns.port.write(1, "ipvgo slum off");
-        ns.port.write(15, "BH Off");
-        ns.port.write(1, "ipvgo bh off");
-        ns.port.write(15, "Tetrad Off");
-        ns.port.write(1, "ipvgo tetrad off");
-        ns.port.write(15, "Daed Off");
-        ns.port.write(1, "ipvgo daed off");
-        ns.port.write(15, "Illum Off");
-        ns.port.write(1, "ipvgo illum off");
-        ns.port.write(15, "???? Off");
-        ns.port.write(1, "ipvgo ???? off");
+        ns.writePort(15, "Silent");
+        ns.writePort(15, "Net Off");
+        ns.writePort(1, "ipvgo net off");
+        ns.writePort(15, "Slum Off");
+        ns.writePort(1, "ipvgo slum off");
+        ns.writePort(15, "BH Off");
+        ns.writePort(1, "ipvgo bh off");
+        ns.writePort(15, "Tetrad Off");
+        ns.writePort(1, "ipvgo tetrad off");
+        ns.writePort(15, "Daed Off");
+        ns.writePort(1, "ipvgo daed off");
+        ns.writePort(15, "Illum Off");
+        ns.writePort(1, "ipvgo illum off");
+        ns.writePort(15, "???? Off");
+        ns.writePort(1, "ipvgo ???? off");
         if (TRP) {
-            ns.port.write(15, "???? On");
-            ns.port.write(1, "ipvgo ???? on");
+            ns.writePort(15, "???? On");
+            ns.writePort(1, "ipvgo ???? on");
         } else {
             if (currentNode === 9) {
-                ns.port.write(15, "Net On");
-                ns.port.write(1, "ipvgo net on");
+                ns.writePort(15, "Net On");
+                ns.writePort(1, "ipvgo net on");
             } else {
-                ns.port.write(15, "Daed On");
-                ns.port.write(1, "ipvgo daed on");
+                ns.writePort(15, "Daed On");
+                ns.writePort(1, "ipvgo daed on");
             }
             switch (faction) {
                 case "Netburners":
-                    ns.port.write(15, "Net On");
-                    ns.port.write(1, "ipvgo net on");
+                    ns.writePort(15, "Net On");
+                    ns.writePort(1, "ipvgo net on");
                     break;
                 case "Slum Snakes":
-                    ns.port.write(15, "Slum On");
-                    ns.port.write(1, "ipvgo slum on");
+                    ns.writePort(15, "Slum On");
+                    ns.writePort(1, "ipvgo slum on");
                     break;
                 case "The Black Hand":
-                    ns.port.write(15, "BH On");
-                    ns.port.write(1, "ipvgo bh on");
+                    ns.writePort(15, "BH On");
+                    ns.writePort(1, "ipvgo bh on");
                     break;
                 case "Tetrads":
-                    ns.port.write(15, "Tetrad On");
-                    ns.port.write(1, "ipvgo tetrad on");
+                    ns.writePort(15, "Tetrad On");
+                    ns.writePort(1, "ipvgo tetrad on");
                     break;
                 case "Daedalus":
-                    ns.port.write(15, "Daed On");
-                    ns.port.write(1, "ipvgo daed on");
+                    ns.writePort(15, "Daed On");
+                    ns.writePort(1, "ipvgo daed on");
                     break;
                 case "Illuminati":
-                    ns.port.write(15, "Illum On");
-                    ns.port.write(1, "ipvgo illum on");
+                    ns.writePort(15, "Illum On");
+                    ns.writePort(1, "ipvgo illum on");
                     break;
             }
         }
     } else if (GO_CHANGE) {
         GO_CHANGE = false;
-        ns.port.write(15, "Silent");
-        ns.port.write(15, "Net Off");
-        ns.port.write(1, "ipvgo net off");
-        ns.port.write(15, "Slum Off");
-        ns.port.write(1, "ipvgo slum off");
-        ns.port.write(15, "BH Off");
-        ns.port.write(1, "ipvgo bh off");
-        ns.port.write(15, "Tetrad Off");
-        ns.port.write(1, "ipvgo tetrad off");
-        ns.port.write(15, "Daed Off");
-        ns.port.write(1, "ipvgo daed off");
-        ns.port.write(15, "Illum Off");
-        ns.port.write(1, "ipvgo illum off");
-        ns.port.write(15, "???? Off");
-        ns.port.write(1, "ipvgo ???? off");
+        ns.writePort(15, "Silent");
+        ns.writePort(15, "Net Off");
+        ns.writePort(1, "ipvgo net off");
+        ns.writePort(15, "Slum Off");
+        ns.writePort(1, "ipvgo slum off");
+        ns.writePort(15, "BH Off");
+        ns.writePort(1, "ipvgo bh off");
+        ns.writePort(15, "Tetrad Off");
+        ns.writePort(1, "ipvgo tetrad off");
+        ns.writePort(15, "Daed Off");
+        ns.writePort(1, "ipvgo daed off");
+        ns.writePort(15, "Illum Off");
+        ns.writePort(1, "ipvgo illum off");
+        ns.writePort(15, "???? Off");
+        ns.writePort(1, "ipvgo ???? off");
         if (currentNode === 9) {
-            ns.port.write(15, "Net On");
-            ns.port.write(1, "ipvgo net on");
+            ns.writePort(15, "Net On");
+            ns.writePort(1, "ipvgo net on");
         } else {
-            ns.port.write(15, "Daed On");
-            ns.port.write(1, "ipvgo daed on");
+            ns.writePort(15, "Daed On");
+            ns.writePort(1, "ipvgo daed on");
         }
     }
     await ns.sleep(1000);
@@ -3570,8 +3570,8 @@ async function factionWork(
                 ["quiet", "autopilot"],
             );
             if (pidof) {
-                await ns.port.nextWrite(40);
-                ns.port.clear(40);
+                await ns.nextPortWrite(40);
+                ns.clearPort(40);
             }
         }
         const moneySources = await proxy(ns, "getMoneySources");
@@ -3586,8 +3586,8 @@ async function factionWork(
                     [],
                 );
                 if (pidof) {
-                    await ns.port.nextWrite(40);
-                    ns.port.clear(40);
+                    await ns.nextPortWrite(40);
+                    ns.clearPort(40);
                 }
             }
             if (HASBN9 && hashType !== "None") {
@@ -3814,8 +3814,8 @@ async function factionWork(
             ["quiet"],
         );
         if (pidof) {
-            await ns.port.nextWrite(40);
-            ns.port.clear(40);
+            await ns.nextPortWrite(40);
+            ns.clearPort(40);
         }
     }
     const myAugs = await proxy(ns, "singularity.getOwnedAugmentations", true);
@@ -3832,82 +3832,82 @@ async function factionWork(
     const TRP = augs.includes("The Red Pill");
     if (GO_CHANGE && (ipvgoOpponents.includes(faction) || TRP)) {
         GO_CHANGE = false;
-        ns.port.write(15, "Silent");
-        ns.port.write(15, "Net Off");
-        ns.port.write(1, "ipvgo net off");
-        ns.port.write(15, "Slum Off");
-        ns.port.write(1, "ipvgo slum off");
-        ns.port.write(15, "BH Off");
-        ns.port.write(1, "ipvgo bh off");
-        ns.port.write(15, "Tetrad Off");
-        ns.port.write(1, "ipvgo tetrad off");
-        ns.port.write(15, "Daed Off");
-        ns.port.write(1, "ipvgo daed off");
-        ns.port.write(15, "Illum Off");
-        ns.port.write(1, "ipvgo illum off");
-        ns.port.write(15, "???? Off");
-        ns.port.write(1, "ipvgo ???? off");
+        ns.writePort(15, "Silent");
+        ns.writePort(15, "Net Off");
+        ns.writePort(1, "ipvgo net off");
+        ns.writePort(15, "Slum Off");
+        ns.writePort(1, "ipvgo slum off");
+        ns.writePort(15, "BH Off");
+        ns.writePort(1, "ipvgo bh off");
+        ns.writePort(15, "Tetrad Off");
+        ns.writePort(1, "ipvgo tetrad off");
+        ns.writePort(15, "Daed Off");
+        ns.writePort(1, "ipvgo daed off");
+        ns.writePort(15, "Illum Off");
+        ns.writePort(1, "ipvgo illum off");
+        ns.writePort(15, "???? Off");
+        ns.writePort(1, "ipvgo ???? off");
         if (TRP) {
-            ns.port.write(15, "???? On");
-            ns.port.write(1, "ipvgo ???? on");
+            ns.writePort(15, "???? On");
+            ns.writePort(1, "ipvgo ???? on");
         } else {
             if (currentNode === 9) {
-                ns.port.write(15, "Net On");
-                ns.port.write(1, "ipvgo net on");
+                ns.writePort(15, "Net On");
+                ns.writePort(1, "ipvgo net on");
             } else {
-                ns.port.write(15, "Daed On");
-                ns.port.write(1, "ipvgo daed on");
+                ns.writePort(15, "Daed On");
+                ns.writePort(1, "ipvgo daed on");
             }
             switch (faction) {
                 case "Netburners":
-                    ns.port.write(15, "Net On");
-                    ns.port.write(1, "ipvgo net on");
+                    ns.writePort(15, "Net On");
+                    ns.writePort(1, "ipvgo net on");
                     break;
                 case "Slum Snakes":
-                    ns.port.write(15, "Slum On");
-                    ns.port.write(1, "ipvgo slum on");
+                    ns.writePort(15, "Slum On");
+                    ns.writePort(1, "ipvgo slum on");
                     break;
                 case "The Black Hand":
-                    ns.port.write(15, "BH On");
-                    ns.port.write(1, "ipvgo bh on");
+                    ns.writePort(15, "BH On");
+                    ns.writePort(1, "ipvgo bh on");
                     break;
                 case "Tetrads":
-                    ns.port.write(15, "Tetrad On");
-                    ns.port.write(1, "ipvgo tetrad on");
+                    ns.writePort(15, "Tetrad On");
+                    ns.writePort(1, "ipvgo tetrad on");
                     break;
                 case "Daedalus":
-                    ns.port.write(15, "Daed On");
-                    ns.port.write(1, "ipvgo daed on");
+                    ns.writePort(15, "Daed On");
+                    ns.writePort(1, "ipvgo daed on");
                     break;
                 case "Illuminati":
-                    ns.port.write(15, "Illum On");
-                    ns.port.write(1, "ipvgo illum on");
+                    ns.writePort(15, "Illum On");
+                    ns.writePort(1, "ipvgo illum on");
                     break;
             }
         }
     } else if (GO_CHANGE) {
         GO_CHANGE = false;
-        ns.port.write(15, "Silent");
-        ns.port.write(15, "Net Off");
-        ns.port.write(1, "ipvgo net off");
-        ns.port.write(15, "Slum Off");
-        ns.port.write(1, "ipvgo slum off");
-        ns.port.write(15, "BH Off");
-        ns.port.write(1, "ipvgo bh off");
-        ns.port.write(15, "Tetrad Off");
-        ns.port.write(1, "ipvgo tetrad off");
-        ns.port.write(15, "Daed Off");
-        ns.port.write(1, "ipvgo daed off");
-        ns.port.write(15, "Illum Off");
-        ns.port.write(1, "ipvgo illum off");
-        ns.port.write(15, "???? Off");
-        ns.port.write(1, "ipvgo ???? off");
+        ns.writePort(15, "Silent");
+        ns.writePort(15, "Net Off");
+        ns.writePort(1, "ipvgo net off");
+        ns.writePort(15, "Slum Off");
+        ns.writePort(1, "ipvgo slum off");
+        ns.writePort(15, "BH Off");
+        ns.writePort(1, "ipvgo bh off");
+        ns.writePort(15, "Tetrad Off");
+        ns.writePort(1, "ipvgo tetrad off");
+        ns.writePort(15, "Daed Off");
+        ns.writePort(1, "ipvgo daed off");
+        ns.writePort(15, "Illum Off");
+        ns.writePort(1, "ipvgo illum off");
+        ns.writePort(15, "???? Off");
+        ns.writePort(1, "ipvgo ???? off");
         if (currentNode === 9) {
-            ns.port.write(15, "Net On");
-            ns.port.write(1, "ipvgo net on");
+            ns.writePort(15, "Net On");
+            ns.writePort(1, "ipvgo net on");
         } else {
-            ns.port.write(15, "Daed On");
-            ns.port.write(1, "ipvgo daed on");
+            ns.writePort(15, "Daed On");
+            ns.writePort(1, "ipvgo daed on");
         }
     }
     if (breakToMaxFavor) {
@@ -4356,8 +4356,8 @@ function getChance(crimestats, person) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(22) !== "NULL PORT DATA") {
-        let result = ns.port.read(22);
+    while (ns.peek(22) !== "NULL PORT DATA") {
+        let result = ns.readPort(22);
         switch (result) {
             case "popout":
                 win = await makeNewWindow("AutoPilot", ns.ui.getTheme());

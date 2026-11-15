@@ -49,12 +49,12 @@ export async function main(ns) {
     ns.disableLog("ALL");
     ns.atExit(() => {
         UpdateHud();
-        ns.port.clear(4);
-        ns.port.write(1, 1);
+        ns.clearPort(4);
+        ns.writePort(1, 1);
         if (win) win.close();
     });
-    ns.port.write(4, ns.pid);
-    ns.port.write(1, 1);
+    ns.writePort(4, ns.pid);
+    ns.writePort(1, 1);
     win = false;
     RESERVE = Number.isInteger(ns.args[0]) ? Number(ns.args[0]) : 0;
     await getCommands(ns);
@@ -277,7 +277,7 @@ function update(ns, text) {
     ns.printRaw(text);
     if (win && win.closed) {
         win = false;
-        ns.port.write(1, "stocks popout off");
+        ns.writePort(1, "stocks popout off");
     }
     if (win) win.update(text);
 }
@@ -899,9 +899,9 @@ async function buyItems(ns, stocks, arg) {
 /** @param {NS} ns */
 async function getCommands(ns) {
     let silent = false;
-    while (ns.port.peek(13) !== "NULL PORT DATA") {
+    while (ns.peek(13) !== "NULL PORT DATA") {
         //1-4  1: noHacknet, 2: !noHacknet, 3: buyServers, 4: !buyServers
-        const result = ns.port.read(13);
+        const result = ns.readPort(13);
         if (Number.isInteger(result)) {
             if (!silent)
                 ns.tprintf(

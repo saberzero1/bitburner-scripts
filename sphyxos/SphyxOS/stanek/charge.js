@@ -4,5 +4,5 @@ export async function main(ns) {
     for (const frag of frags) {
         if (frag.id < 100) await ns.stanek.chargeFragment(frag.x, frag.y);
     }
-    ns.port.write(ns.pid, true);
+    ns.writePort(ns.pid, true);
 }
