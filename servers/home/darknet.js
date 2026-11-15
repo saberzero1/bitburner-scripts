@@ -398,8 +398,9 @@ class DarknetState {
         this.pruneEphemeralState();
     }
 
-    /** @param {boolean} seen false for passwords relayed from probe reports about hosts we haven't seen ourselves */
-    addPassword(ns, hostname, password, seen = true) {
+    /** @param {boolean} seen false for passwords relayed from probe reports about hosts we haven't seen ourselves
+     *  @param {boolean} save false when adding in bulk (call savePasswords once afterwards) */
+    addPassword(ns, hostname, password, seen = true, save = true) {
         this.knownPasswords.set(hostname, password);
         if (seen || !this.passwordSeen.has(hostname))
             this.passwordSeen.set(
@@ -408,7 +409,7 @@ class DarknetState {
                     ? Date.now()
                     : Date.now() - PASSWORD_MAX_AGE_MS + 30 * 60 * 1000,
             );
-        this.savePasswords(ns);
+        if (save) this.savePasswords(ns);
         // Clear zombie status when we learn a password for a zombie stasis server.
         // This is the primary recovery path: probes adjacent to the server re-authenticate
         // it and report the password, which the orchestrator picks up here.
@@ -613,13 +614,16 @@ async function orchestrateDarknet(ns, state, options) {
             const msg = JSON.parse(String(raw));
             if (msg.data) {
                 const remotePwds = JSON.parse(msg.data);
+                // Probes relay their whole password file (possibly thousands of stale entries). Only take passwords
+                // for hosts we've discovered ourselves, and save once per report: saving per entry froze the game.
                 let newCount = 0;
                 for (const [host, pwd] of Object.entries(remotePwds)) {
-                    if (!state.knownPasswords.has(host)) {
-                        state.addPassword(ns, host, pwd, false);
+                    if (!state.knownPasswords.has(host) && state.discoveredServers.has(host)) {
+                        state.addPassword(ns, host, pwd, false, false);
                         newCount++;
                     }
                 }
+                if (newCount > 0) state.savePasswords(ns);
                 if (newCount > 0) {
                     log(
                         ns,
@@ -758,15 +762,20 @@ async function orchestrateDarknet(ns, state, options) {
                             const msg = JSON.parse(String(raw));
                             if (msg.data) {
                                 const remotePwds = JSON.parse(msg.data);
+                                // (See above: only discovered hosts, one save per report)
                                 let newCount = 0;
                                 for (const [host, pwd] of Object.entries(
                                     remotePwds,
                                 )) {
-                                    if (!state.knownPasswords.has(host)) {
-                                        state.addPassword(ns, host, pwd, false);
+                                    if (
+                                        !state.knownPasswords.has(host) &&
+                                        state.discoveredServers.has(host)
+                                    ) {
+                                        state.addPassword(ns, host, pwd, false, false);
                                         newCount++;
                                     }
                                 }
+                                if (newCount > 0) state.savePasswords(ns);
                                 if (newCount > 0) {
                                     log(
                                         ns,

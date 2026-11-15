@@ -304,6 +304,7 @@ async function getFragmentsToCharge(ns) {
  * @param {NS} ns
  * @returns {Promise<bool>} whether all fragments were charged successfully **/
 async function tryChargeAllFragments(ns, fragmentsToCharge) {
+    let charged = 0;
     // Charge each fragment one at a time
     for (const fragment of fragmentsToCharge) {
         let availableRam =
@@ -338,8 +339,11 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
         }
         await waitForProcessToComplete(ns, pid);
         chargeAttempts[fragment.id] = 1 + (chargeAttempts[fragment.id] || 0);
+        charged++;
     }
-    return true; // Completed a round (the main loop only sleeps briefly between successful rounds)
+    // Only report success if something was actually charged. When RAM is short every fragment is skipped, and
+    // reporting success would make the main loop retry every 10ms (each round spawns temp scripts), freezing the game.
+    return charged > 0;
 }
 
 /** Get the current active stanek fragments
