@@ -24,7 +24,18 @@ const argsSchema = [
     ["disable-auto-destroy-bn", false], // Set to true if you do not want to auto destroy this BN when done
     ["install-at-aug-count", 8], // Automatically install when we can afford this many new augmentations (with NF only counting as 1). Note: This number will automatically be increased by 1 for every level of SF11 you have (up to 3)
     ["install-at-aug-plus-nf-count", 12], // or... automatically install when we can afford this many augmentations including additional levels of Neuroflux.  Note: This number will automatically be increased by 1 for every level of SF11 you have (up to 3)
-    ["install-for-augs", ["The Red Pill"]], // or... automatically install as soon as we can afford one of these augmentations
+    [
+        "install-for-augs",
+        [
+            "The Red Pill",
+            "The W1ngs of Icarus",
+            "The B00ts of Perseus",
+            "The St4ff of Asclepius",
+            "The H4mmer of Daedalus",
+            "The L4w of Bayes",
+            "The B1ade of Solomonoff",
+        ],
+    ], // or... automatically install as soon as we can afford one of these augmentations
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ["time-before-boosting-best-hack-server", 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
     ["reduced-aug-requirement-per-hour", 0.5], // For every hour since the last reset, require this many fewer augs to install.
@@ -1527,8 +1538,10 @@ export async function main(ns) {
                 : "");
         let resetStatus = `Reserving ${formatMoney(totalCost)} to install ${augSummary}`;
         let shouldReset =
-            options["install-for-augs"].some((a) =>
-                facman.affordable_augs.includes(a),
+            options["install-for-augs"].some(
+                (a) =>
+                    facman.affordable_augs.includes(a) ||
+                    facman.awaiting_install_augs.includes(a),
             ) ||
             pendingAugCount >= augsNeeded ||
             pendingAugInclNfCount >= augsNeededInclNf;
