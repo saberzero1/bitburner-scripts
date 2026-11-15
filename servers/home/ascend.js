@@ -358,7 +358,9 @@ export async function main(ns) {
     }
     const canExport = await getNsDataThroughFile(
         ns,
-        "ns.singularity.hasExportGameBonus()",
+        // hasExportGameBonus replaces exportGameBonus on newer dev builds; use whichever exists
+        "(ns.singularity.hasExportGameBonus ?? ns.singularity.exportGameBonus)()",
+        "/Temp/singularity-hasExportGameBonus.txt",
     );
     if (canExport) {
         log(ns, "Exporting game to claim free faction favor...", true, "info");

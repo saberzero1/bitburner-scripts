@@ -12,6 +12,7 @@ const legacyPatterns = [
     /^Temp\/stasis-pwd-helper-.+\.js$/, // darknet.js: one per host (now Temp/stasis-pwd-helper.js)
     /^Temp\/darknet-probe-helper-\d+\.js$/, // darknet.js discovery: one per counter
     /\.txt\.([1-9]|1\d|20)\.js$/, // helpers.js temp scripts on completion ports 1-20 (now 9000+)
+    /\.txt\.90\d\d\.js$/, // helpers.js temp scripts named without a command hash (now name.<hash>.<port>.js)
 ];
 
 export function autocomplete(data) {

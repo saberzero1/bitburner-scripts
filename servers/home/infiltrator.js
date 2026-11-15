@@ -11,6 +11,8 @@ import {
     getFilePath,
     waitForProcessToComplete,
     autoRetry,
+    portWrite,
+    portClear,
 } from "./helpers";
 
 // =============================================================================
@@ -1901,8 +1903,8 @@ export async function main(ns) {
             print("Stopping automated infiltration...");
             clearInterval(wnd.tmrAutoInf);
             delete wnd.tmrAutoInf;
-            ns.port.clear(30);
-            ns.port.write(1, 1);
+            portClear(ns, 30);
+            portWrite(ns, 1, 1);
         }
         restoreEventListeners();
         setTimeout(() => {
@@ -1970,7 +1972,7 @@ export async function main(ns) {
                 (targetCompany ? ` | Target: ${targetCompany}` : ""),
         );
 
-        ns.port.write(30, ns.pid);
+        portWrite(ns, 30, ns.pid);
 
         if (targetCompany) {
             let navigated = false;
@@ -2035,7 +2037,7 @@ export async function main(ns) {
 
     // Signal other scripts (e.g. work-for-factions.js) that infiltration is active.
     // The --auto path writes port 30 separately; this covers the orchestrator path.
-    ns.port.write(30, ns.pid);
+    portWrite(ns, 30, ns.pid);
     if (!options["getMoney"]) {
         // Load augmentation data (refreshed each iteration at end of loop)
         await updateAugmentationData(ns, player, ignoreFaction);
@@ -2053,9 +2055,9 @@ export async function main(ns) {
         ) {
             if (!options["no-tail"]) ns.ui.openTail();
             if (options["sleep-Between-Infiltration-Time"]) {
-                ns.port.clear(30); // Release lock so faction worker can run during downtime
+                portClear(ns, 30); // Release lock so faction worker can run during downtime
                 await ns.sleep(options["sleep-Between-Infiltration-Time"]);
-                ns.port.write(30, ns.pid); // Re-acquire lock before next infiltration
+                portWrite(ns, 30, ns.pid); // Re-acquire lock before next infiltration
             }
 
             const marketMultiplier = getMarketDemandMultiplier();
@@ -2114,9 +2116,9 @@ export async function main(ns) {
                         ns,
                         `Infiltration timed out or failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
                     );
-                    ns.port.clear(30);
+                    portClear(ns, 30);
                     await ns.sleep(2000);
-                    ns.port.write(30, ns.pid);
+                    portWrite(ns, 30, ns.pid);
                 } else {
                     log(
                         ns,
@@ -2134,9 +2136,9 @@ export async function main(ns) {
                         `Market demand low \u2014 waiting ${(delay / 1000).toFixed(1)}s for recovery`,
                         verbose,
                     );
-                    ns.port.clear(30); // Release lock during market demand wait
+                    portClear(ns, 30); // Release lock during market demand wait
                     await ns.sleep(delay);
-                    ns.port.write(30, ns.pid); // Re-acquire lock
+                    portWrite(ns, 30, ns.pid); // Re-acquire lock
                 }
             }
 
@@ -2171,7 +2173,7 @@ export async function main(ns) {
         await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock);
     }
     // Clear the infiltration-active signal so other scripts can resume.
-    ns.port.clear(30);
+    portClear(ns, 30);
 }
 
 /**

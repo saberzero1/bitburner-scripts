@@ -1,5 +1,9 @@
 const PROBE_VERSION = 39;
 
+// Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
+const portWrite = (ns, port, data) =>
+    ns.port ? ns.port.write(port, data) : ns.writePort(port, data);
+
 export async function main(ns) {
     // NOTE: ns.getScriptName() via runDnetCommand returns the TEMP script's name,
     // not the probe's name. Use the known script path directly.
@@ -227,7 +231,7 @@ function reportPasswordToOrchestrator(ns, hostname, password) {
     try {
         const pwd = password ?? "";
         const pwdData = JSON.stringify({ [hostname]: pwd });
-        ns.port.write(19, JSON.stringify({ host: hostname, data: pwdData }));
+        portWrite(ns, 19, JSON.stringify({ host: hostname, data: pwdData }));
     } catch {}
 }
 
@@ -280,7 +284,7 @@ async function processServer(
                 neighbor: probeHost,
                 neighborPwd: passwords.get(probeHost) ?? null,
             });
-            ns.port.write(17, reportData);
+            portWrite(ns, 17, reportData);
         } catch {}
         // Signal that THIS probe host is adjacent to a labyrinth
         foundLabyrinthNeighbor = true;
@@ -1346,7 +1350,7 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
                         myScore,
                         weakestScore,
                     });
-                    ns.port.write(21, swapRequest);
+                    portWrite(ns, 21, swapRequest);
                     ns.print(
                         `Stasis: wrote swap request to port 21 (remove ${weakestHost} for ${hostname})`,
                     );

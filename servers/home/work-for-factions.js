@@ -14,6 +14,8 @@ import {
     tail,
     getStocksValue,
     measureRepGainRate,
+    portPeek,
+    portClear,
 } from "./helpers.js";
 
 let options;
@@ -1774,15 +1776,15 @@ async function isValidInterruption(ns, currentWork = null) {
     currentWork ??= await getCurrentWorkInfo(ns); // Retrieve current work (unless it was passed in)
     // Never interrupt infiltration - infiltrator.js writes its PID to port 30 while active
     // This check MUST come first (before grafting/bladeburner) so it is never skipped by the else-if chain.
-    if (ns.port.peek(30) !== "NULL PORT DATA") {
+    if (portPeek(ns, 30) !== "NULL PORT DATA") {
         // Verify the PID is still running (guards against stale port data if infiltrator crashed)
-        const infiltratorPid = ns.port.peek(30);
+        const infiltratorPid = portPeek(ns, 30);
         if (ns.isRunning(infiltratorPid)) {
             interruptionNotice =
                 "Infiltrator.js is running. Pausing focus-work to avoid disrupting infiltration...";
             if (currentWork.type) await stop(ns);
         } else {
-            ns.port.clear(30); // Stale PID - infiltrator.js is no longer running, clean up
+            portClear(ns, 30); // Stale PID - infiltrator.js is no longer running, clean up
         }
     }
     // Never interrupt grafting

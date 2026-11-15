@@ -53,6 +53,11 @@ let infiltrationStart = 0;
 //  Entry Point
 // =============================================================================
 
+// Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
+const portWrite = (ns, port, data) =>
+    ns.port ? ns.port.write(port, data) : ns.writePort(port, data);
+const portClear = (ns, port) => (ns.port ? ns.port.clear(port) : ns.clearPort(port));
+
 /** @param {NS} ns **/
 export async function main(ns) {
     const args = ns.flags(argsSchema);
@@ -75,8 +80,8 @@ export async function main(ns) {
         print("Stopping automated infiltration...");
         clearInterval(wnd.tmrAutoInf);
         delete wnd.tmrAutoInf;
-        ns.port.clear(30);
-        ns.port.write(1, 1);
+        portClear(ns, 30);
+        portWrite(ns, 1, 1);
     }
 
     // --stop: just stop and exit
@@ -102,7 +107,7 @@ export async function main(ns) {
     );
 
     // IPC: write PID to port 30
-    ns.port.write(30, ns.pid);
+    portWrite(ns, 30, ns.pid);
 
     // Wrap event listeners for trusted synthetic keyboard events (needed for fallback solvers)
     wrapEventListeners();

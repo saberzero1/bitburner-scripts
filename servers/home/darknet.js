@@ -5,6 +5,9 @@ import {
     disableLogs,
     formatRam,
     getErrorInfo,
+    portPeek,
+    portRead,
+    portClear,
 } from "./helpers.js";
 import {
     getDarknetPasswordSolver,
@@ -100,7 +103,7 @@ const LAB_SOLVER_CONTENT = [
     `      if (visited.has(nk)) continue;`,
     `      const r = await ns.dnet.authenticate(hostname, "go " + d);`,
     `      if (r.success) {`,
-    `        ns.port.write(port, JSON.stringify({ host: hostname, password: r.data ?? r.message }));`,
+    `        (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, password: r.data ?? r.message }));`,
     `        return;`,
     `      }`,
     `      const mm = (r.message || "").match(/moved to (\\d+),(\\d+)/);`,
@@ -112,20 +115,20 @@ const LAB_SOLVER_CONTENT = [
     `      }`,
     `    }`,
     `    if (!moved) {`,
-    `      if (stack.length === 0) { ns.port.write(port, JSON.stringify({ host: hostname, error: "stuck" })); return; }`,
+    `      if (stack.length === 0) { (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "stuck" })); return; }`,
     `      const back = stack.pop();`,
     `      const br = await ns.dnet.authenticate(hostname, "go " + rev[back.dir]);`,
     `      if (br.success) {`,
-    `        ns.port.write(port, JSON.stringify({ host: hostname, password: br.data ?? br.message }));`,
+    `        (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, password: br.data ?? br.message }));`,
     `        return;`,
     `      }`,
     `      const bm = (br.message || "").match(/moved to (\\d+),(\\d+)/);`,
     `      if (bm) { pos = [parseInt(bm[1],10), parseInt(bm[2],10)]; }`,
-    `      else { ns.port.write(port, JSON.stringify({ host: hostname, error: "backtrack failed" })); return; }`,
+    `      else { (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "backtrack failed" })); return; }`,
     `    }`,
     `    await ns.sleep(50);`,
     `  }`,
-    `  ns.port.write(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
+    `  (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify({ host: hostname, error: "max iterations" }));`,
     `}`,
 ].join("\n");
 const PROBE_VERSION = 39;
@@ -502,8 +505,8 @@ async function orchestrateDarknet(ns, state, options) {
         neighbors.clear();
     }
 
-    while (ns.port.peek(LAB_NEIGHBOR_REPORT_PORT) !== "NULL PORT DATA") {
-        const raw = ns.port.read(LAB_NEIGHBOR_REPORT_PORT);
+    while (portPeek(ns, LAB_NEIGHBOR_REPORT_PORT) !== "NULL PORT DATA") {
+        const raw = portRead(ns, LAB_NEIGHBOR_REPORT_PORT);
         try {
             const msg = JSON.parse(String(raw));
             if (msg.labHost && msg.neighbor) {
@@ -555,8 +558,8 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 1c: Collect stasis server passwords reported by probes (port 19).
     // When a probe sets stasis on itself, it writes its password here so the orchestrator
     // always has credentials for stasis servers — preventing future 'zombie stasis' situations.
-    while (ns.port.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
-        const raw = ns.port.read(STASIS_PWD_PORT);
+    while (portPeek(ns, STASIS_PWD_PORT) !== "NULL PORT DATA") {
+        const raw = portRead(ns, STASIS_PWD_PORT);
         try {
             const msg = JSON.parse(String(raw));
             if (msg.data) {
@@ -672,7 +675,7 @@ async function orchestrateDarknet(ns, state, options) {
             const helperContent =
                 `/** @param {NS} ns */ export async function main(ns) {` +
                 ` const data = ns.read("${PASSWORD_FILE}");` +
-                ` if (data) ns.port.write(${STASIS_PWD_PORT}, JSON.stringify({host: ns.getHostname(), data}));` +
+                ` if (data) (ns.port ? ns.port.write : ns.writePort)(${STASIS_PWD_PORT}, JSON.stringify({host: ns.getHostname(), data}));` +
                 `}`;
 
             // Check if stasis server has enough RAM for the helper (~1.6 GB base)
@@ -700,8 +703,8 @@ async function orchestrateDarknet(ns, state, options) {
                             break;
                     }
                     // Read result from port
-                    while (ns.port.peek(STASIS_PWD_PORT) !== "NULL PORT DATA") {
-                        const raw = ns.port.read(STASIS_PWD_PORT);
+                    while (portPeek(ns, STASIS_PWD_PORT) !== "NULL PORT DATA") {
+                        const raw = portRead(ns, STASIS_PWD_PORT);
                         try {
                             const msg = JSON.parse(String(raw));
                             if (msg.data) {
@@ -771,8 +774,8 @@ async function orchestrateDarknet(ns, state, options) {
     {
         // Collect all swap requests, then process the best one
         const swapRequests = [];
-        while (ns.port.peek(STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") {
-            const raw = ns.port.read(STASIS_SWAP_REQUEST_PORT);
+        while (portPeek(ns, STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") {
+            const raw = portRead(ns, STASIS_SWAP_REQUEST_PORT);
             try {
                 const req = JSON.parse(String(raw));
                 if (req.removeHost && req.requestor) swapRequests.push(req);
@@ -854,8 +857,8 @@ async function orchestrateDarknet(ns, state, options) {
     cleanupOrphanedProbes(ns, state);
 
     // Step 8b: Collect labyrinth solver results from port
-    while (ns.port.peek(LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
-        const raw = ns.port.read(LAB_SOLVER_RESULT_PORT);
+    while (portPeek(ns, LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
+        const raw = portRead(ns, LAB_SOLVER_RESULT_PORT);
         try {
             const msg = JSON.parse(String(raw));
             if (msg.password && msg.host) {
@@ -962,7 +965,7 @@ async function discoverFromAuthedServers(ns, state) {
     // Ports are global — any server can write to them regardless of network topology.
     // (helpers.js completion ports live at 9000+, so they no longer collide with this one.)
     const DISCOVERY_PORT = 20;
-    ns.port.clear(DISCOVERY_PORT);
+    portClear(ns, DISCOVERY_PORT);
 
     // The temp script runs probe() on the remote server and writes result to a port.
     // This avoids scp back to home which may be unreachable from the darknet.
@@ -972,13 +975,13 @@ async function discoverFromAuthedServers(ns, state) {
         `/** @param {NS} ns */ export async function main(ns) {` +
         ` const result = ns.dnet.probe();` +
         ` const data = JSON.stringify({ source: ns.getHostname(), servers: result ?? [] });` +
-        ` ns.port.write(${DISCOVERY_PORT}, data);` +
+        ` (ns.port ? ns.port.write : ns.writePort)(${DISCOVERY_PORT}, data);` +
         `}`;
     ns.write(helperScript, helperContent, "w");
 
     const readResults = () => {
-        while (ns.port.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
-            const raw = ns.port.read(DISCOVERY_PORT);
+        while (portPeek(ns, DISCOVERY_PORT) !== "NULL PORT DATA") {
+            const raw = portRead(ns, DISCOVERY_PORT);
             try {
                 const parsed = JSON.parse(String(raw));
                 const source = parsed?.source;
@@ -1046,8 +1049,8 @@ async function discoverFromAuthedServers(ns, state) {
     }
 
     // Final cleanup: drain any leftover port data
-    while (ns.port.peek(DISCOVERY_PORT) !== "NULL PORT DATA") {
-        ns.port.read(DISCOVERY_PORT);
+    while (portPeek(ns, DISCOVERY_PORT) !== "NULL PORT DATA") {
+        portRead(ns, DISCOVERY_PORT);
     }
 
     return discovered;

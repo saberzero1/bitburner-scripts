@@ -339,8 +339,8 @@ function checkBackwardsCompatibility(ns, command) {
             "corporation.setJobAssignment",
             "corporation.setAutoJobAssignment",
         )
-        .replaceAll("gang.getAllGangInformation", "gang.getOtherGangInformation")
-        .replaceAll("singularity.hasExportGameBonus", "singularity.exportGameBonus");
+        .replaceAll("gang.getAllGangInformation", "gang.getOtherGangInformation");
+    // (ascend.js already feature-detects hasExportGameBonus vs exportGameBonus)
 
     // Log altered commands to assist with troubleshooting.
     if (alteredCommand != command)
@@ -354,6 +354,14 @@ function checkBackwardsCompatibility(ns, command) {
     // Note: v2.3.0 deprecation workarounds were removed - game is now v2.8.1+
 
     return alteredCommand;
+}
+
+/** Short stable hash of a string (djb2, base36). Used to give each distinct command its own temp script,
+ * since the default file names only reflect the function name (e.g. "f(x)" and "f(x) ?? 'OK'" collided). */
+function hashString(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
 }
 
 /** Convert a command name like "ns.namespace.someFunction(args, args)" into
@@ -424,7 +432,7 @@ export async function getNsDataThroughFile_Custom(
     nextCompletionPort = (nextCompletionPort + 1) % COMPLETION_PORT_COUNT;
     const completionPort = COMPLETION_PORT_BASE + nextCompletionPort;
     portClear(ns, completionPort);
-    const fNameCommand = `${fName}.${completionPort}.js`;
+    const fNameCommand = `${fName}.${hashString(command)}.${completionPort}.js`;
     const commandToFile =
         `let r;try{const v=(${command});` +
         `const w=v===undefined?{ $type:'undefined' }:v===null?{ $type:'null' }:v;` +
@@ -647,7 +655,9 @@ export async function runCommand_Custom(
         (importFunctions.length > 0
             ? `import { ${importFunctions.join(", ")} } from 'helpers.js'\n`
             : "") + `export async function main(ns) { ${command} }`;
-    fileName = fileName || getDefaultCommandFileName(command, ".js");
+    fileName =
+        fileName ||
+        getDefaultCommandFileName(command, `.${hashString(command)}.js`);
     if (verbose)
         log(
             ns,
