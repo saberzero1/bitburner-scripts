@@ -59,7 +59,9 @@ const CHEM = "Chemical";
 const TOB = "Tobacco";
 const DUMMY_PREFIX = "z-";
 const DUMMY_INDUSTRY = "Restaurant";
-const MAX_DIVISIONS = 20;
+// BitNode CorporationDivisions multipliers (max divisions = 20 x this), used when getBitNodeMultipliers is
+// unavailable (it needs SF5)
+const DIVISION_MULTS = { 2: 0.9, 5: 0.75, 6: 0.8, 7: 0.8, 8: 0, 9: 0.8, 10: 0.9, 11: 0.9, 12: 0.5, 13: 0.4, 14: 0.8, 15: 0.4 };
 const EXPORT_STRING = "(IPROD+IINV/10)*(-1)";
 const JOB_NAMES = ["Operations", "Engineer", "Business", "Management", "Research & Development", "Intern"];
 const STATE_FILE = "/data/corp-state.txt";
@@ -163,7 +165,9 @@ for(const r of list){const has=t(()=>c.hasResearched(d,r));out.rd[d][r]={has,cos
 return out;})()`,
     staticData: `(()=>{const c=ns.corporation;const p=JSON.parse(ns.args[0]);const out={industries:{},materials:{}};
 for(const i of p.industries){try{out.industries[i]=c.getIndustryData(i);}catch{}}
-for(const m of p.materials){try{out.materials[m]=c.getMaterialData(m);}catch{}}return out;})()`,
+for(const m of p.materials){try{out.materials[m]=c.getMaterialData(m);}catch{}}
+let dm=null;try{dm=ns.getBitNodeMultipliers().CorporationDivisions;}catch{dm=p.divisionMults[ns.getResetInfo().currentNode]??1;}
+out.maxDivisions=Math.floor(20*dm);return out;})()`,
     // Office growth with budgets (50 GB): [{div, city, size, budget, hire:{job:count}}]
     officeGrow: `(()=>{const c=ns.corporation;const out=[];for(const o of JSON.parse(ns.args[0])){const r={div:o.div,city:o.city,grown:0,hired:0};
 try{if(o.grow>0){const cost=c.getOfficeSizeUpgradeCost(o.div,o.city,o.grow);if(cost<=o.budget){c.upgradeOfficeSize(o.div,o.city,o.grow);r.grown=o.grow;r.cost=cost;}}
@@ -321,10 +325,11 @@ export async function main(ns) {
             }
             if (justFinished !== "SALE") continue; // Act once per cycle, right before START
 
-            if (!staticData?.industries?.[TOB]) {
+            if (!staticData?.industries?.[TOB] || staticData.maxDivisions === undefined) {
                 staticData = await runOp(ns, "staticData", {
                     industries: [AGRI, CHEM, TOB, DUMMY_INDUSTRY],
                     materials: ["Water", "Food", "Plants", "Chemicals", "Energy", ...BOOST_MATERIALS],
+                    divisionMults: DIVISION_MULTS,
                 });
                 if (staticData) ns.write(STATIC_FILE, JSON.stringify(staticData), "w");
                 else continue;
@@ -375,6 +380,7 @@ async function tryCreateCorporation(ns, options) {
     if (result?.[0] === true) {
         log(ns, `SUCCESS: Created corporation ${options["corp-name"]}`, true, "success");
         ns.write(STATE_FILE, JSON.stringify(newState()), "w");
+        ns.write(STATIC_FILE, "", "w"); // a new corporation may be in a different BitNode (division limit)
     }
 }
 
@@ -546,8 +552,9 @@ function planStructure(ctx, plan) {
             }
         }
         // Add at most one new dummy per cycle, only with plenty of spare funds
-        if (ctx.corp.divisions.length < MAX_DIVISIONS && dummyCost * 5 <= ctx.funds) {
-            for (let i = 0; i < MAX_DIVISIONS; i++) {
+        const maxDivisions = ctx.staticData.maxDivisions ?? 20;
+        if (ctx.corp.divisions.length < maxDivisions && dummyCost * 5 <= ctx.funds) {
+            for (let i = 0; i < maxDivisions; i++) {
                 const name = DUMMY_PREFIX + String(i).padStart(2, "0");
                 if (ctx.corp.divisions.includes(name)) continue;
                 take(ctx, dummyCost);
@@ -868,13 +875,15 @@ function planLateSpending(ctx, plan) {
 
     // Product division: big budgeted improvement every 5 cycles (immediately the first time)
     const since = (d) => st.cycle - (st.lastImprove[d] ?? -1e9);
-    // Once, when the product division is new: give support divisions a starting budget (catloversg round 3:
-    // $150b Agriculture, $30b Chemical), since their regular budgets come from (still tiny) profit.
-    if (!st.supportSeeded && ctx.funds > 400e9) {
+    // Once, when the product division is new: give support divisions a starting budget, since their regular budgets
+    // come from (still tiny) profit. catloversg round 3 gives $150b Agriculture and $30b Chemical out of ~$400b+; use
+    // the same shares of whatever we have, so it also works when valuations (and so offers) are scaled down.
+    if (!st.supportSeeded && ctx.funds > 1e9) {
         st.supportSeeded = true;
         st.lastImprove[AGRI] = st.lastImprove[CHEM] = st.cycle;
-        improveSupportDivision(ctx, plan, AGRI, take(ctx, 150e9));
-        if (ctx.has(CHEM)) improveSupportDivision(ctx, plan, CHEM, take(ctx, 30e9));
+        const seed = Math.min(ctx.funds, 400e9);
+        improveSupportDivision(ctx, plan, AGRI, take(ctx, seed * 0.375));
+        if (ctx.has(CHEM)) improveSupportDivision(ctx, plan, CHEM, take(ctx, seed * 0.075));
     }
 
     if (since(TOB) >= 5) {
@@ -997,7 +1006,9 @@ function planBoostMaterials(ctx, plan) {
                     const cost = deficit * (mats[m]?.marketPrice ?? 0);
                     // Early rounds: per-second orders may run into debt (small offices aren't penalised).
                     // Later: large offices lose morale while in debt, so only buy what we can pay for.
-                    if (ratio ? ctx.funds < -10e9 && cost > 0 : cost > ctx.funds) return;
+                    // Debt limit: $10b, or 20% of the current offer when valuations are scaled down
+                    const debtLimit = Math.min(10e9, 0.2 * (ctx.snap.offer?.funds ?? 0));
+                    if (ratio ? ctx.funds < -debtLimit && cost > 0 : cost > ctx.funds) return;
                     ctx.funds -= cost;
                     plan.add("supply", ["buyMaterial", name, city, m, deficit / 10]);
                     ctx.boostOrders.push([name, city, m]);
