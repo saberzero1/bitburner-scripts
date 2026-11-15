@@ -865,6 +865,9 @@ export async function main(ns) {
         )
             launchScriptHelper(ns, "dashboard.js", [], false);
 
+        // Run timeline logger (tools/run-timeline): a snapshot every few minutes, to see what gates each run
+        if (!findScript("run-logger.js") && homeRam >= 64) launchScriptHelper(ns, "run-logger.js", [], false);
+
         // Launch stock-master in a way that emphasizes it as our main source of income early-on
         if (
             !findScript("stockmaster.js") &&
