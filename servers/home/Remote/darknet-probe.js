@@ -1,4 +1,4 @@
-const PROBE_VERSION = 48;
+const PROBE_VERSION = 49;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1132,6 +1132,7 @@ async function manageWorker(ns, optionsFile, host) {
     const options = loadProbeOptions(ns, optionsFile);
     const mode = options.workerMode === "cha" && options.workerStock ? "cha" : options.workerMode === "money" ? "money" : "off";
     const procs = (await nsPs(ns, host)) || [];
+    if (procs.some((p) => /dnet-migrate/.test(p.filename))) return; // migration charging has the RAM for now
     const workers = procs.filter((p) => /darknet-worker-/.test(p.filename));
     const wantedScript = mode === "off" ? null : WORKER_SCRIPTS[mode];
     const wantedArgs = mode === "cha" ? [options.workerStock] : [];
@@ -1214,6 +1215,7 @@ function loadProbeOptions(ns, filePath) {
         workerMode: "off",
         workerStock: "",
         labNeighbors: [],
+        frontierGap: 0,
     };
     try {
         const published = portPeek(ns, PROBE_OPTIONS_PORT);
@@ -1237,6 +1239,7 @@ function loadProbeOptions(ns, filePath) {
             workerMode: ["cha", "money"].includes(parsed.workerMode) ? parsed.workerMode : "off",
             workerStock: typeof parsed.workerStock === "string" ? parsed.workerStock : "",
             labNeighbors: Array.isArray(parsed.labNeighbors) ? parsed.labNeighbors : [],
+            frontierGap: Number(parsed.frontierGap) || 0,
         };
     } catch {
         return defaults;
@@ -1559,83 +1562,55 @@ async function runMemoryReallocation(ns, hostname) {
 const MIGRATION_RECHECK_INTERVAL = 180000; // Re-evaluate migration every 3 minutes
 let lastMigrationCheck = 0;
 
+// Air gaps (every AIR_GAP_DEPTH-th row) hold no servers, so the network splits into segments. A fully charged
+// induceServerMigration moves a neighbouring server to a random free spot 2 rows up to 4 rows deeper: from the last
+// three rows before a gap it can land past it. A cracked server that runs a probe keeps it running when it moves, so
+// that probe starts on the next segment straight away. darknet.js publishes the gap to work on (frontierGap).
+// Charge per call: (charisma + 500) / (difficulty * 200 + 1000) * 1% per thread, 6 s per call; one thread needed
+// ~100 calls (one per 3 minutes here before: ~5 h), so the helper runs with all spare RAM, pausing the worker.
+const MIGRATION_HELPER = "/Temp/dnet-migrate.js";
+const MIGRATION_HELPER_SOURCE =
+    `export async function main(ns){const t=ns.args[0];for(let i=0;i<500;i++){let r;` +
+    `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch{return;}` +
+    `if(!r||!r.success||r.progress>=1||(i>0&&r.progress===0))return;}}`;
+const MIGRATION_THREAD_RAM = 5.6; // 1.6 base + 4.0 induceServerMigration
+
 async function attemptMigrationCharging(ns, optionsFile, hostname) {
     const options = loadProbeOptions(ns, optionsFile);
-    if (!options.enableMigration) return;
-
-    // Throttle migration checks
+    const gap = options.frontierGap;
+    if (!options.enableMigration || !gap) return;
     if (Date.now() - lastMigrationCheck < MIGRATION_RECHECK_INTERVAL) return;
     lastMigrationCheck = Date.now();
-
-    // Migration charging cost: 1.6 base + 4.0 API = 5.6 GB via temp script
-    const MIGRATION_COST = 5.6;
     const host = ns.getHostname();
-    const freeRam =
-        (await nsGetServerMaxRam(ns, host)) -
-        (await nsGetServerUsedRam(ns, host));
-    if (freeRam < MIGRATION_COST) return;
-
+    if (host === "home") return;
     try {
-        // Scan for adjacent servers that could benefit from migration
-        const nearbyServers = (await runScan(ns)) || [];
-        for (const target of nearbyServers) {
-            if (target === hostname || target === host) continue; // Can't migrate self
-
-            // Check if target is online and connected
+        const procs = (await nsPs(ns, host)) || [];
+        if (procs.some((p) => /dnet-migrate/.test(p.filename))) return; // already charging
+        const anchored = new Set((await runGetStasisList(ns)) || []); // stasis-linked servers can't move
+        for (const target of (await runScan(ns)) || []) {
+            if (target === host || options.labNeighbors.includes(target) || anchored.has(target)) continue;
             const details = await getAuthDetails(ns, target);
-            if (
-                !details ||
-                !details.isOnline ||
-                !details.isConnectedToCurrentServer
-            )
-                continue;
-
-            // Get target depth — migration is useful for deep servers near air gaps
-            let depth;
+            if (!details?.isOnline || !details.isConnectedToCurrentServer || details.isStationary) continue;
+            const depth = details.depth;
+            if (typeof depth !== "number" || depth < gap - 3 || depth >= gap) continue;
+            // Only servers that carry a probe across (cracked, probe running)
+            let hasRoot = false;
             try {
-                depth = await runDnetCommand(
-                    ns,
-                    buildDnetCommand(commandNames.depth, commandArgs.singleArg),
-                    [target],
-                );
+                hasRoot = ns.hasRootAccess(target);
             } catch {}
-
-            if (
-                depth === undefined ||
-                depth === null ||
-                typeof depth !== "number"
-            )
-                continue;
-
-            // Only migrate servers near air gap boundaries (depths 6,7,14,15,22,23,...)
-            const posInGap = depth % AIR_GAP_DEPTH;
-            if (
-                posInGap !== AIR_GAP_DEPTH - 2 &&
-                posInGap !== AIR_GAP_DEPTH - 1
-            )
-                continue;
-
-            // Re-check free RAM (operations above used some)
-            const currentFree =
-                (await nsGetServerMaxRam(ns, host)) -
-                (await nsGetServerUsedRam(ns, host));
-            if (currentFree < MIGRATION_COST) break;
-
-            try {
-                const result = await runDnetCommand(
-                    ns,
-                    buildDnetCommand(
-                        commandNames.migrate,
-                        commandArgs.singleArg,
-                    ),
-                    [target],
-                );
-                if (result) {
-                    ns.print(
-                        `Migration charged on ${target} (depth: ${depth})`,
-                    );
-                }
-            } catch {}
+            if (!hasRoot) continue;
+            const targetProcs = (await nsPs(ns, target)) || [];
+            if (!targetProcs.some((p) => /darknet-probe/.test(p.filename))) continue;
+            // Pause our worker for the RAM; manageWorker restarts it afterwards
+            for (const p of procs.filter((p) => /darknet-worker-/.test(p.filename))) await nsKill(ns, p.pid);
+            await ns.sleep(100);
+            const free = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) - 4;
+            const threads = Math.floor(free / MIGRATION_THREAD_RAM);
+            if (threads < 1) return;
+            ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
+            const pid = ns.exec(MIGRATION_HELPER, host, threads, target);
+            if (pid) ns.print(`Migrating ${target} (depth ${depth}, gap at ${gap}) with ${threads} threads`);
+            return; // one target at a time
         }
     } catch (err) {
         logError(ns, `Migration charging error`, err);

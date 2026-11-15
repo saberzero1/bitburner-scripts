@@ -47,7 +47,6 @@ const argsSchema = [
     ["verbose", false], // Extra logging
     ["dry-run", false], // Don't actually execute, just log what would be done
     ["enable-migration", true], // Enable migration charging to cross air gaps
-    ["migration-charge-loops", 20], // Max charge loops per migration attempt per tick
     ["enable-clue-scanning", true], // Scan clue files on cracked servers
     ["easy-first", true], // Prioritize low-tier servers for authentication
 ];
@@ -142,7 +141,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 48;
+const PROBE_VERSION = 49;
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -831,10 +830,7 @@ async function orchestrateDarknet(ns, state, options) {
     while (portPeek(ns, STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") portRead(ns, STASIS_SWAP_REQUEST_PORT);
     await manageAnchors(ns, state, options);
 
-    // Step 7: Charge migrations for air gap crossing
-    if (options["enable-migration"]) {
-        await chargeMigrations(ns, state, options);
-    }
+    // Step 7: Migration charging (air gap crossing) is done by the probes, at the gap published in the probe options
 
     // Step 8: Clean up orphaned probes
     cleanupOrphanedProbes(ns, state);
@@ -2271,138 +2267,8 @@ async function execStasisLink(ns, state, hostname, enable, options) {
 
 // ─── Migration Charging ──────────────────────────────────────────────────────
 
-/**
- * Charge servers near air gaps to move them across.
- * chargeServerMigration() adds charge based on charisma, difficulty, and threads.
- * When charge reaches 1.0, server moves up by 2 rows.
- */
-async function chargeMigrations(ns, state, options) {
-    const verbose = options.verbose;
-    const maxLoops = options["migration-charge-loops"];
-
-    const MIGRATION_HELPER_SCRIPT = "/Temp/darknet-migration-helper.js";
-    // induceServerMigration returns a promise: it must be awaited (an un-awaited call followed by any other ns call throws a
-    // concurrency error). The file has constant content and is reused, so it doesn't delete itself (that also cost 1 GB).
-    const MIGRATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { await ns.dnet.induceServerMigration(ns.args[0]); }`;
-
-    // Performance: cap servers charged per tick to avoid spawning too many helpers
-    const MAX_MIGRATION_SERVERS_PER_TICK = 3;
-    let migrationsThisTick = 0;
-    // Find servers near air gaps that could benefit from migration
-    for (const [hostname, info] of state.discoveredServers) {
-        if (migrationsThisTick >= MAX_MIGRATION_SERVERS_PER_TICK) break;
-        if (!isServerAuthenticated(state, hostname)) continue;
-        if (!info.isOnline) continue;
-
-        const depth = state.serverDepths.get(hostname);
-        if (depth === undefined || depth === null) continue;
-
-        // Only charge servers that are just below an air gap
-        // (depth just above a multiple of AIR_GAP_DEPTH, meaning they're blocked)
-        const rowBelowGap = depth % AIR_GAP_DEPTH;
-        if (rowBelowGap !== 1 && rowBelowGap !== 2) continue; // Only charge if 1-2 rows below gap
-
-        // Guard: ns.exec requires adjacency, backdoor, or stasis link from the calling server.
-        // The orchestrator runs on home. From home, only 'darkweb' is adjacent.
-        // For non-adjacent, non-stasis servers, we cannot exec the migration helper.
-        const migDetails = safeGetAuthDetails(ns, hostname);
-        const canExec =
-            hostname === DARKWEB_HOSTNAME ||
-            migDetails?.isConnectedToCurrentServer ||
-            state.stasisServers.has(hostname);
-
-        if (!canExec) {
-            if (verbose) {
-                log(
-                    ns,
-                    `INFO: Cannot exec migration helper on ${hostname} from home (not adjacent/stasis). Skipping.`,
-                );
-            }
-            continue;
-        }
-
-        if (verbose)
-            log(ns, `Charging migration for ${hostname} (depth: ${depth})`);
-
-        // Use multi-thread temp script on target server for faster charging
-        // Migration charge scales linearly with threads
-        // Temp script cost: 1.6 (base) + 4.0 (induceServerMigration) = 5.6 GB per thread
-        const migrationScriptCost = 5.6;
-        try {
-            const targetMaxRam = ns.getServerMaxRam(hostname);
-            const targetUsedRam = ns.getServerUsedRam(hostname);
-            const targetFreeRam = Math.max(0, targetMaxRam - targetUsedRam);
-            const migrationThreads = Math.max(
-                1,
-                Math.floor(targetFreeRam / migrationScriptCost),
-            );
-
-            ns.write(MIGRATION_HELPER_SCRIPT, MIGRATION_HELPER_CONTENT, "w");
-            ns.scp(MIGRATION_HELPER_SCRIPT, hostname, "home");
-
-            for (let i = 0; i < maxLoops; i++) {
-                const pid = ns.exec(
-                    MIGRATION_HELPER_SCRIPT,
-                    hostname,
-                    migrationThreads,
-                    hostname,
-                );
-                if (pid <= 0) {
-                    if (verbose)
-                        log(ns, `Migration exec failed for ${hostname}`);
-                    break;
-                }
-
-                // Wait for the helper to finish
-                let waited = 0;
-                while (waited < 3000) {
-                    await ns.sleep(50);
-                    waited += 50;
-                    const running = ns.ps(hostname).some((p) => p.pid === pid);
-                    if (!running) break;
-                }
-
-                // Check migration status via auth details refresh
-                const newDetails = safeGetAuthDetails(ns, hostname);
-                if (!newDetails || !newDetails.isOnline) {
-                    // Server may have migrated or gone offline
-                    log(
-                        ns,
-                        `SUCCESS: ${hostname} migrated or moved (depth was: ${depth})`,
-                        true,
-                        "success",
-                    );
-                    break;
-                }
-                const newDepth = newDetails.depth;
-                if (newDepth !== undefined && newDepth !== depth) {
-                    log(
-                        ns,
-                        `SUCCESS: ${hostname} migrated from depth ${depth} to ${newDepth}!`,
-                        true,
-                        "success",
-                    );
-                    state.serverDepths.set(hostname, newDepth);
-                    break;
-                }
-            }
-        } catch (err) {
-            if (verbose)
-                log(
-                    ns,
-                    `Migration charge failed for ${hostname}: ${getErrorInfo(err)}`,
-                );
-        }
-        migrationsThisTick++;
-        // Clean up migration helper temp files
-        try {
-            ns.rm(MIGRATION_HELPER_SCRIPT);
-        } catch {}
-        try {
-            ns.rm(MIGRATION_HELPER_SCRIPT, hostname);
-        } catch {}
-    }
-}
+/* Migration charging moved to the probes (attemptMigrationCharging in darknet-probe.js): induceServerMigration
+ * must target a neighbouring server, and the old helper here targeted the server it ran on, which the game refuses. */
 
 // ─── Clue File Scanning ──────────────────────────────────────────────────────
 
@@ -2616,9 +2482,23 @@ async function chooseWorkerMode(ns, options, state) {
     return { workerMode: "money", workerStock: "" };
 }
 
+/** The air gap row probes should carry servers across: the one after the deepest segment where we hold a server,
+ * unless the unsolved labyrinth is already within reach. 0 = none. */
+function getFrontierGap(ns, state) {
+    let frontierSegment = 0;
+    for (const [h, depth] of state.serverDepths)
+        if (isServerAuthenticated(state, h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
+    const gap = (frontierSegment + 1) * AIR_GAP_DEPTH;
+    const unsolvedLab = [...state.labyrinthServers].find((h) => !isServerAuthenticated(state, h));
+    const labDepth = unsolvedLab ? state.serverDepths.get(unsolvedLab) : undefined;
+    if (labDepth !== undefined && labDepth < gap) return 0;
+    return gap;
+}
+
 async function writeProbeOptions(ns, options, state) {
     const labNeighbors = [...state.labyrinthNeighbors.values()].flatMap((set) => [...set]);
     const payload = {
+        frontierGap: options["enable-migration"] ? getFrontierGap(ns, state) : 0,
         ...(await chooseWorkerMode(ns, options, state)),
         labNeighbors,
         enablePhishing: Boolean(options["enable-phishing"]),
