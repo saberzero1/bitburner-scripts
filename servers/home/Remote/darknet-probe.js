@@ -1094,6 +1094,10 @@ async function runOptionalActions(ns, optionsFile, hostname) {
         (await nsGetServerUsedRam(ns, host));
     if (options.enablePhishing && freeRam >= expensiveOpCost) {
         await runPhishing(ns, hostname);
+    } else if (options.enablePhishing) {
+        ns.print(
+            `WARN: Phishing skipped on ${hostname} — insufficient RAM (${freeRam.toFixed(1)}GB free, need ${expensiveOpCost}GB)`,
+        );
     }
     if (
         options.enableStockManipulation &&
@@ -1101,15 +1105,19 @@ async function runOptionalActions(ns, optionsFile, hostname) {
         freeRam >= expensiveOpCost
     ) {
         await runStockBoost(ns, options.targetStock);
+    } else if (options.enableStockManipulation && options.targetStock) {
+        ns.print(
+            `WARN: Stock manipulation skipped on ${hostname} — insufficient RAM (${freeRam.toFixed(1)}GB free, need ${expensiveOpCost}GB)`,
+        );
     }
 }
 
 function loadProbeOptions(ns, filePath) {
     const defaults = {
-        enablePhishing: false,
+        enablePhishing: true,
         enableStockManipulation: false,
         enableStasis: true,
-        enableMigration: false,
+        enableMigration: true,
         targetStock: "",
         hackTarget: "",
     };
