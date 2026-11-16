@@ -871,6 +871,8 @@ export async function main(ns) {
 
         // Run timeline logger (tools/run-timeline): a snapshot every few minutes, to see what gates each run
         if (!findScript("run-logger.js") && homeRam >= 64) launchScriptHelper(ns, "run-logger.js", [], false);
+        // Runs scripts queued in /Temp/cmd-queue.txt (external tooling can write files over the Remote API, not run scripts)
+        if (!findScript("cmd-runner.js") && homeRam >= 64) launchScriptHelper(ns, "cmd-runner.js", [], false);
 
         // Launch stock-master in a way that emphasizes it as our main source of income early-on
         if (
