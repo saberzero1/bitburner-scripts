@@ -124,6 +124,10 @@ export async function main(ns) {
     const GO_RESULTS_FILE = "/data/go-results.txt";
     // Lost games (and 1 in 10 won ones) with our fast-search turns, for tools/go-fast/analyze.mjs
     const GO_GAMES_FILE = "/data/go-games.txt";
+    // World Daemon results, never truncated: its games are few (only after The Red Pill) and long (13x13, heuristics, so
+    // no move log), and GO_RESULTS_FILE keeps only the last ~45 minutes, which lost every one of them (2026-11-16)
+    const GO_WD_FILE = "/data/go-wd.txt";
+    let gameStartedAt = Date.now();
     let gameLog = [];
     let logtime = false;
     let runOnce = true;
@@ -1060,9 +1064,18 @@ export async function main(ns) {
                 won,
                 streak: after.winStreak,
                 cheats: cheatsThisGame,
+                ms: Date.now() - gameStartedAt,
                 ...searchStats, // heuristic moves checked, searched, overridden by the search this game
             };
             ns.write(GO_RESULTS_FILE, JSON.stringify(entry) + "\n", "a");
+            if (opp === "????????????") {
+                let score = {};
+                try {
+                    const g = ns.go.getGameState();
+                    score = { black: g.blackScore, white: g.whiteScore, komi: g.komi };
+                } catch {}
+                ns.write(GO_WD_FILE, JSON.stringify({ ...entry, ...score, record: [after.wins, after.losses] }) + "\n", "a");
+            }
             if (gameLog.length && (!won || Math.random() < 0.1)) {
                 const komi = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5 }[opp];
                 ns.write(GO_GAMES_FILE, JSON.stringify({ t: entry.t, opp, komi, won, turns: gameLog }) + "\n", "a");
@@ -1192,6 +1205,7 @@ export async function main(ns) {
             cheatsThisGame = 0;
             searchStats = { verified: 0, searched: 0, overridden: 0 };
             gameLog = [];
+            gameStartedAt = Date.now();
             try {
                 const next = chooseOpponent(ns, opponent2);
                 ns.go.resetBoardState(next, sizeFor(next));
