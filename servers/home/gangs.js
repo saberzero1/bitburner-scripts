@@ -303,7 +303,13 @@ async function initialize(ns) {
             member.task && member.task !== "Unassigned"
                 ? member.task
                 : "Train " + (isHackGang ? "Hacking" : "Combat");
-    while (myGangMembers.length < 3) await doRecruitMember(ns); // We should be able to recruit our first three members immediately (for free)
+    // We should be able to recruit our first three members immediately (for free). Bounded: when recruiting failed, this
+    // retried at once forever (a temp script and an error toast each time) and froze the game on a new gang (2026-11-16).
+    for (let attempt = 0; myGangMembers.length < 3 && attempt < 6; attempt++) {
+        const before = myGangMembers.length;
+        await doRecruitMember(ns);
+        if (myGangMembers.length === before) await ns.sleep(5000);
+    }
     // Peform all updates / actions normally performed on territory tick (every 20 seconds) once before starting the main loop
     await onTerritoryTick(ns, myGangInfo);
     lastTerritoryPower = myGangInfo.power;
