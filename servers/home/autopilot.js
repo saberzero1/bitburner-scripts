@@ -1183,7 +1183,8 @@ export async function main(ns) {
                     !existingDaemon.args.includes(arg) && !Number.isFinite(arg),
             ) ||
             // Special cases: We also must relaunch daemon if it is running with certain flags we wish to remove
-            ["--xp-only"].some(
+            // (--reserved-ram: stanek.js has finished charging and no longer relaunches daemon.js itself)
+            ["--xp-only", "--reserved-ram"].some(
                 (arg) =>
                     !daemonArgs.includes(arg) &&
                     existingDaemon.args.includes(arg),
