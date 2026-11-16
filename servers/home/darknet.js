@@ -1918,6 +1918,37 @@ function scoreAnchor(ns, state, hostname, phaseInfo, ctx) {
     return score;
 }
 
+/** Anchor decisions for inspection (read over the Remote API): phase, frontier, anchors and top candidates. */
+const ANCHOR_STATUS_FILE = "/data/darknet-anchor-status.txt";
+let lastAnchorStatus = 0;
+function writeAnchorStatus(ns, state, phaseInfo, ctx, limit, score) {
+    if (Date.now() - lastAnchorStatus < 30_000) return;
+    lastAnchorStatus = Date.now();
+    try {
+        const depthOf = (h) => state.serverDepths.get(h) ?? null;
+        const anchors = [...state.stasisServers].map((h) => ({
+            h, depth: depthOf(h), score: Math.round(score(h)), heldMin: Math.round((Date.now() - (state.anchorSince?.get(h) ?? Date.now())) / 60000),
+        }));
+        const candidates = [];
+        for (const [h] of state.discoveredServers) {
+            if (state.stasisServers.has(h) || !isServerAuthenticated(state, h)) continue;
+            const sc = score(h);
+            if (sc > 0) candidates.push({ h, depth: depthOf(h), score: Math.round(sc) });
+        }
+        candidates.sort((a, b) => b.score - a.score);
+        const top = candidates.slice(0, 12).map((c) => ({ ...c, ready: anchorReadiness(ns, state, c.h) }));
+        const depths = [...state.serverDepths.entries()].filter(([h]) => isServerAuthenticated(state, h)).map(([, d]) => d);
+        ns.write(ANCHOR_STATUS_FILE, JSON.stringify({
+            t: Date.now(), phase: phaseInfo.phase, reason: phaseInfo.reason, lab: phaseInfo.lab, labDepth: phaseInfo.lab ? depthOf(phaseInfo.lab) : null,
+            limit, frontierSegment: ctx.frontierSegment, gap: ctx.gap, deepestCracked: depths.length ? Math.max(...depths) : null,
+            knownDepths: state.serverDepths.size, pending: state.anchorPending ?? null,
+            sinceLastChangeMin: Math.round((Date.now() - (state.lastAnchorChange ?? 0)) / 60000), anchors, top,
+        }), "w");
+    } catch (err) {
+        log(ns, `WARNING: anchor status failed: ${getErrorInfo(err)}`);
+    }
+}
+
 /** Can this server be linked right now? Returns {ok, direct, reason}. */
 function anchorReadiness(ns, state, hostname) {
     if (hostname === DARKWEB_HOSTNAME) return { ok: false, reason: "darkweb is always reachable" };
@@ -1991,6 +2022,7 @@ async function manageAnchors(ns, state, options) {
     for (const h of linked) if (labNeighbors?.has(h) && (!labAnchor || maxRamOf(h) > maxRamOf(labAnchor))) labAnchor = h;
     const ctx = { frontierSegment, gap: options["enable-migration"] ? getFrontierGap(ns, state) : 0, labAnchor };
     const score = (h) => scoreAnchor(ns, state, h, phaseInfo, ctx);
+    writeAnchorStatus(ns, state, phaseInfo, ctx, limit, score);
 
     // 1. A change in flight: link/unlink each take ~30s (setStasisLink duration), so wait for confirmation.
     const pending = state.anchorPending;
