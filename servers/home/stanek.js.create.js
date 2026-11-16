@@ -9,10 +9,61 @@ const argsSchema = [
 
 // After The Red Pill only hacking level matters. Both hacking fragments (the only ones that raise hacking skill) with as
 // many adjacent boosters as fit (boosters have no placement limit; each adjacent one multiplies a fragment's bonus by
-// 1.1): 7 and 5 boosters give hacking x1.92 against x1.48 for the bare pair (placement search, 2026-11-16, 9x8 grid):
-//   ...fhh.gg / .cfffhhhg / cccf.aaHg / e.cHaaHHg / eeeHHaHj. / eiiiHbbjj / iiddddbbj / ..d....bj
+// 1.1). In BN12 Stanek's power multiplier is 1.02^level (~4.6 at BN12.77), so on 9x8 the pair goes from hacking x4.0
+// to x7.6. Placement search per grid size (2026-11-16): a fragment's 10 neighbour cells fit at most 8 distinct boosters,
+// so 12x12 (8+8) is the ceiling; larger grids use it as is. Chosen by most boosters touching, not least unused space.
 const hackingLayouts = [
-    { height: 8, width: 9, fragments: [{"id": 0, "x": 3, "y": 3, "rotation": 1}, {"id": 1, "x": 6, "y": 2, "rotation": 3}, {"id": 100, "x": 4, "y": 2, "rotation": 0}, {"id": 105, "x": 5, "y": 5, "rotation": 3}, {"id": 100, "x": 0, "y": 1, "rotation": 1}, {"id": 101, "x": 2, "y": 6, "rotation": 0}, {"id": 106, "x": 0, "y": 3, "rotation": 0}, {"id": 107, "x": 2, "y": 0, "rotation": 2}, {"id": 101, "x": 7, "y": 0, "rotation": 1}, {"id": 103, "x": 4, "y": 0, "rotation": 2}, {"id": 102, "x": 0, "y": 5, "rotation": 0}, {"id": 102, "x": 7, "y": 4, "rotation": 1}] },
+    // 5x5: boosters touching the hacking fragments 3+2
+    //   bHH.a / bHHHa / bHHaa / bbHac / .cccc
+    { height: 5, width: 5, boosters: 5, fragments: [{"id": 0, "x": 1, "y": 1, "rotation": 1}, {"id": 1, "x": 1, "y": 0, "rotation": 0}, {"id": 103, "x": 3, "y": 0, "rotation": 1}, {"id": 101, "x": 0, "y": 0, "rotation": 3}, {"id": 101, "x": 1, "y": 3, "rotation": 2}] },
+    // 6x5: boosters touching the hacking fragments 3+3
+    //   dddHH. / bdHHcc / bdaa.c / bHHaac / bbHHac
+    { height: 5, width: 6, boosters: 6, fragments: [{"id": 0, "x": 2, "y": 0, "rotation": 0}, {"id": 1, "x": 1, "y": 3, "rotation": 0}, {"id": 105, "x": 2, "y": 2, "rotation": 3}, {"id": 101, "x": 0, "y": 1, "rotation": 3}, {"id": 101, "x": 4, "y": 1, "rotation": 1}, {"id": 106, "x": 0, "y": 0, "rotation": 1}] },
+    // 6x6: boosters touching the hacking fragments 3+5
+    //   .cccH. / ccaaHH / eHHaaH / e.HHab / eddbbb / eedddb
+    { height: 6, width: 6, boosters: 8, fragments: [{"id": 0, "x": 4, "y": 0, "rotation": 1}, {"id": 1, "x": 1, "y": 2, "rotation": 0}, {"id": 105, "x": 2, "y": 1, "rotation": 3}, {"id": 106, "x": 3, "y": 3, "rotation": 2}, {"id": 102, "x": 0, "y": 0, "rotation": 0}, {"id": 103, "x": 1, "y": 4, "rotation": 2}, {"id": 101, "x": 0, "y": 2, "rotation": 3}] },
+    // 7x6: boosters touching the hacking fragments 5+4
+    //   ..ccHH. / .ccaaHH / fcaabbe / fHabbee / fHHbeed / ffHdddd
+    { height: 6, width: 7, boosters: 9, fragments: [{"id": 0, "x": 1, "y": 3, "rotation": 1}, {"id": 1, "x": 4, "y": 0, "rotation": 0}, {"id": 105, "x": 2, "y": 1, "rotation": 2}, {"id": 105, "x": 3, "y": 2, "rotation": 2}, {"id": 105, "x": 1, "y": 0, "rotation": 2}, {"id": 101, "x": 3, "y": 4, "rotation": 2}, {"id": 105, "x": 4, "y": 2, "rotation": 0}, {"id": 101, "x": 0, "y": 2, "rotation": 3}] },
+    // 7x7: boosters touching the hacking fragments 5+5
+    //   gggg.d. / gHeeedd / HHcceed / Haacccd / bbaaaHH / .bbbHHf / ...ffff
+    { height: 7, width: 7, boosters: 10, fragments: [{"id": 0, "x": 4, "y": 4, "rotation": 0}, {"id": 1, "x": 0, "y": 1, "rotation": 1}, {"id": 103, "x": 1, "y": 3, "rotation": 2}, {"id": 103, "x": 0, "y": 4, "rotation": 2}, {"id": 103, "x": 2, "y": 2, "rotation": 2}, {"id": 102, "x": 5, "y": 0, "rotation": 1}, {"id": 103, "x": 2, "y": 1, "rotation": 0}, {"id": 101, "x": 3, "y": 5, "rotation": 2}, {"id": 101, "x": 0, "y": 0, "rotation": 0}] },
+    // 8x7: boosters touching the hacking fragments 5+6
+    //   .hhhh.e. / .h.cHHee / ..ccaHHe / dccaabfe / dHaabbff / dHHbbggf / ddHggg.f
+    { height: 7, width: 8, boosters: 11, fragments: [{"id": 0, "x": 1, "y": 4, "rotation": 1}, {"id": 1, "x": 4, "y": 1, "rotation": 0}, {"id": 105, "x": 2, "y": 2, "rotation": 0}, {"id": 105, "x": 3, "y": 3, "rotation": 0}, {"id": 105, "x": 1, "y": 1, "rotation": 0}, {"id": 101, "x": 0, "y": 3, "rotation": 3}, {"id": 102, "x": 6, "y": 0, "rotation": 1}, {"id": 102, "x": 6, "y": 3, "rotation": 1}, {"id": 102, "x": 3, "y": 5, "rotation": 2}, {"id": 101, "x": 1, "y": 0, "rotation": 0}] },
+    // 8x8: boosters touching the hacking fragments 6+6
+    //   .hhHbb.. / hhHHfbbb / hgHafff. / ggeaaaf. / g.ea.HHc / geeeHH.c / .ddddicc / .diiiic.
+    { height: 8, width: 8, boosters: 12, fragments: [{"id": 0, "x": 4, "y": 4, "rotation": 0}, {"id": 1, "x": 2, "y": 0, "rotation": 1}, {"id": 106, "x": 3, "y": 2, "rotation": 0}, {"id": 103, "x": 4, "y": 0, "rotation": 2}, {"id": 103, "x": 6, "y": 4, "rotation": 1}, {"id": 101, "x": 1, "y": 6, "rotation": 0}, {"id": 106, "x": 1, "y": 3, "rotation": 3}, {"id": 104, "x": 4, "y": 1, "rotation": 1}, {"id": 103, "x": 0, "y": 2, "rotation": 3}, {"id": 105, "x": 0, "y": 0, "rotation": 2}, {"id": 101, "x": 2, "y": 6, "rotation": 2}] },
+    // 9x8: boosters touching the hacking fragments 6+6
+    //   .g.fffjj. / ggffdddjj / g.Hbb.ddj / gHHabbbHH / eHiaaaHH. / eeiiahhc. / .eeihhccc / ...ih..c.
+    { height: 8, width: 9, boosters: 12, fragments: [{"id": 0, "x": 6, "y": 3, "rotation": 0}, {"id": 1, "x": 1, "y": 2, "rotation": 1}, {"id": 100, "x": 3, "y": 3, "rotation": 3}, {"id": 103, "x": 3, "y": 2, "rotation": 2}, {"id": 107, "x": 6, "y": 5, "rotation": 0}, {"id": 103, "x": 4, "y": 1, "rotation": 0}, {"id": 105, "x": 0, "y": 4, "rotation": 1}, {"id": 102, "x": 2, "y": 0, "rotation": 0}, {"id": 103, "x": 0, "y": 0, "rotation": 3}, {"id": 105, "x": 4, "y": 5, "rotation": 2}, {"id": 102, "x": 2, "y": 4, "rotation": 1}, {"id": 105, "x": 6, "y": 0, "rotation": 3}] },
+    // 9x9: boosters touching the hacking fragments 6+7
+    //   ..ffggg.. / fffHHagg. / ..HHba..j / .ddcbaa.j / dd.cbbajj / d..ccbHje / ....cHHee / ..hhhHeei / .hh..iiii
+    { height: 9, width: 9, boosters: 13, fragments: [{"id": 0, "x": 2, "y": 1, "rotation": 0}, {"id": 1, "x": 5, "y": 5, "rotation": 1}, {"id": 102, "x": 5, "y": 1, "rotation": 3}, {"id": 102, "x": 4, "y": 2, "rotation": 3}, {"id": 102, "x": 3, "y": 3, "rotation": 3}, {"id": 105, "x": 0, "y": 3, "rotation": 2}, {"id": 105, "x": 6, "y": 5, "rotation": 0}, {"id": 102, "x": 0, "y": 0, "rotation": 2}, {"id": 103, "x": 4, "y": 0, "rotation": 0}, {"id": 102, "x": 1, "y": 7, "rotation": 0}, {"id": 101, "x": 5, "y": 7, "rotation": 2}, {"id": 103, "x": 7, "y": 2, "rotation": 1}] },
+    // 10x9: boosters touching the hacking fragments 6+8
+    //   ..ggkkk... / .ggHHckk.i / .gHHacccii / ..hbaa.cif / hhhbbaaHif / ..h.bbHHff / ..jjjjHdf. / ..jeeeeddd / ...e.....d
+    { height: 9, width: 10, boosters: 14, fragments: [{"id": 0, "x": 2, "y": 1, "rotation": 0}, {"id": 1, "x": 6, "y": 4, "rotation": 1}, {"id": 105, "x": 4, "y": 2, "rotation": 1}, {"id": 105, "x": 3, "y": 3, "rotation": 1}, {"id": 104, "x": 5, "y": 1, "rotation": 1}, {"id": 104, "x": 7, "y": 6, "rotation": 1}, {"id": 101, "x": 3, "y": 7, "rotation": 0}, {"id": 103, "x": 8, "y": 3, "rotation": 1}, {"id": 105, "x": 1, "y": 0, "rotation": 2}, {"id": 106, "x": 0, "y": 3, "rotation": 2}, {"id": 103, "x": 8, "y": 1, "rotation": 3}, {"id": 101, "x": 2, "y": 6, "rotation": 0}, {"id": 103, "x": 4, "y": 0, "rotation": 0}] },
+    // 10x10: boosters touching the hacking fragments 8+7
+    //   .jjj.h.... / ff.jjhhh.. / .fffHHbh.. / .ddHHabk.. / dd.icabkk. / .diicabbke / ..i.caaHke / ..igccHHee / ...gggH.el / .....gllll
+    { height: 10, width: 10, boosters: 15, fragments: [{"id": 0, "x": 3, "y": 2, "rotation": 0}, {"id": 1, "x": 6, "y": 6, "rotation": 1}, {"id": 101, "x": 5, "y": 3, "rotation": 3}, {"id": 101, "x": 6, "y": 2, "rotation": 3}, {"id": 101, "x": 4, "y": 4, "rotation": 3}, {"id": 100, "x": 0, "y": 3, "rotation": 0}, {"id": 103, "x": 8, "y": 5, "rotation": 1}, {"id": 103, "x": 0, "y": 1, "rotation": 2}, {"id": 104, "x": 3, "y": 7, "rotation": 1}, {"id": 104, "x": 5, "y": 0, "rotation": 1}, {"id": 103, "x": 2, "y": 4, "rotation": 3}, {"id": 103, "x": 1, "y": 0, "rotation": 0}, {"id": 102, "x": 7, "y": 3, "rotation": 1}, {"id": 101, "x": 6, "y": 8, "rotation": 2}] },
+    // 11x10: boosters touching the hacking fragments 7+8
+    //   ....fff.... / ..iiiiffh.. / j.i.aHHhhh. / j..aabHHdh. / jjaabbcgddd / .jHbbccgd.. / .lHHccgg... / lleHk.g.... / leeek...... / l.ekkk.....
+    { height: 10, width: 11, boosters: 15, fragments: [{"id": 0, "x": 2, "y": 5, "rotation": 1}, {"id": 1, "x": 5, "y": 2, "rotation": 0}, {"id": 105, "x": 2, "y": 2, "rotation": 0}, {"id": 105, "x": 3, "y": 3, "rotation": 0}, {"id": 105, "x": 4, "y": 4, "rotation": 0}, {"id": 106, "x": 8, "y": 3, "rotation": 0}, {"id": 107, "x": 1, "y": 7, "rotation": 0}, {"id": 103, "x": 4, "y": 0, "rotation": 0}, {"id": 103, "x": 6, "y": 4, "rotation": 1}, {"id": 100, "x": 7, "y": 1, "rotation": 1}, {"id": 101, "x": 2, "y": 1, "rotation": 0}, {"id": 102, "x": 0, "y": 2, "rotation": 3}, {"id": 106, "x": 3, "y": 7, "rotation": 3}, {"id": 103, "x": 0, "y": 6, "rotation": 3}] },
+    // 11x11: boosters touching the hacking fragments 8+7
+    //   ...kkk.iiif / .....kk.i.f / .....bHHiff / ....bbcHHf. / ....bccajjj / ddd.bc.a.j. / ggddHcaa.j. / .gggHHa.... / ...hhHe.... / ..hhlleee.. / ..h..llle..
+    { height: 11, width: 11, boosters: 15, fragments: [{"id": 0, "x": 4, "y": 6, "rotation": 1}, {"id": 1, "x": 6, "y": 2, "rotation": 0}, {"id": 103, "x": 6, "y": 4, "rotation": 1}, {"id": 103, "x": 4, "y": 2, "rotation": 3}, {"id": 103, "x": 5, "y": 3, "rotation": 3}, {"id": 103, "x": 0, "y": 5, "rotation": 0}, {"id": 104, "x": 6, "y": 8, "rotation": 1}, {"id": 103, "x": 9, "y": 0, "rotation": 1}, {"id": 103, "x": 0, "y": 6, "rotation": 2}, {"id": 105, "x": 2, "y": 8, "rotation": 2}, {"id": 106, "x": 7, "y": 0, "rotation": 1}, {"id": 106, "x": 8, "y": 4, "rotation": 1}, {"id": 103, "x": 3, "y": 0, "rotation": 0}, {"id": 103, "x": 4, "y": 9, "rotation": 2}] },
+    // 12x11: boosters touching the hacking fragments 7+8
+    //   fff.ee...... / .f..e....... / .fHeelll.... / iiHHllg..... / .imHaagg.j.. / .imb.aagjjd. / .imbbbagj.d. / ..mm.bHHjdd. / ...hhhhHHd.. / ...hkkkkccc. / ....k..cc...
+    { height: 11, width: 12, boosters: 15, fragments: [{"id": 0, "x": 2, "y": 2, "rotation": 1}, {"id": 1, "x": 6, "y": 7, "rotation": 0}, {"id": 105, "x": 4, "y": 4, "rotation": 3}, {"id": 104, "x": 3, "y": 5, "rotation": 1}, {"id": 102, "x": 7, "y": 9, "rotation": 0}, {"id": 103, "x": 9, "y": 5, "rotation": 1}, {"id": 104, "x": 3, "y": 0, "rotation": 0}, {"id": 106, "x": 0, "y": 0, "rotation": 1}, {"id": 102, "x": 6, "y": 3, "rotation": 1}, {"id": 101, "x": 3, "y": 8, "rotation": 0}, {"id": 101, "x": 0, "y": 3, "rotation": 1}, {"id": 103, "x": 8, "y": 4, "rotation": 3}, {"id": 101, "x": 4, "y": 9, "rotation": 0}, {"id": 102, "x": 4, "y": 2, "rotation": 0}, {"id": 101, "x": 2, "y": 4, "rotation": 3}] },
+    // 12x12: boosters touching the hacking fragments 8+8
+    //   .....i..d... / .....iiidd.. / ......idd..k / .....bHHkkkk / ....bbcHHj.. / ..f.b.cahjjj / ..f.bccahh.j / .fffHcaamh.. / ...gHHammh.. / ..gglHmme... / .gglleeee... / ..ll........
+    { height: 12, width: 12, boosters: 16, fragments: [{"id": 0, "x": 4, "y": 7, "rotation": 1}, {"id": 1, "x": 6, "y": 3, "rotation": 0}, {"id": 103, "x": 6, "y": 5, "rotation": 1}, {"id": 103, "x": 4, "y": 3, "rotation": 3}, {"id": 103, "x": 5, "y": 4, "rotation": 1}, {"id": 100, "x": 7, "y": 0, "rotation": 2}, {"id": 101, "x": 5, "y": 9, "rotation": 2}, {"id": 106, "x": 1, "y": 5, "rotation": 3}, {"id": 105, "x": 1, "y": 8, "rotation": 0}, {"id": 102, "x": 8, "y": 5, "rotation": 1}, {"id": 100, "x": 5, "y": 0, "rotation": 3}, {"id": 104, "x": 9, "y": 4, "rotation": 1}, {"id": 101, "x": 8, "y": 2, "rotation": 2}, {"id": 105, "x": 2, "y": 9, "rotation": 0}, {"id": 105, "x": 6, "y": 7, "rotation": 0}] },
+    // 13x12: boosters touching the hacking fragments 8+8
+    //   ........jllll / .....jjjjl.h. / ...gg.ddHHhhh / ....gddaaHHmh / ....gdaaffcmm / ...bgHaff.ccm / ..bbbHHf...cm / ...bkkHe...c. / ...kkiie..... / ...k.iee..... / ....iie...... / .............
+    { height: 12, width: 13, boosters: 16, fragments: [{"id": 0, "x": 5, "y": 5, "rotation": 1}, {"id": 1, "x": 8, "y": 2, "rotation": 0}, {"id": 105, "x": 6, "y": 3, "rotation": 2}, {"id": 107, "x": 2, "y": 5, "rotation": 0}, {"id": 102, "x": 10, "y": 4, "rotation": 1}, {"id": 105, "x": 5, "y": 2, "rotation": 2}, {"id": 103, "x": 6, "y": 7, "rotation": 1}, {"id": 105, "x": 7, "y": 4, "rotation": 2}, {"id": 101, "x": 3, "y": 2, "rotation": 1}, {"id": 100, "x": 10, "y": 1, "rotation": 1}, {"id": 104, "x": 4, "y": 8, "rotation": 0}, {"id": 101, "x": 5, "y": 0, "rotation": 2}, {"id": 105, "x": 3, "y": 7, "rotation": 2}, {"id": 101, "x": 9, "y": 0, "rotation": 0}, {"id": 102, "x": 11, "y": 3, "rotation": 1}] },
+    // 13x13: boosters touching the hacking fragments 8+8
+    //   ............. / ....cc...j... / ..hh.cccjje.. / ...hhhHjjee.. / .....gHHee... / .....gbHll... / ....ggbaalll. / ....gbbbaaakk / ......iHHkkk. / ...iiiinHHf.. / ......nndmfff / .....nnddmmmf / ......dd.m...
+    { height: 13, width: 13, boosters: 16, fragments: [{"id": 0, "x": 6, "y": 3, "rotation": 1}, {"id": 1, "x": 7, "y": 8, "rotation": 0}, {"id": 103, "x": 7, "y": 6, "rotation": 2}, {"id": 106, "x": 5, "y": 5, "rotation": 3}, {"id": 103, "x": 4, "y": 1, "rotation": 2}, {"id": 105, "x": 6, "y": 10, "rotation": 0}, {"id": 105, "x": 8, "y": 2, "rotation": 0}, {"id": 104, "x": 10, "y": 9, "rotation": 1}, {"id": 103, "x": 4, "y": 4, "rotation": 1}, {"id": 103, "x": 2, "y": 2, "rotation": 2}, {"id": 101, "x": 3, "y": 8, "rotation": 2}, {"id": 105, "x": 7, "y": 1, "rotation": 0}, {"id": 102, "x": 9, "y": 7, "rotation": 2}, {"id": 103, "x": 8, "y": 5, "rotation": 2}, {"id": 106, "x": 9, "y": 10, "rotation": 0}, {"id": 105, "x": 5, "y": 9, "rotation": 0}] },
 ];
 export function autocomplete(data, args) {
     data.flags(argsSchema);
@@ -48,7 +99,8 @@ export async function main(ns) {
     const usableLayouts = (options["hacking"] ? hackingLayouts : layouts).filter(
         (l) => l.height <= height && l.width <= width,
     );
-    const bestLayout = usableLayouts.sort(
+    if (options["hacking"]) usableLayouts.sort((a, b) => b.boosters - a.boosters || b.height * b.width - a.height * a.width);
+    const bestLayout = options["hacking"] ? usableLayouts[0] : usableLayouts.sort(
         (
             l1,
             l2, // Use the layout with the least amount of unused rows/columns
