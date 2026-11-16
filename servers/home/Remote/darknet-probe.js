@@ -488,6 +488,21 @@ function checkLabSolver(ns, hostname) {
         activeLabSolvers.delete(hostname);
         return false;
     }
+    // Threads are fixed at launch, and a darknet host's blocked RAM is freed later: Final's solver ran with 1 thread
+    // on a host that soon had 500 GB free (2026-11-16). Relaunch once that makes moves at least 3x faster (the maze
+    // position is lost, but the solver is per-PID anyway).
+    if (job.threads) {
+        const possible = Math.floor((nsGetServerMaxRam(ns, job.host) - nsGetServerUsedRam(ns, job.host) + 2 * job.threads - 4) / 2);
+        const speed = (t) => 1 + 0.2 * (t - 1);
+        if (speed(possible) >= 3 * speed(job.threads)) {
+            ns.print(`Labyrinth solver for ${hostname}: relaunching with ~${possible} threads (had ${job.threads})`);
+            try {
+                ns.kill(job.pid);
+            } catch {}
+            activeLabSolvers.delete(hostname);
+            return false;
+        }
+    }
     return null;
 }
 
@@ -585,7 +600,7 @@ async function solveLabyrinth(ns, hostname) {
         return await solveLabyrinthInline(ns, hostname);
     }
 
-    activeLabSolvers.set(hostname, { pid, host, resultFile });
+    activeLabSolvers.set(hostname, { pid, host, resultFile, threads });
     // Poll briefly; long solves continue in the background and are picked up by checkLabSolver() next tick
     for (let i = 0; i < 100; i++) {
         if (!activeLabSolvers.has(hostname)) break;
