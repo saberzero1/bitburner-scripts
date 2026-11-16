@@ -37,7 +37,7 @@ const argsSchema = [
     ["cheat-min-capture", 2], // Only cheat (play two moves) to capture an enemy group of at least this many stones
     ["max-cheats-per-game", 3], // A failed cheat after an earlier one in the same game has a 10% chance of ejection (a loss). With
     // rescue,twoMoves, min capture 2, up to 3 cheats and threshold 0.8, tools/go-sim win rates rose e.g. Tetrads 41->84%, Illuminati 30->63%
-    ["focus-world-daemon", true], // Once the w0r1d_d43m0n subnet is open (after The Red Pill), only play it: its bonus
+    ["focus-world-daemon", false], // Once the w0r1d_d43m0n subnet is open (after The Red Pill), only play it: its bonus
     // multiplies hacking level, the last gate of BN12 (needed ~2.6x more hacking mult at 3.3k vs 13.2k required). Bonus =
     // 1 + 0.008 ln(P+1)(P+1)^0.3 with SF14: x2.2 at 10k node power, x2.8 at 30k
     ["favor-factions", "Daedalus"], // While a member and before installing The Red Pill, play these factions first until Go
@@ -103,7 +103,7 @@ export async function main(ns) {
     let cheats = false;
     let cheatChanceThreshold = 1.0;
     let cheatsThisGame = 0;
-    let focusWorldDaemon = true;
+    let focusWorldDaemon = false;
     let searchOptions = { on: false, verify: false, verifyPlayouts: 6, playouts: 4, maxSize: 7 };
     let searchStats = { verified: 0, searched: 0, overridden: 0 };
     let maxCheatsPerGame = 1;
