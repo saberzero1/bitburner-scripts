@@ -66,8 +66,10 @@ export async function main(ns) {
         if (target && info.hack >= target) return log(ns, `SUCCESS: hacking ${info.hack} >= ${target}: done grafting.`, true, "success");
         const budget = info.money - options.reserve;
         const now = Date.now();
-        if (moneySample && now > moneySample.at && info.money > moneySample.money)
-            moneyRate = 0.5 * moneyRate + 0.5 * ((info.money - moneySample.money) / (now - moneySample.at));
+        // Smoothed income; flat or falling money pulls it down (a one-off jump, e.g. selling stocks, must not keep us
+        // waiting for an augmentation forever)
+        if (moneySample && now > moneySample.at)
+            moneyRate = 0.5 * moneyRate + 0.5 * Math.max(0, (info.money - moneySample.money) / (now - moneySample.at));
         moneySample = { at: now, money: info.money };
         const eligible = info.augs.filter((a) => a.prereqs.every((p) => info.owned.includes(p)));
         // Time to afford it at the current income (purchases elsewhere make this optimistic; it only decides waiting)
