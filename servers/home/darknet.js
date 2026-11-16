@@ -1942,6 +1942,7 @@ function writeAnchorStatus(ns, state, phaseInfo, ctx, limit, score) {
         const depths = [...state.serverDepths.entries()].filter(([h]) => state.probeHosts?.has(h)).map(([, d]) => d);
         ns.write(ANCHOR_STATUS_FILE, JSON.stringify({
             t: Date.now(), phase: phaseInfo.phase, reason: phaseInfo.reason, lab: phaseInfo.lab, labDepth: phaseInfo.lab ? depthOf(phaseInfo.lab) : null,
+            labCha: state.labCharismaRequired ?? null, playerCha: state.playerCharisma ?? null, // (graft.js reads these)
             limit, frontierSegment: ctx.frontierSegment, gap: ctx.gap, deepestProbe: depths.length ? Math.max(...depths) : null,
             probeHosts: state.probeHosts?.size ?? 0,
             knownDepths: state.serverDepths.size, pending: state.anchorPending ?? null,
