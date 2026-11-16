@@ -561,7 +561,9 @@ async function solveLabyrinth(ns, hostname) {
     ns.write(scriptFile, solverScript, "w");
     ns.write(resultFile, "<pending>", "w");
 
-    // As many threads as fit: each step takes 1 / (1 + 0.2 * (threads - 1)) as long
+    // As many threads as fit: each step takes 1 / (1 + 0.2 * (threads - 1)) as long. The spare-RAM worker is paused
+    // for it (manageWorker keeps it off while a solver runs here); one left running slowed the solver greatly.
+    for (const p of ((await nsPs(ns, host)) || []).filter((p) => /darknet-worker-/.test(p.filename))) await nsKill(ns, p.pid);
     const freeRam = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host);
     const threads = Math.max(1, Math.floor((freeRam - 4) / 2));
     const [gridW, gridH] = LAB_GRID[hostname] ?? [1e4, 1e4];
@@ -1151,7 +1153,8 @@ async function manageWorker(ns, optionsFile, host) {
     const workers = procs.filter((p) => /darknet-worker-/.test(p.filename));
     const wantedScript = mode === "off" ? null : WORKER_SCRIPTS[mode];
     const wantedArgs = mode === "cha" ? [options.workerStock] : [];
-    const keepFree = options.labNeighbors.includes(host);
+    // Lab neighbours, and any host running a labyrinth solver, keep their RAM for it (its speed grows with threads)
+    const keepFree = options.labNeighbors.includes(host) || procs.some((p) => /lab-solver/.test(p.filename));
     const workerRam = workers.reduce((total, p) => total + p.threads * WORKER_THREAD_RAM, 0);
     const maxRam = nsGetServerMaxRam(ns, host);
     const spare = maxRam - nsGetServerUsedRam(ns, host) + workerRam - Math.max(WORKER_RESERVE_GB, WORKER_RESERVE_FRACTION * maxRam);

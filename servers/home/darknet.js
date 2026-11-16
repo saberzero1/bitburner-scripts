@@ -1385,7 +1385,8 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
             // Check RAM availability (~3 GB needed: 1.6 base + labreport + authenticate)
             try {
                 const maxRam = ns.getServerMaxRam(neighbor);
-                const usedRam = ns.getServerUsedRam(neighbor);
+                // Spare-RAM workers are paused for the solver, so their RAM counts as free
+                const usedRam = ns.getServerUsedRam(neighbor) - workerRamOn(ns, neighbor);
                 if (maxRam - usedRam >= 4) {
                     // The neighbor with the most free RAM: the solver's speed grows with its thread count
                     if (!solverHost || maxRam - usedRam > solverFree) {
@@ -1433,6 +1434,13 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
         ns.write(LAB_SOLVER_SCRIPT, LAB_SOLVER_CONTENT, "w");
         ns.scp(LAB_SOLVER_SCRIPT, solverHost, "home");
         const threadRam = ns.getScriptRam(LAB_SOLVER_SCRIPT, "home") || 2;
+        // Each move takes 1 / (1 + 0.2 * (threads - 1)) as long: pause the host's money/charisma worker for the RAM
+        // (its probe keeps it off while the solver runs). A worker left running slowed the solver greatly (2026-11-16).
+        for (const p of ns.ps(solverHost).filter((p) => /darknet-worker-/.test(p.filename))) {
+            try {
+                ns.kill(p.pid);
+            } catch {}
+        }
         const freeRam = ns.getServerMaxRam(solverHost) - ns.getServerUsedRam(solverHost);
         const threads = Math.max(1, Math.floor((freeRam - 0.5) / threadRam));
         const [gridW, gridH] = LAB_GRID[hostname] ?? [1e4, 1e4];
@@ -2004,6 +2012,16 @@ function anchorReadiness(ns, state, hostname) {
         hasProbe = ns.ps(hostname).some((p) => p.filename === probeScript);
     } catch {}
     return hasProbe ? { ok: true, direct: false } : { ok: false, reason: "no probe running" };
+}
+
+/** RAM used by darknet spare-RAM workers on a host. */
+function workerRamOn(ns, hostname) {
+    try {
+        return ns.ps(hostname).filter((p) => /darknet-worker-/.test(p.filename))
+            .reduce((total, p) => total + p.threads * (ns.getScriptRam(p.filename, hostname) || 0), 0);
+    } catch {
+        return 0;
+    }
 }
 
 function isRunningLabSolver(ns, hostname) {
