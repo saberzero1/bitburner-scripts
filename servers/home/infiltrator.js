@@ -739,7 +739,7 @@ function findInfiltrationBottomUp() {
     ];
 
     for (const selector of selectors) {
-        const elements = [...doc.querySelectorAll(selector)].slice(0, 40); // the infiltration page is small
+        const elements = doc.querySelectorAll(selector); // (not capped: tail windows such as the dashboard add many buttons first)
         for (const el of elements) {
             const fiber = getReactFiber(el);
             if (!fiber) continue;
@@ -770,7 +770,7 @@ function findInfiltrationTopDown() {
 
     const stack = [rootFiber];
     const visited = new WeakSet();
-    const deadline = performance.now() + 8; // bounded: this runs on the page's thread
+    const deadline = performance.now() + 50; // bounded: this runs on the page's thread
     let walked = 0;
 
     while (stack.length > 0) {

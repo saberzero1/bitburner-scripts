@@ -57,6 +57,7 @@ const argsSchema = [
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ["disable-darknet", false], // Set to true to keep daemon.js from launching darknet.js
+    ["disable-grafting", false], // Set to true to not launch graft.js (grafts hacking augmentations once The Red Pill is installed)
     ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
 ];
 
@@ -1282,6 +1283,18 @@ export async function main(ns) {
                     launchScriptHelper(ns, "gangs.js", gangArgs);
             }
         }
+
+        // Once The Red Pill is installed, the World Daemon's hacking requirement is the last gate. Grafted augmentations
+        // apply immediately and persist across installs, and hacking level scales directly with the hacking multiplier,
+        // so graft.js grafts hacking augmentations until the requirement is met (SF10 needed for the grafting API).
+        if (
+            !options["disable-grafting"] &&
+            10 in unlockedSFs &&
+            wdHack != null && Number.isFinite(wdHack) && wdHack > 0 &&
+            player.skills.hacking < wdHack &&
+            !findScript("graft.js")
+        )
+            launchScriptHelper(ns, "graft.js");
 
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
         // Note: We delay launching our own 'work-for-factions.js' until daemon has warmed up, so we don't steal it's "kickstartHackXp" study focus
