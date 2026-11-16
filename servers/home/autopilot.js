@@ -1158,16 +1158,12 @@ export async function main(ns) {
             installedAugmentations.includes(augStanek)
         ) {
             stanekLaunched = true; // Once we've know we've launched stanek once, we never have to again this reset.
-            const stanekArgs = [
-                "--on-completion-script",
-                getFilePath("daemon.js"),
-            ];
+            // stanek.js used to launch daemon.js itself on completion, with the args chosen at launch (stale by then: e.g.
+            // non-looping while autopilot had moved daemon to --looping-mode), killing the running daemon and starting
+            // the stale one with all home RAM free. That hand-off coincided with two game freezes. Now autopilot
+            // relaunches daemon.js with its current args once stanek.js has exited.
+            const stanekArgs = ["--no-completion-script"];
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
-            if (daemonArgs.length >= 0)
-                stanekArgs.push(
-                    "--on-completion-script-args",
-                    JSON.stringify(daemonArgs),
-                ); // Pass in all the args we wanted to run daemon.js with
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
         }
