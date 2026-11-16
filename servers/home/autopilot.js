@@ -38,6 +38,7 @@ const argsSchema = [
             "The Thr3ad of Ariadne",
         ],
     ], // or... automatically install as soon as we can afford one of these augmentations
+    ["disable-wd-install-check", false], // After The Red Pill, install even if the pending augs bring less hacking multiplier than the Go bonus lost
     ["darknet-install-hold-minutes", 60], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never)
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ["time-before-boosting-best-hack-server", 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
@@ -1750,6 +1751,25 @@ export async function main(ns) {
     async function shouldDelayInstall(ns, player, facmanOutput) {
         // Don't install if we're currently grafting an augmentation
         if (await checkIfGrafting(ns)) return true;
+        // After The Red Pill only hacking level gates the BitNode. An install resets Go stats (the World Daemon's bonus is
+        // a hacking level multiplier, +80% after 14 minutes of games in BN12.77) and hacking experience, so it must bring
+        // more hacking multiplier than that: hold unless the pending augs' hacking multipliers beat the Go bonus x1.1.
+        if (installedAugmentations.includes(augTRP) && !options["disable-wd-install-check"]) {
+            const pending = [...new Set([...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs])];
+            try {
+                const [gain, goBonus] = await getNsDataThroughFile(ns,
+                    `[ns.args.reduce((m, a) => m * (ns.singularity.getAugmentationStats(a).hacking ?? 1), 1),
+                      (ns.go.analysis.getStats()["????????????"]?.bonusPercent ?? 0) / 100]`,
+                    "/Temp/wd-install-check.txt", pending);
+                if (gain < (1 + goBonus) * 1.1) {
+                    setStatus(ns, `Not installing: the pending augs multiply hacking by x${gain.toFixed(2)}, less than the World Daemon's ` +
+                        `Go bonus (x${(1 + goBonus).toFixed(2)}, +10% for lost experience) that an install would reset (--disable-wd-install-check).`);
+                    return true;
+                }
+            } catch (err) {
+                log(ns, `WARNING: Could not compare pending augs with the Go bonus: ${getErrorInfo(err)}`);
+            }
+        }
         // Every install regenerates the darknet. Quick installs of a few cheap augs (SoA, social) every 6-14 minutes kept
         // it from ever reaching the next labyrinth (2026-11-16, Endless at depth 31). Hold installs while darknet.js pushes
         // toward an unsolved labyrinth, unless a labyrinth reward is pending (it must be installed to unlock the next one).
