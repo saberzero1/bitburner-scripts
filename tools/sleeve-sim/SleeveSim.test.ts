@@ -3,7 +3,7 @@
  * Real Sleeve objects from a BitNode start (shock 100, no exp, intelligence SIM_INT) under a task policy that mirrors
  * sleeve.js's gang-karma phase, until karma reaches -54000. The player adds SIM_PLAYER_KARMA karma/s (homicide).
  * Env: SIM_POLICY (JSON, see `policy` below), SIM_SLEEVES (8), SIM_INT (900), SIM_EXP_MULT (BN12: 0.231 for
- * ClassGymExpGain and CrimeExpGain), SIM_PLAYER_KARMA (1), SIM_HOURS (cap, 30), SIM_OUT.
+ * ClassGymExpGain and CrimeExpGain), SIM_LEVEL_MULT (BN12 stat level multipliers, default = SIM_EXP_MULT), SIM_PLAYER_KARMA (1), SIM_HOURS (cap, 30), SIM_OUT.
  */
 import fs from "fs";
 import { Player } from "@player";
@@ -38,6 +38,11 @@ test(
     Player.skills.intelligence = int;
     currentNodeMults.ClassGymExpGain = Number(env.SIM_EXP_MULT ?? 0.231);
     currentNodeMults.CrimeExpGain = Number(env.SIM_EXP_MULT ?? 0.231);
+    // BN12 also scales stat LEVELS by the same 1/1.02^level (level = mult * (32 ln(exp + 534.6) - 200)). Missing this
+    // made simulated sleeves ~4.5x stronger than live ones (BN12.76: str 23 live at 2.45h vs 47 simulated).
+    const levelMult = Number(env.SIM_LEVEL_MULT ?? env.SIM_EXP_MULT ?? 0.231);
+    for (const k of ["StrengthLevelMultiplier", "DefenseLevelMultiplier", "DexterityLevelMultiplier", "AgilityLevelMultiplier", "CharismaLevelMultiplier"])
+      (currentNodeMults as unknown as Record<string, number>)[k] = levelMult;
     Player.money = 1e15; // gym fees aren't the constraint here
     Player.karma = 0;
     const n = Number(env.SIM_SLEEVES ?? 8);
