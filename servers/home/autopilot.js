@@ -12,6 +12,7 @@ import {
     unEscapeArrayArgs,
     formatMoney,
     formatDuration,
+    formatRam,
     formatNumber,
     getErrorInfo,
     tail,
@@ -869,10 +870,10 @@ export async function main(ns) {
             homeRam >= 16 &&
             (ranCasino || options["disable-casino"])
         )
-            launchScriptHelper(ns, "dashboard.js", [], false);
+            launchScriptHelper(ns, "dashboard.js", [], false, true);
 
         // Run timeline logger (tools/run-timeline): a snapshot every few minutes, to see what gates each run
-        if (!findScript("run-logger.js") && homeRam >= 64) launchScriptHelper(ns, "run-logger.js", [], false);
+        if (!findScript("run-logger.js") && homeRam >= 64) launchScriptHelper(ns, "run-logger.js", [], false, true);
         // Runs scripts queued in /Temp/cmd-queue.txt (external tooling can write files over the Remote API, not run scripts)
         if (!findScript("cmd-runner.js") && homeRam >= 64) launchScriptHelper(ns, "cmd-runner.js", [], false);
 
@@ -1300,7 +1301,7 @@ export async function main(ns) {
             homeRam >= 64 &&
             !findScript("graft.js")
         )
-            launchScriptHelper(ns, "graft.js");
+            launchScriptHelper(ns, "graft.js", [], true, true);
 
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
         // Note: We delay launching our own 'work-for-factions.js' until daemon has warmed up, so we don't steal it's "kickstartHackXp" study focus
@@ -1330,7 +1331,7 @@ export async function main(ns) {
             const infiltratorArgs = options["no-tail-windows"]
                 ? ["--no-tail"]
                 : [];
-            launchScriptHelper(ns, "infiltrator.js", infiltratorArgs);
+            launchScriptHelper(ns, "infiltrator.js", infiltratorArgs, true, true);
         }
     }
 
@@ -2069,7 +2070,19 @@ export async function main(ns) {
         baseScriptName,
         args = [],
         convertFileName = true,
+        keepHeadroom = false, // optional helper: don't launch it if home would be left without room for temp scripts
     ) {
+        if (keepHeadroom) {
+            // Temp scripts (getNsDataThroughFile, up to ~30 GB) need free home RAM: at a BitNode's start the helpers
+            // filled a 128 GB home to 127.7 GB and every temp script failed (2026-11-16)
+            const file = convertFileName ? getFilePath(baseScriptName) : baseScriptName;
+            const maxRam = ns.getServerMaxRam("home");
+            const headroom = Math.min(32, 0.25 * maxRam);
+            if (maxRam - ns.getServerUsedRam("home") - ns.getScriptRam(file, "home") < headroom) {
+                log_once(ns, `INFO: Not launching ${baseScriptName} yet: home would have less than ${formatRam(headroom)} free for temp scripts.`);
+                return 0;
+            }
+        }
         if (!options["no-tail-windows"]) tail(ns); // If we're going to be launching scripts, show our tail window so that we can easily be killed if the user wants to interrupt.
         let pid, err;
         try {

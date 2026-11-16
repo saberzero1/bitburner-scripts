@@ -63,14 +63,22 @@ export async function main(ns) {
             lastStart = null;
             continue;
         }
+        // Three temp scripts rather than one: a temp script costs the sum of its functions' RAM, and the combined one
+        // needed 30.6 GB, more than a full home had free (2026-11-16)
         const info = await getNsDataThroughFile(ns,
             `(() => { const p = ns.getPlayer(), owned = ns.singularity.getOwnedAugmentations(true);
-                return { lastAugReset: ns.getResetInfo().lastAugReset, money: p.money, city: p.city, hack: p.skills.hacking, cha: p.skills.charisma, entropy: p.entropy, owned,
-                    redPill: owned.includes("The Red Pill"),
-                    augs: ns.grafting.getGraftableAugmentations().map(name => ({ name,
-                        cost: ns.grafting.getAugmentationGraftPrice(name), time: ns.grafting.getAugmentationGraftTime(name),
-                        prereqs: ns.singularity.getAugmentationPrereq(name), stats: ns.singularity.getAugmentationStats(name) })) }; })()`,
+                return { lastAugReset: ns.getResetInfo().lastAugReset, money: p.money, city: p.city, hack: p.skills.hacking,
+                    cha: p.skills.charisma, entropy: p.entropy, owned, redPill: owned.includes("The Red Pill") }; })()`,
+            "/Temp/graft-player.txt");
+        const graftable = await getNsDataThroughFile(ns,
+            `ns.grafting.getGraftableAugmentations().map(name => ({ name,
+                cost: ns.grafting.getAugmentationGraftPrice(name), time: ns.grafting.getAugmentationGraftTime(name) }))`,
             "/Temp/graft-candidates.txt");
+        const details = await getNsDataThroughFile(ns,
+            `Object.fromEntries(ns.args.map(name => [name, { prereqs: ns.singularity.getAugmentationPrereq(name),
+                stats: ns.singularity.getAugmentationStats(name) }]))`,
+            "/Temp/graft-aug-details.txt", graftable.map((a) => a.name));
+        info.augs = graftable.map((a) => ({ ...a, ...details[a.name] }));
 
         // What gates us now?
         let mode = null, target = 0;

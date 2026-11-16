@@ -32,6 +32,9 @@ import {
 
 // These parameters are meant to let you tweak the script's behaviour from the command line (without altering source code)
 let options;
+// Helpers launched even when they leave home without room for temp scripts: they drive the BitNode's progress
+const ESSENTIAL_HELPERS = ["darknet.js", "work-for-factions.js", "sleeve.js", "stockmaster.js", "gangs.js", "go.js"];
+const postponedHelpers = new Set(); // logged once each
 const argsSchema = [
     // Behaviour-changing flags
     ["disable-stock-manipulation", false], // You must now opt *out* of stock-manipulation mode by enabling this flag.
@@ -980,6 +983,19 @@ export async function main(ns) {
     async function runStartupScripts(ns) {
         let launched = 0;
         for (const script of asynchronousHelpers.filter((s) => !s.isLaunched)) {
+            // Long-running helpers must leave room for temp scripts (getNsDataThroughFile, up to ~30 GB): at a BitNode's
+            // start the helpers filled a 128 GB home to 127.7 GB, and every temp script failed (2026-11-16). Optional
+            // helpers wait until home has room; the ones that drive progress launch regardless.
+            if (!ESSENTIAL_HELPERS.includes(script.name)) {
+                const tool = getTool(script);
+                const headroom = Math.min(32, 0.25 * homeServer.totalRam(true));
+                if (homeServer.ramAvailable(true) - (tool?.cost ?? 0) < headroom) {
+                    if (!postponedHelpers.has(script.name))
+                        log(ns, `INFO: Postponing ${script.name} until home has ${formatRam(headroom)} free besides it (room for temp scripts).`);
+                    postponedHelpers.add(script.name);
+                    continue;
+                }
+            }
             if (!(await tryRunTool(ns, getTool(script)))) continue; // We may have chosen not to run the script for a number of reasons. Proceed to the next one.
             if (++launched > 1) await ns.sleep(1); // If we successfully launch more than 1 script at a time, yeild execution a moment to give them a chance to complete, so many aren't all fighting for temp RAM at the same time.
             script.isLaunched = true;
