@@ -24,11 +24,12 @@ const argsSchema = [
     ["max-charges", 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
     ["on-startup-script", null], // Spawn this script when stanek is launched
     ["on-startup-script-args", []], // Args for the above
-    ["no-startup-script", false],
-    // When stanek completes, it will run daemon.js again (which will terminate the initial ram-starved daemon that is running)
+    // Off by default: the default startup/completion script was a plain (non-looping) daemon.js, which killed autopilot's
+    // looping daemon and froze the game at high hack levels. autopilot.js launches daemon.js itself.
+    ["no-startup-script", true],
     ["on-completion-script", null], // Spawn this script when max-charges is reached
     ["on-completion-script-args", []], // Optional args to pass to the script when launched
-    ["no-completion-script", false],
+    ["no-completion-script", true],
     ["no-tail", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to keep one open while charging (home is unusable meanwhile)
     ["reputation-threshold", 0.2], // By default, if we are this close to the rep needed for an unowned stanek upgrade (e.g. "Stanek's Gift - Serenity"), we will keep charging despite the 'max-charges' setting
 ];
