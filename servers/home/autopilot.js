@@ -58,7 +58,8 @@ const argsSchema = [
     ["xp-mode-hack-income-share", 0.01], // Always run daemon.js in --xp-only mode while hacking earns less than this share of our other income
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
-    ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
+    ["disable-infiltration", true], // Set to true to disable running the infiltrator.js script automatically. (On by default since
+    // 2026-11-16: the game froze within seconds of every autopilot start after the Red Pill install, right after infiltrator.js)
 ];
 
 export function autocomplete(data, args) {
