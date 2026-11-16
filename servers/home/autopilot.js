@@ -34,8 +34,10 @@ const argsSchema = [
             "The H4mmer of Daedalus",
             "The L4w of Bayes",
             "The B1ade of Solomonoff",
+            "The Thr3ad of Ariadne",
         ],
     ], // or... automatically install as soon as we can afford one of these augmentations
+    ["darknet-install-hold-minutes", 60], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never)
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ["time-before-boosting-best-hack-server", 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
     ["reduced-aug-requirement-per-hour", 0.5], // For every hour since the last reset, require this many fewer augs to install.
@@ -1747,6 +1749,24 @@ export async function main(ns) {
     async function shouldDelayInstall(ns, player, facmanOutput) {
         // Don't install if we're currently grafting an augmentation
         if (await checkIfGrafting(ns)) return true;
+        // Every install regenerates the darknet. Quick installs of a few cheap augs (SoA, social) every 6-14 minutes kept
+        // it from ever reaching the next labyrinth (2026-11-16, Endless at depth 31). Hold installs while darknet.js pushes
+        // toward an unsolved labyrinth, unless a labyrinth reward is pending (it must be installed to unlock the next one).
+        const darknetHoldMs = options["darknet-install-hold-minutes"] * 60_000;
+        if (darknetHoldMs > 0 && !installedAugmentations.includes(augTRP) && getTimeInAug() < darknetHoldMs) {
+            let dnet = null;
+            try {
+                dnet = JSON.parse(ns.read("/data/darknet-anchor-status.txt") || "null");
+            } catch {}
+            const pending = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
+            const labRewardPending = options["install-for-augs"].some((a) => pending.includes(a));
+            const dnetCurrent = dnet && dnet.t > resetInfo.lastAugReset && Date.now() - dnet.t < 10 * 60_000;
+            if (dnetCurrent && dnet.phase === "push" && !labRewardPending) {
+                setStatus(ns, `Not installing for up to ${formatDuration(darknetHoldMs - getTimeInAug())} more: the darknet is pushing toward ` +
+                    `${dnet.lab ?? "the next labyrinth"}, and an install would regenerate it (--darknet-install-hold-minutes).`);
+                return true;
+            }
+        }
         // Are we close to being able to afford 4S TIX data?
         if (!have4STixApi)
             have4STixApi = await getNsDataThroughFile(
