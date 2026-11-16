@@ -34,6 +34,7 @@ export function autocomplete(data) {
 const CONGRUITY = "violet Congruity Implant";
 const ENTROPY = Math.log(0.98);
 const IDLE_MS = 2 * 60_000;
+const STATUS_FILE = "/Temp/graft-status.txt"; // {t, mode}: read by autopilot.js
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -48,6 +49,7 @@ export async function main(ns) {
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
         if (work?.type === "GRAFTING") {
+            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: lastMode ?? "grafting" }), "w");
             await ns.sleep(15_000);
             continue;
         }
@@ -86,6 +88,8 @@ export async function main(ns) {
                 target = dnet.labCha;
             }
         }
+        // Tell autopilot whether we're in a graft series (it holds installs then; idle = installs may go ahead)
+        ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode }), "w");
         if (mode !== lastMode) {
             log(ns, mode ? `INFO: Grafting for ${mode} (${mode === "hacking" ? info.hack : info.cha} / ${target}).` : `INFO: Nothing to graft for right now; waiting.`);
             lastMode = mode;

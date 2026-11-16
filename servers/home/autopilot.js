@@ -1947,7 +1947,13 @@ export async function main(ns) {
             "ns.singularity.getCurrentWork()",
         );
         // Never interrupt grafting - including the moment between two grafts while graft.js is choosing the next one
-        if (currentWork?.type == "GRAFTING" || findScriptHelper("graft.js", await getRunningScripts(ns))) {
+        // (graft.js reports a non-idle mode while it is in a graft series; it idles permanently otherwise)
+        let graftSeries = false;
+        try {
+            const st = JSON.parse(ns.read("/Temp/graft-status.txt") || "null");
+            graftSeries = !!st?.mode && Date.now() - st.t < 3 * 60_000 && !!findScriptHelper("graft.js", await getRunningScripts(ns));
+        } catch {}
+        if (currentWork?.type == "GRAFTING" || graftSeries) {
             if (!wasGrafting)
                 // Only log the first time we detect we've started grafting
                 log(
