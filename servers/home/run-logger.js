@@ -66,6 +66,22 @@ export async function main(ns) {
             } catch {
                 /* faction-manager hasn't written it yet */
             }
+            // Sleeves (from the files sleeve.js keeps up to date; no RAM): tasks, average shock and strength
+            try {
+                const unwrap = (f) => { const v = JSON.parse(ns.read(f) || "null"); return v?.$value ?? v; };
+                const tasks = unwrap("/Temp/sleeve-getTask-all.txt"), sleeves = unwrap("/Temp/sleeve-getSleeve-all.txt");
+                if (Array.isArray(tasks) && Array.isArray(sleeves) && sleeves.length) {
+                    const counts = {};
+                    for (const t of tasks) {
+                        const k = t ? `${t.type}${t.crimeType ? ":" + t.crimeType : t.classType ? ":" + t.classType : ""}` : "IDLE";
+                        counts[k] = (counts[k] ?? 0) + 1;
+                    }
+                    const avg = (f) => +(sleeves.reduce((a, x) => a + f(x), 0) / sleeves.length).toFixed(1);
+                    snap.sleeves = { tasks: counts, shock: avg((x) => x.shock), str: avg((x) => x.skills.strength), sync: avg((x) => x.sync) };
+                }
+            } catch {
+                /* sleeve.js hasn't written its files yet */
+            }
             // Gaps: the game was closed, frozen, or this script wasn't running
             const previous = lastWrite || lastLineTime(ns);
             if (previous && snap.t - previous > 3 * intervalMs) snap.gapH = +((snap.t - previous) / 3.6e6).toFixed(3);
