@@ -87,20 +87,29 @@ export async function main(ns) {
         }
     }
 
-    // Step 4: Navigate to the casino using singularity if available
-    if (hasSF4) {
-        try {
-            await getNsDataThroughFile(
-                ns,
-                "ns.singularity.goToLocation(ns.args[0])",
-                null,
-                ["Iker Molina Casino"],
-            );
-        } catch {}
+    // Step 4: Navigate to the casino using singularity if available. The page needs a moment to render, and the
+    // navigation can fail (e.g. no free RAM for the temp script): the button was looked for once, right away, and
+    // missing it ended the run after --kill-all-scripts had already stopped everything (2026-11-16).
+    let coinflip = null;
+    for (let attempt = 0; attempt < 5 && !coinflip; attempt++) {
+        if (hasSF4) {
+            try {
+                await getNsDataThroughFile(
+                    ns,
+                    "ns.singularity.goToLocation(ns.args[0])",
+                    null,
+                    ["Iker Molina Casino"],
+                );
+            } catch (err) {
+                log(ns, `WARNING: Could not go to the Iker Molina Casino (attempt ${attempt + 1}): ${String(err?.message ?? err).slice(0, 200)}`);
+            }
+        }
+        // Step 5: Find the coin flip game (give React time to render the casino page)
+        for (let i = 0; i < 10 && !coinflip; i++) {
+            coinflip = find(doc, "//button[contains(text(), 'coin flip')]");
+            if (!coinflip) await ns.sleep(200);
+        }
     }
-
-    // Step 5: Try to start the coin flip game
-    const coinflip = find(doc, "//button[contains(text(), 'coin flip')]");
     if (!coinflip) {
         log(
             ns,
