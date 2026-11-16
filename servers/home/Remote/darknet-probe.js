@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 52;
+const PROBE_VERSION = 53;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -30,6 +30,7 @@ export async function main(ns) {
             await freeBlockedRam(ns);
 
             const nearbyServers = (await runScan(ns)) || [];
+            abandonUnreachableLabSolvers(ns, nearbyServers);
             for (const hostname of nearbyServers) {
                 // Skip servers in cooldown from repeated failures
                 const failInfo = failedServers.get(hostname);
@@ -470,6 +471,24 @@ const LAB_GRID = {
 // maze position per PID, so never start a second one while the first is alive: check its result instead.
 const activeLabSolvers = new Map();
 
+/** A solver whose labyrinth has left this host's neighbourhood (the darknet mutates) can't move any more, yet kept
+ * running, and its probe never checked on it again (it only does when it processes the labyrinth), so no new attempt
+ * started (2026-11-16, Cruel lab): kill it once the labyrinth has been out of our scan for a minute. */
+function abandonUnreachableLabSolvers(ns, nearbyServers) {
+    for (const [lab, job] of activeLabSolvers) {
+        if (nearbyServers.includes(lab)) {
+            job.seenAt = Date.now();
+            continue;
+        }
+        if (Date.now() - (job.seenAt ?? 0) < 60_000) continue;
+        ns.print(`Labyrinth ${lab} is no longer next to us: stopping its solver (pid ${job.pid})`);
+        try {
+            ns.kill(job.pid);
+        } catch {}
+        activeLabSolvers.delete(lab);
+    }
+}
+
 /** Result of a previously started solver: true/false when finished, null while still running or unknown. */
 function checkLabSolver(ns, hostname) {
     const job = activeLabSolvers.get(hostname);
@@ -547,6 +566,7 @@ async function solveLabyrinth(ns, hostname) {
         `  let pos = [rep.coords[0], rep.coords[1]];`,
         `  let open = { north: rep.north, south: rep.south, east: rep.east, west: rep.west };`,
         `  const visited = new Set([pos.join(",")]);`,
+        `  let misses = 0; // responses that are neither a move nor a wall: the labyrinth is out of reach (it moved away)`,
         `  const stack = [];`,
         `  const score = (d) => (aimX - pos[0]) * D[d][0] + (aimY - pos[1]) * D[d][1];`,
         `  for (let i = 0; i < 50000; i++) {`,
@@ -558,6 +578,7 @@ async function solveLabyrinth(ns, hostname) {
         `    if (r && r.success) { ns.write(rf, "SUCCESS", "w"); return; }`,
         `    const msg = (r && r.message) || "";`,
         `    const m = msg.match(/moved to (\\d+),(\\d+)/);`,
+        `    if (m || /cannot go that way/i.test(msg)) misses = 0;`,
         `    if (m) {`,
         `      if (back) stack.pop(); else stack.push(dir);`,
         `      pos = [parseInt(m[1], 10), parseInt(m[2], 10)];`,
@@ -569,6 +590,7 @@ async function solveLabyrinth(ns, hostname) {
         `      if (back) { ns.write(rf, "FAIL:stuck", "w"); return; }`,
         `      open[dir] = false;`,
         `    } else if (/charism|moxie|charming/i.test(msg)) { ns.write(rf, "FAIL:charisma", "w"); return; }`,
+        `    else if (++misses > 100) { ns.write(rf, "FAIL:unreachable", "w"); return; }`,
         `    else await ns.sleep(200);`,
         `  }`,
         `  ns.write(rf, "FAIL:max_iterations", "w");`,
@@ -600,7 +622,7 @@ async function solveLabyrinth(ns, hostname) {
         return await solveLabyrinthInline(ns, hostname);
     }
 
-    activeLabSolvers.set(hostname, { pid, host, resultFile, threads });
+    activeLabSolvers.set(hostname, { pid, host, resultFile, threads, seenAt: Date.now() });
     // Poll briefly; long solves continue in the background and are picked up by checkLabSolver() next tick
     for (let i = 0; i < 100; i++) {
         if (!activeLabSolvers.has(hostname)) break;
