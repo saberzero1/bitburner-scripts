@@ -202,6 +202,7 @@ export async function main(ns) {
     }
 
     await discardStateFromEarlierInstalls(ns);
+    portClear(ns, ANCHOR_COMMAND_PORT); // ports survive restarts and installs: a stale anchor request must not steer new probes
     const state = new DarknetState(ns, options);
 
     log(ns, "INFO: Darknet orchestrator v2 starting...", true, "info");
