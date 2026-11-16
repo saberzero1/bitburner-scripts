@@ -25,6 +25,7 @@ const argsSchema = [
     ["focus", false], // Focus on grafting (only matters without Neuroreceptor Manager)
     ["once", false], // Graft at most one augmentation, then exit
     ["no-charisma", false], // Don't graft for darknet labyrinth charisma
+    ["eta-slack", 1.5], // Hacking mode: skip grafts longer than this times the projected time to reach the target by experience
 ];
 export function autocomplete(data) {
     data.flags(argsSchema);
@@ -45,6 +46,7 @@ export async function main(ns) {
     // work): back off instead of paying for a new graft every few seconds.
     let lastStart = null, backoffMs = 120_000;
     let moneySample = null, moneyRate = 0; // $/ms, to count the wait for an augmentation we can't afford yet
+    let statSample = null; // {at, level, mode}: how fast the gating stat rises without grafts
     let lastMode;
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
@@ -100,6 +102,20 @@ export async function main(ns) {
             continue;
         }
 
+        // How soon does experience alone reach the target? A graft that finishes after that is wasted (BN12.76: a 56-minute
+        // hacking graft started with the World Daemon's requirement ~4 minutes away). Levels rise fastest right after an
+        // install, so the current rate underestimates the remaining time: allow --eta-slack.
+        const level = mode === "hacking" ? info.hack : info.cha;
+        if (!statSample || statSample.mode !== mode || level < statSample.level) statSample = { at: Date.now(), level, mode };
+        const sampledMs = Date.now() - statSample.at;
+        if (sampledMs < 2 * 60_000) {
+            await ns.sleep(30_000); // measure first
+            continue;
+        }
+        const levelRate = (level - statSample.level) / sampledMs; // levels/ms
+        const etaMs = levelRate > 0 ? (target - level) / levelRate : Infinity;
+        if (sampledMs > 10 * 60_000) statSample = { at: Date.now() - 5 * 60_000, level: level - levelRate * 5 * 60_000, mode }; // keep a ~5-10 min window
+
         const reserve = options.reserve ?? Number(ns.read("reserve.txt") || 0);
         const budget = info.money - reserve;
         const now = Date.now();
@@ -111,13 +127,14 @@ export async function main(ns) {
         const waitMs = (a) => (a.cost <= budget ? 0 : moneyRate > 0 ? (a.cost - budget) / moneyRate : Infinity);
         const [stat, expStat] = mode === "hacking" ? ["hacking", "hacking_exp"] : ["charisma", "charisma_exp"];
         // violet Congruity Implant stops entropy; worth it when grafting for hacking (a long series without installs)
-        let choice = mode === "hacking" ? eligible.find((a) => a.name === CONGRUITY && a.cost <= budget) : null;
+        let choice = mode === "hacking" ? eligible.find((a) => a.name === CONGRUITY && a.cost <= budget && a.time < options["eta-slack"] * etaMs) : null;
         if (!choice) {
             const entropyPenalty = info.owned.includes(CONGRUITY) ? 0 : ENTROPY;
             const scored = eligible.map((a) => {
                 const gain = Math.log(a.stats[stat] ?? 1) + options["exp-weight"] * Math.log(a.stats[expStat] ?? 1) + entropyPenalty;
                 return { ...a, gain, wait: waitMs(a), rate: gain / (a.time + waitMs(a)) };
-            }).filter((a) => a.gain >= options["min-gain"] && Number.isFinite(a.rate));
+            }).filter((a) => a.gain >= options["min-gain"] && Number.isFinite(a.rate) &&
+                a.time + a.wait < options["eta-slack"] * etaMs);
             scored.sort((a, b) => b.rate - a.rate);
             choice = scored[0];
             if (choice && choice.wait > 0) {
@@ -128,6 +145,7 @@ export async function main(ns) {
             }
         }
         if (!choice) {
+            log(ns, `INFO: No graft worth starting: ${mode} ${level} / ${target} in ~${formatDuration(Math.min(etaMs, 864e5))} by experience.`);
             await ns.sleep(moneyRate ? IDLE_MS : 30_000); // nothing affordable worth grafting (yet)
             continue;
         }
