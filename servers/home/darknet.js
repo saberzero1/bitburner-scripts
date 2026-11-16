@@ -71,6 +71,11 @@ const PASSWORD_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 const PASSWORD_MAX_ENTRIES = 5000;
 const OPTIONS_FILE = "/data/darknet-options.txt";
 const CLUE_CACHE_FILE = "/data/darknet-clues-scanned.txt";
+// The game regenerates the whole darknet on every install (prestigeDarknetState), so passwords, clue caches and probe
+// bookkeeping saved before the last install describe servers that no longer exist. /data survives installs (cleanup.js
+// only clears Temp/), and stale entries made a solved-looking labyrinth and phantom depths (2026-11-16).
+const EPOCH_FILE = "/data/darknet-epoch.txt"; // lastAugReset the saved state belongs to
+const PER_INSTALL_FILES = [PASSWORD_FILE, PASSWORD_SEEN_FILE, CLUE_CACHE_FILE, "/data/darknet-completed.txt", "/data/darknet-anchor-status.txt"];
 const STASIS_HELPER_SCRIPT = "/Temp/darknet-stasis-helper.js";
 const STASIS_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const enable = ns.args[0] === 'true'; await ns.dnet.setStasisLink(enable); }`;
 const MUTATION_HELPER_SCRIPT = "/Temp/darknet-mutation-wait.js";
@@ -153,6 +158,15 @@ function normalizeFilename(path) {
 
 // ─── Entry Point ─────────────────────────────────────────────────────────────
 
+/** Remove saved darknet state that was written before the last install (see EPOCH_FILE). */
+async function discardStateFromEarlierInstalls(ns) {
+    const lastAugReset = await getNsDataThroughFile(ns, "ns.getResetInfo().lastAugReset", "/Temp/reset-lastAugReset.txt");
+    if (!lastAugReset || Number(ns.read(EPOCH_FILE)) === lastAugReset) return;
+    const removed = PER_INSTALL_FILES.filter((f) => ns.fileExists(f, "home") && ns.rm(f, "home"));
+    ns.write(EPOCH_FILE, String(lastAugReset), "w");
+    if (removed.length) log(ns, `INFO: Discarded darknet state from before the last install: ${removed.join(", ")}`, true, "info");
+}
+
 /** @param {NS} ns **/
 export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
@@ -184,6 +198,7 @@ export async function main(ns) {
         return;
     }
 
+    await discardStateFromEarlierInstalls(ns);
     const state = new DarknetState(ns, options);
 
     log(ns, "INFO: Darknet orchestrator v2 starting...", true, "info");

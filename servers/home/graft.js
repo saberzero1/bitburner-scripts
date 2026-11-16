@@ -63,7 +63,7 @@ export async function main(ns) {
         }
         const info = await getNsDataThroughFile(ns,
             `(() => { const p = ns.getPlayer(), owned = ns.singularity.getOwnedAugmentations(true);
-                return { money: p.money, city: p.city, hack: p.skills.hacking, cha: p.skills.charisma, entropy: p.entropy, owned,
+                return { lastAugReset: ns.getResetInfo().lastAugReset, money: p.money, city: p.city, hack: p.skills.hacking, cha: p.skills.charisma, entropy: p.entropy, owned,
                     redPill: owned.includes("The Red Pill"),
                     augs: ns.grafting.getGraftableAugmentations().map(name => ({ name,
                         cost: ns.grafting.getAugmentationGraftPrice(name), time: ns.grafting.getAugmentationGraftTime(name),
@@ -82,7 +82,8 @@ export async function main(ns) {
             try {
                 dnet = JSON.parse(ns.read("/data/darknet-anchor-status.txt") || "null");
             } catch {}
-            const fresh = dnet && Date.now() - dnet.t < 10 * 60_000;
+            // (status from before the last install is about a darknet that no longer exists)
+            const fresh = dnet && Date.now() - dnet.t < 10 * 60_000 && dnet.t > info.lastAugReset;
             if (fresh && dnet.lab && dnet.phase === "push" && dnet.labCha > info.cha) {
                 mode = "charisma";
                 target = dnet.labCha;

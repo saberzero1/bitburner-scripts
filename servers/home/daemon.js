@@ -1222,6 +1222,15 @@ export async function main(ns) {
                 await updateCachedServerData(ns); // Update server data that only needs to be refreshed once per loop
                 await updatePortCrackers(ns); // Check if any new port crackers have been purchased
                 await getPlayerInfo(ns); // Force an update of _cachedPlayerInfo
+                // Helpers were launched once and then forgotten: one that crashed, was killed, or exited while its
+                // condition was unmet (e.g. darknet.js before DarkscapeNavigator) stayed down until daemon restarted.
+                if (loops % 600 == 300)
+                    for (const helper of asynchronousHelpers.filter((h) => h.isLaunched)) {
+                        if (whichServerIsRunning(ns, getTool(helper).name, false)[0] != null) continue;
+                        log(ns, `INFO: Helper ${helper.name} is no longer running; it will be launched again if it should run.`);
+                        helper.isLaunched = false;
+                        allHelpersRunning = false;
+                    }
                 if (!allHelpersRunning && loops % 60 == 0)
                     // If we have not yet launched all helpers see if any are now ready to be run (launch may have been postponed while e.g. awaiting more home ram, or TIX API to be purchased)
                     allHelpersRunning = await runStartupScripts(ns);
