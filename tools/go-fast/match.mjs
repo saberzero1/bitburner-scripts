@@ -1,6 +1,7 @@
 // Fast-search black vs the game's real AI (bundled go-engine.js) on random boards, with optional playTwoMoves cheats.
 // usage: node tools/go-fast/match.mjs <opponent> <games> <size> '<opts JSON>'
-// opts: fastSearch options (playouts, ms, uct) plus cheat: "none" | "early:K" | "need:THRESHOLD:MAX", crime (crime_success mult)
+// opts: fastSearch options (playouts, ms, uct) plus cheat: "none" | "early:K" | "need:THRESHOLD:MAX", crime (crime_success mult),
+//   rescueBelow/rescueMax (extra cheats when the win rate drops, see below)
 // Time model (live-like): 0.16 s per AI move, our CPU, and timed-cheat waits (200 ms / success chance per cheat).
 // Node power per game ~ black score x 8 (Illuminati 5x5) x streak mult (3 for a win at full streak, 0.5 for a loss).
 import * as E from "../../servers/home/go-engine.js";
@@ -124,6 +125,10 @@ for (let g = 0; g < Number(games); g++) {
       }
     }
     if (r.move && cheatKind === "need") cheat = r.winRate < Number(cheatA) && cheats < Number(cheatB);
+    // rescueBelow/rescueMax (with early:K): once the early cheats are spent, cheat again when the search's win rate falls
+    // below rescueBelow, up to rescueMax cheats per game (live Illuminati losses collapse on moves ~5-9 after early cheats)
+    if (r.move && !cheat && opts.rescueBelow !== undefined && r.winRate < opts.rescueBelow && cheats < (opts.rescueMax ?? 3) && turn > 1)
+      cheat = true;
     if (cheat) {
       // playTwoMoves: two stones in a row (search picks the second with black to move again)
       E.makeMove(s, r.move.x, r.move.y, "Black");

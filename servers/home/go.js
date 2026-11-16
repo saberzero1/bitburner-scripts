@@ -54,6 +54,9 @@ const argsSchema = [
     ["early-cheats", 2], // With fast-search: cheat (play two moves) on our first N moves of a game. tools/go-fast/match.mjs vs
     // Illuminati 5x5: 0 cheats 50% won, 1: 63%, 2: ~88% (80/80 on boards without offline nodes), 3: 89%; cheating only when
     // behind did no better than cheating early
+    ["early-cheats-illuminati", 3], // Early cheats against Illuminati, the only opponent below ~97% (2026-11-16, match.mjs with the
+    // reply check, 300 games each: 2 cheats won 271 and 275, 3 won 283 twice, 4 won 292 but took longer; node power/h was flat).
+    // Wins matter beyond node power: the win streak multiplies it, and streaks convert to faction favour.
     ["search", false], // Choose moves by Monte Carlo search on the game's own rules and AI (go-search.js). Off: live it won 28/28 but took
     // 39s per game against 4s for the heuristics (93% won), so node power per hour fell ~5x. Use with a small --search-playouts
     ["search-verify", false], // Check each heuristic move with a few playouts (go-search.js); if any is lost, search instead
@@ -212,6 +215,7 @@ export async function main(ns) {
             fast: runOptions["fast-search"], fastSkip: String(runOptions["fast-search-skip"]).split(",").map((s) => s.trim()),
             replyCheck: String(runOptions["reply-check"] || "").split("-").map(Number).filter((n) => n > 0),
             fastPlayouts: runOptions["fast-playouts"], earlyCheats: runOptions["early-cheats"],
+            earlyCheatsIlluminati: runOptions["early-cheats-illuminati"],
             on: runOptions.search, verify: runOptions["search-verify"], verifyPlayouts: runOptions["verify-playouts"],
             playouts: runOptions["search-playouts"], maxSize: runOptions["search-max-size"],
         };
@@ -337,7 +341,8 @@ export async function main(ns) {
         const yieldFn = () => ns.sleep(0);
         const opts = { playouts: searchOptions.fastPlayouts, yieldFn };
         const [rcFrom, rcTo] = searchOptions.replyCheck;
-        const willCheat = cheats && cheatsThisGame < searchOptions.earlyCheats && cheatsThisGame < maxCheatsPerGame;
+        const earlyCheats = ns.go.getOpponent() === "Illuminati" ? searchOptions.earlyCheatsIlluminati : searchOptions.earlyCheats;
+        const willCheat = cheats && cheatsThisGame < earlyCheats && cheatsThisGame < maxCheatsPerGame;
         const checkReplies = rcFrom && turn >= rcFrom && turn <= rcTo && !willCheat;
         const first = await fastSearch(board, komi, legalOf(board), { ...opts, topK: checkReplies ? 3 : 0 });
         if (checkReplies && first.top.length > 1) {
@@ -352,7 +357,7 @@ export async function main(ns) {
             ns.print(`Fast search: pass (win ${(first.winRate * 100).toFixed(0)}%)`);
             return await ns.go.passTurn();
         }
-        if (cheats && cheatsThisGame < searchOptions.earlyCheats && cheatsThisGame < maxCheatsPerGame) {
+        if (willCheat) {
             const rows = board.map((r, x) => (x === first.move.x ? r.slice(0, first.move.y) + "X" + r.slice(first.move.y + 1) : r));
             const second = await fastSearch(rows, komi, legalOf(rows, first.move), opts);
             if (second.move) {
