@@ -116,7 +116,11 @@ export async function main(ns) {
         const level = mode === "hacking" ? info.hack : info.cha;
         if (!statSample || statSample.mode !== mode || level < statSample.level) statSample = { at: Date.now(), level, mode };
         const sampledMs = Date.now() - statSample.at;
-        if (sampledMs < 2 * 60_000) {
+        // Right after an install the scripts are still starting and levels climb slowly at first, then fast: BN12.77
+        // measured 350 hacking/min over the first 2 minutes (BN12.76: ~1100/min over minutes 1-5) and grafted a 48-minute
+        // augmentation the target didn't need. Measure for 5 minutes within 10 minutes of an install.
+        const minSampleMs = Date.now() - info.lastAugReset < 10 * 60_000 ? 5 * 60_000 : 2 * 60_000;
+        if (sampledMs < minSampleMs) {
             await ns.sleep(30_000); // measure first
             continue;
         }
