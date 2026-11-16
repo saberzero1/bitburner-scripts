@@ -41,7 +41,9 @@ const argsSchema = [
     ["reduced-aug-requirement-per-hour", 0.5], // For every hour since the last reset, require this many fewer augs to install.
     ["interval", 2000], // Wake up this often (milliseconds) to check on things
     ["interval-check-scripts", 10000], // Get a listing of all running processes on home this frequently
-    ["high-hack-threshold", 8000], // Once hack level reaches this, we start daemon in high-performance hacking mode
+    ["high-hack-threshold", 1000], // Once hack level reaches this, we start daemon in high-performance (looping) hacking mode.
+    // Was 8000: with BN12's late-run mults and 900 int, cycles at hack 3-4k were short enough that a non-looping daemon.js
+    // froze the game (three freezes on 2026-11-15/16, each right after a non-looping daemon started)
     ["enable-bladeburner", null], // (Deprecated) Bladeburner is now always enabled if it's available. Use '--disable-bladeburner' to explicitly turn off
     ["disable-bladeburner", false], // This will instruct daemon.js not to run the bladeburner.js, even if bladeburner is available.
     ["wait-for-4s-threshold", 0.9], // Set to 0 to not reset until we have 4S. If money is above this ratio of the 4S Tix API cost, don't reset until we buy it.
@@ -1162,7 +1164,9 @@ export async function main(ns) {
             // non-looping while autopilot had moved daemon to --looping-mode), killing the running daemon and starting
             // the stale one with all home RAM free. That hand-off coincided with two game freezes. Now autopilot
             // relaunches daemon.js with its current args once stanek.js has exited.
-            const stanekArgs = ["--no-completion-script"];
+            // Likewise stanek.js's default on-startup-script launched a plain (non-looping) daemon.js with all home RAM reserved,
+            // killing ours: at high hack level, non-looping daemon floods the game with short-lived scripts (third freeze).
+            const stanekArgs = ["--no-completion-script", "--no-startup-script"];
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
