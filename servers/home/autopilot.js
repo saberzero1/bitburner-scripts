@@ -38,6 +38,7 @@ const argsSchema = [
             "The Thr3ad of Ariadne",
         ],
     ], // or... automatically install as soon as we can afford one of these augmentations
+    ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
     ["disable-wd-install-check", false], // After The Red Pill, install even if the pending augs bring less hacking multiplier than the Go bonus lost
     ["darknet-install-hold-minutes", 60], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never)
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
@@ -147,7 +148,8 @@ export async function main(ns) {
     let playerInstalledAugCount = /**@returns{null|number}*/ (() => null)(); // Number of augs installed, or null if we don't have SF4 and can't tell.
     let installedAugmentations = [];
     let acceptedStanek = false,
-        stanekLaunched = false;
+        stanekLaunched = false,
+        hackingStanekChecked = false; // after The Red Pill: whether we've checked/switched to the hacking-only layout
     let daemonStartTime = 0; // The time we personally launched daemon.
     let installCountdown = 0; // Start of a countdown before we install augmentations.
     let installCountdownResets = 0; // Number of times we've reset the countdown because our affordable augs has increased
@@ -1157,6 +1159,23 @@ export async function main(ns) {
                 // 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16),
             );
 
+        // After The Red Pill only hacking level matters: switch Stanek's Gift to the hacking-only layout (both hacking
+        // fragments ringed by boosters, hacking x1.92 vs ~x1.5) once, while stanek.js isn't charging, then charge it.
+        if (13 in unlockedSFs && !options["disable-hacking-stanek"] && !hackingStanekChecked &&
+            installedAugmentations.includes(augTRP) && !findScript("stanek.js")) {
+            hackingStanekChecked = true;
+            try {
+                const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
+                if (ids.some((id) => id < 100 && id !== 0 && id !== 1)) {
+                    log(ns, `INFO: The Red Pill is installed: switching Stanek's Gift to the hacking-only layout.`, true);
+                    const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--hacking"]);
+                    if (pid) await waitForProcessToComplete(ns, pid);
+                    stanekLaunched = false; // charge the new layout
+                }
+            } catch (err) {
+                log(ns, `WARNING: Could not check Stanek's layout: ${getErrorInfo(err)}`);
+            }
+        }
         // Once stanek's gift is accepted, launch it once per reset before we launch daemon (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
         let stanekRunning =
             13 in unlockedSFs && findScript("stanek.js") !== undefined;

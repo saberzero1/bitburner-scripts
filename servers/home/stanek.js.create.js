@@ -4,6 +4,15 @@ const argsSchema = [
     ["clear", false], // If set to true, will clear whatever layout is already there and create a new one
     ["force-width", null], // Force the layout less than or equal to the specified width
     ["force-height", null], // Force the layout less than or equal to the specified height
+    ["hacking", false], // Place a hacking-only layout (the two hacking fragments ringed by boosters), for after The Red Pill
+];
+
+// After The Red Pill only hacking level matters. Both hacking fragments (the only ones that raise hacking skill) with as
+// many adjacent boosters as fit (boosters have no placement limit; each adjacent one multiplies a fragment's bonus by
+// 1.1): 7 and 5 boosters give hacking x1.92 against x1.48 for the bare pair (placement search, 2026-11-16, 9x8 grid):
+//   ...fhh.gg / .cfffhhhg / cccf.aaHg / e.cHaaHHg / eeeHHaHj. / eiiiHbbjj / iiddddbbj / ..d....bj
+const hackingLayouts = [
+    { height: 8, width: 9, fragments: [{"id": 0, "x": 3, "y": 3, "rotation": 1}, {"id": 1, "x": 6, "y": 2, "rotation": 3}, {"id": 100, "x": 4, "y": 2, "rotation": 0}, {"id": 105, "x": 5, "y": 5, "rotation": 3}, {"id": 100, "x": 0, "y": 1, "rotation": 1}, {"id": 101, "x": 2, "y": 6, "rotation": 0}, {"id": 106, "x": 0, "y": 3, "rotation": 0}, {"id": 107, "x": 2, "y": 0, "rotation": 2}, {"id": 101, "x": 7, "y": 0, "rotation": 1}, {"id": 103, "x": 4, "y": 0, "rotation": 2}, {"id": 102, "x": 0, "y": 5, "rotation": 0}, {"id": 102, "x": 7, "y": 4, "rotation": 1}] },
 ];
 export function autocomplete(data, args) {
     data.flags(argsSchema);
@@ -36,7 +45,7 @@ export async function main(ns) {
     const width =
         options["force-width"] ||
         (await getNsDataThroughFile(ns, "ns.stanek.giftWidth()"));
-    const usableLayouts = layouts.filter(
+    const usableLayouts = (options["hacking"] ? hackingLayouts : layouts).filter(
         (l) => l.height <= height && l.width <= width,
     );
     const bestLayout = usableLayouts.sort(
@@ -50,6 +59,8 @@ export async function main(ns) {
             l1.width -
             (height - l2.height + width - l2.width),
     )[0];
+    if (!bestLayout)
+        return log(ns, `WARNING: No ${options["hacking"] ? "hacking " : ""}layout fits a ${width}x${height} Stanek grid.`, true, "warning");
     log(
         ns,
         `Best layout found for current Stanek grid dimentions (height: ${height} width: ${width}) ` +
