@@ -128,6 +128,9 @@ export async function main(ns) {
     // no move log), and GO_RESULTS_FILE keeps only the last ~45 minutes, which lost every one of them (2026-11-16)
     const GO_WD_FILE = "/data/go-wd.txt";
     let gameStartedAt = Date.now();
+    // World Daemon games: [turn, black, white] every 10 turns, to learn how early a loss can be told (resigning a lost
+    // game early saves time but gives up its consolation node power, so it needs a very reliable signal)
+    let wdScores = [];
     let gameLog = [];
     let logtime = false;
     let runOnce = true;
@@ -410,6 +413,12 @@ export async function main(ns) {
             }
             [board, contested, validMove, validLibMoves, chains] = await go_getTurnData(ns);
             const size = board[0].length;
+            if (turn % 10 === 0 && size === 19) {
+                try {
+                    const g = ns.go.getGameState();
+                    wdScores.push([turn, g.blackScore, g.whiteScore]);
+                } catch {}
+            }
             //Build a test board with walls
             let testWall = "W".repeat(size + 2);
             testBoard = [];
@@ -1074,7 +1083,7 @@ export async function main(ns) {
                     const g = ns.go.getGameState();
                     score = { black: g.blackScore, white: g.whiteScore, komi: g.komi };
                 } catch {}
-                ns.write(GO_WD_FILE, JSON.stringify({ ...entry, ...score, record: [after.wins, after.losses] }) + "\n", "a");
+                ns.write(GO_WD_FILE, JSON.stringify({ ...entry, ...score, record: [after.wins, after.losses], scores: wdScores }) + "\n", "a");
             }
             if (gameLog.length && (!won || Math.random() < 0.1)) {
                 const komi = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5 }[opp];
@@ -1205,6 +1214,7 @@ export async function main(ns) {
             cheatsThisGame = 0;
             searchStats = { verified: 0, searched: 0, overridden: 0 };
             gameLog = [];
+            wdScores = [];
             gameStartedAt = Date.now();
             try {
                 const next = chooseOpponent(ns, opponent2);
