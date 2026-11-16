@@ -3709,6 +3709,7 @@ export async function main(ns) {
                 while (scheduleWeak < queueDelay) scheduleWeak += expTime;
                 while (scheduleGrow < queueDelay) scheduleGrow += expTime;
                 // Hack runs 4 times per weaken, so in looping mode we need to schedule 4 weaken loops to keep up with one hack loop.
+                let weakLoopPasses = 0, growLoopPasses = 0;
                 do {
                     const allWeakLoopsScheduled =
                         loopingMode &&
@@ -3745,7 +3746,10 @@ export async function main(ns) {
                         );
                     // The next loop (if any) we schedule needs to be offset by an additional +expTime
                     scheduleWeak += expTime;
-                } while (loopingMode); // In looping mode, set up additional recovery loops
+                    // In looping mode, set up additional recovery loops - but only while loops are allowed and counted. This
+                    // used to be `while (loopingMode)`: with allowLoop false (targets not all prepped, e.g. after a reload)
+                    // the loop counter never grew, so it launched weaken jobs forever and froze the game once home RAM was free.
+                } while (loopingMode && allowLoop && success && ++weakLoopPasses < 4);
                 // Schedule 4 grow loops to fire after each hack/weaken
                 do {
                     const allGrowLoopsScheduled =
@@ -3783,7 +3787,7 @@ export async function main(ns) {
                         );
                     // The next loop (if any) we schedule needs to be offset by an additional +expTime
                     scheduleGrow += expTime;
-                } while (loopingMode); // In looping mode, set up additional recovery loops
+                } while (loopingMode && allowLoop && success && ++growLoopPasses < 4); // (see the weaken loop above)
                 //log(ns, `XP Farm ${server.name} money available is ${formatMoney(server.getMoney())} and security is ` +
                 //    `${server.getSecurity().toPrecision(3)} of ${server.getMinSecurity().toPrecision(3)}`);
                 //log(ns, `Planned start: Hack: ${Math.round(scheduleTime - now)} Grow: ${Math.round(scheduleGrow - now)} ` +
