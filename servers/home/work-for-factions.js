@@ -1833,9 +1833,15 @@ let lastInterruptionNotice = "";
 async function isValidInterruption(ns, currentWork = null) {
     let interruptionNotice = "";
     currentWork ??= await getCurrentWorkInfo(ns); // Retrieve current work (unless it was passed in)
+    // Never interrupt grafting. This MUST come first: the infiltration branch below stops the current work, and used to
+    // run first, cancelling grafts whenever infiltrator.js was active (2026-11-16: a $75t QLink graft lost that way).
+    if (currentWork.type == "GRAFTING") {
+        interruptionNotice =
+            "Grafting in progress. Pausing all activity to avoid interrupting...";
+        wasGrafting = true;
+    }
     // Never interrupt infiltration - infiltrator.js writes its PID to port 30 while active
-    // This check MUST come first (before grafting/bladeburner) so it is never skipped by the else-if chain.
-    if (portPeek(ns, 30) !== "NULL PORT DATA") {
+    else if (portPeek(ns, 30) !== "NULL PORT DATA") {
         // Verify the PID is still running (guards against stale port data if infiltrator crashed)
         const infiltratorPid = portPeek(ns, 30);
         if (ns.isRunning(infiltratorPid)) {
@@ -1845,12 +1851,6 @@ async function isValidInterruption(ns, currentWork = null) {
         } else {
             portClear(ns, 30); // Stale PID - infiltrator.js is no longer running, clean up
         }
-    }
-    // Never interrupt grafting
-    else if (currentWork.type == "GRAFTING") {
-        interruptionNotice =
-            "Grafting in progress. Pausing all activity to avoid interrupting...";
-        wasGrafting = true;
     }
     // If bladeburner is currently active, but we do not yet have The Blade's Simulacrum, we may choose to we pause working.
     else if (

@@ -822,8 +822,12 @@ export async function main(ns) {
      * Gain a hack XP early after a new Augmentation by studying a bit, then doing a bit of XP grinding */
     async function kickstartHackXp(ns) {
         let startedStudying = false;
+        // Never interrupt grafting (graft.js starts right after an install): studying would cancel the graft
+        const grafting = async () =>
+            4 in dictSourceFiles &&
+            (await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()?.type ?? null", "/Temp/daemon-current-work-type.txt")) === "GRAFTING";
         try {
-            if (4 in dictSourceFiles && options["initial-study-time"] > 0) {
+            if (4 in dictSourceFiles && options["initial-study-time"] > 0 && !(await grafting())) {
                 // The safe/cheap thing to do is to study for free at the local university in our current town
                 // The most effective thing is to study Algorithms at ZB university in Aevum.
                 // Depending on our money, try to do the latter.
@@ -949,7 +953,9 @@ export async function main(ns) {
             );
         } finally {
             // Ensure we stop studying (in case no other running scripts end up stealing focus, so we don't keep studying forever)
-            if (startedStudying)
+            // - but only if we're still studying (not e.g. grafting, which stopAction would cancel)
+            if (startedStudying &&
+                (await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()?.type ?? null", "/Temp/daemon-current-work-type.txt")) === "CLASS")
                 await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
             studying = false; // This will allow work-for-faction to launch
         }

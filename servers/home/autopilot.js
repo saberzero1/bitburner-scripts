@@ -1942,8 +1942,8 @@ export async function main(ns) {
             ns,
             "ns.singularity.getCurrentWork()",
         );
-        // Never interrupt grafting
-        if (currentWork?.type == "GRAFTING") {
+        // Never interrupt grafting - including the moment between two grafts while graft.js is choosing the next one
+        if (currentWork?.type == "GRAFTING" || findScriptHelper("graft.js", await getRunningScripts(ns))) {
             if (!wasGrafting)
                 // Only log the first time we detect we've started grafting
                 log(
