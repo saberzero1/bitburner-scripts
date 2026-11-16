@@ -199,11 +199,9 @@ function getGameInfiltrationState() {
             ]);
         }
         const wr = globalThis.webpack_require;
-        // Only modules webpack has already loaded (wr.c): requiring every module (wr(key) over wr.m) runs the
-        // initialisation code of never-loaded ones, synchronously, and froze the game after the Red Pill install
-        for (const key of Object.keys(wr.c ?? {})) {
+        for (const key of Object.keys(wr.m)) {
             try {
-                const mod = wr.c[key]?.exports;
+                const mod = wr(key);
                 if (!mod || typeof mod !== "object") continue;
 
                 // Strategy 1: Look for the exact export name "InfiltrationState"
@@ -227,11 +225,9 @@ function getGameInfiltrationState() {
 
         // Strategy 2: Fallback duck-typing — find module with 2 matching objects
         // (InfiltrationStateDefault + InfiltrationState)
-        // Only modules webpack has already loaded (wr.c): requiring every module (wr(key) over wr.m) runs the
-        // initialisation code of never-loaded ones, synchronously, and froze the game after the Red Pill install
-        for (const key of Object.keys(wr.c ?? {})) {
+        for (const key of Object.keys(wr.m)) {
             try {
-                const mod = wr.c[key]?.exports;
+                const mod = wr(key);
                 if (!mod || typeof mod !== "object") continue;
                 const candidates = [];
                 for (const exp of Object.values(mod)) {
@@ -327,11 +323,9 @@ function getGamePlayer() {
     if (gamePlayer) return gamePlayer;
     try {
         const wr = ensureWebpackRequire();
-        // Only modules webpack has already loaded (wr.c): requiring every module (wr(key) over wr.m) runs the
-        // initialisation code of never-loaded ones, synchronously, and froze the game after the Red Pill install
-        for (const key of Object.keys(wr.c ?? {})) {
+        for (const key of Object.keys(wr.m)) {
             try {
-                const mod = wr.c[key]?.exports;
+                const mod = wr(key);
                 if (!mod || typeof mod !== "object") continue;
                 for (const val of Object.values(mod)) {
                     if (
@@ -368,11 +362,9 @@ function getGameFactions() {
     if (gameFactions) return gameFactions;
     try {
         const wr = ensureWebpackRequire();
-        // Only modules webpack has already loaded (wr.c): requiring every module (wr(key) over wr.m) runs the
-        // initialisation code of never-loaded ones, synchronously, and froze the game after the Red Pill install
-        for (const key of Object.keys(wr.c ?? {})) {
+        for (const key of Object.keys(wr.m)) {
             try {
-                const mod = wr.c[key]?.exports;
+                const mod = wr(key);
                 if (!mod || typeof mod !== "object") continue;
                 for (const val of Object.values(mod)) {
                     if (val && typeof val === "object" && !Array.isArray(val)) {
@@ -404,11 +396,9 @@ function getGameNodeMults() {
     if (gameNodeMults) return gameNodeMults;
     try {
         const wr = ensureWebpackRequire();
-        // Only modules webpack has already loaded (wr.c): requiring every module (wr(key) over wr.m) runs the
-        // initialisation code of never-loaded ones, synchronously, and froze the game after the Red Pill install
-        for (const key of Object.keys(wr.c ?? {})) {
+        for (const key of Object.keys(wr.m)) {
             try {
-                const mod = wr.c[key]?.exports;
+                const mod = wr(key);
                 if (!mod || typeof mod !== "object") continue;
                 for (const val of Object.values(mod)) {
                     if (
@@ -441,11 +431,9 @@ function getGameLocationsMetadata() {
     if (gameLocationsMetadata) return gameLocationsMetadata;
     try {
         const wr = ensureWebpackRequire();
-        // Only modules webpack has already loaded (wr.c): requiring every module (wr(key) over wr.m) runs the
-        // initialisation code of never-loaded ones, synchronously, and froze the game after the Red Pill install
-        for (const key of Object.keys(wr.c ?? {})) {
+        for (const key of Object.keys(wr.m)) {
             try {
-                const mod = wr.c[key]?.exports;
+                const mod = wr(key);
                 if (!mod || typeof mod !== "object") continue;
                 for (const val of Object.values(mod)) {
                     if (Array.isArray(val) && val.length > 10) {
