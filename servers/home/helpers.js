@@ -674,6 +674,25 @@ export async function runCommand_Custom(
             `INFO: Using a temporary script (${fileName}) to execute the command:` +
                 `\n  ${command}\nWith the following arguments:    ${JSON.stringify(args)}`,
         );
+    // Waiting for free RAM: a temp script that fits home, but not its free RAM right now (e.g. at a BitNode's start,
+    // with the daemon filling home), used to fail after a few seconds of retries and end whichever script called it
+    // with a runtime error (2026-11-16: infiltrator.js, graft.js). Keep waiting for up to LOW_RAM_WAIT_MS first.
+    const deadline = Date.now() + LOW_RAM_WAIT_MS;
+    for (let waitMs = 5000; ; waitMs = Math.min(waitMs * 2, 60_000)) {
+        try {
+            return await runCommandAttempt_Custom(ns, fnRun, command, fileName, args, verbose, maxRetries, retryDelayMs, silent, script);
+        } catch (err) {
+            if (Date.now() > deadline || !/home only has .* free/.test(String(err?.message ?? err))) throw err;
+            log(ns, `INFO: Not enough free RAM on home to run ${fileName} yet; waiting ${formatDuration(waitMs)} before trying again.`);
+            await ns.sleep(waitMs);
+        }
+    }
+}
+
+const LOW_RAM_WAIT_MS = 10 * 60_000;
+
+/** One round of runCommand_Custom's attempts (see there). */
+async function runCommandAttempt_Custom(ns, fnRun, command, fileName, args, verbose, maxRetries, retryDelayMs, silent, script) {
     // It's possible for the file to be deleted while we're trying to execute it, so even wrap writing the file in a retry
     return await autoRetry(
         ns,
