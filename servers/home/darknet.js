@@ -828,6 +828,7 @@ async function orchestrateDarknet(ns, state, options) {
     // Step 6: Anchors (stasis links). The orchestrator is the only decision maker; probes link their own
     // server when it is published on ANCHOR_COMMAND_PORT. Older probes may still send swap requests: drain them.
     while (portPeek(ns, STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") portRead(ns, STASIS_SWAP_REQUEST_PORT);
+    refreshKnownServers(ns, state);
     await manageAnchors(ns, state, options);
 
     // Step 7: Migration charging (air gap crossing) is done by the probes, at the gap published in the probe options
@@ -1827,6 +1828,36 @@ const ANCHOR_LINK_TIMEOUT_MS = 3 * 60 * 1000;
 const ANCHOR_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
 const ANCHOR_REPLACE_MARGIN = 100; // score points (a new frontier foothold beats an old one or a charger)
 const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
+
+/**
+ * Depths (and anchor candidacy) for every server we hold a password for. Only home's own neighbours used to be
+ * looked up, so every server cracked deeper by probes counted as depth 0: the frontier gap stayed at row 8 and only
+ * labyrinth neighbours (+1000) ever scored as anchors. getServerDetails works at any distance.
+ */
+function refreshKnownServers(ns, state) {
+    for (const hostname of state.knownPasswords.keys()) {
+        if (hostname === DARKWEB_HOSTNAME || hostname === "home") continue;
+        let details;
+        try {
+            details = ns.dnet.getServerDetails(hostname);
+        } catch {
+            continue;
+        }
+        if (!details?.isOnline) {
+            state.serverDepths.delete(hostname);
+            continue;
+        }
+        if (typeof details.depth === "number") state.serverDepths.set(hostname, details.depth);
+        if (!state.discoveredServers.has(hostname)) state.discoveredServers.set(hostname, new DarknetServerInfo(hostname, details));
+        if (details.modelId === "(The Labyrinth)") state.labyrinthServers.add(hostname);
+    }
+    for (const lab of state.labyrinthServers) {
+        try {
+            const details = ns.dnet.getServerDetails(lab);
+            if (details?.isOnline && typeof details.depth === "number") state.serverDepths.set(lab, details.depth);
+        } catch {}
+    }
+}
 
 /** Determine the anchoring phase and the labyrinth it is targeting. */
 async function getAnchorPhase(ns, state) {
