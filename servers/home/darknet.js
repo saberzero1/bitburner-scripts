@@ -137,6 +137,9 @@ const LAB_SOLVER_CONTENT = [
 ].join("\n");
 // Maze grid size per labyrinth (labyrinth.ts labData sizes, stitched from 4 odd-sized mazes): the solver aims for the
 // far corner, where the exit is (minus a small random offset). Unknown labyrinths: aim far south-east.
+// Labyrinth depths (game labyrinth.ts labData); the current labyrinth hangs below row depth-1
+const LAB_DEPTH = { th3_l4byr1nth: 7, cru3l_l4byr1nth: 12, m3rc1l3ss_l4byr1nth: 19, ub3r_l4byr1nth: 23, et3rn4l_l4byr1nth: 29,
+    end13ss_l4byr1nth: 31, f1n4l_l4byr1nth: 36, b0nus_l4byr1nth: 36 };
 const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
@@ -562,6 +565,7 @@ async function orchestrateDarknet(ns, state, options) {
             const msg = JSON.parse(String(raw));
             if (msg.labHost && msg.neighbor) {
                 state.labyrinthServers.add(msg.labHost);
+                (state.labReportedAt ??= new Map()).set(msg.labHost, Date.now());
                 if (!state.labyrinthNeighbors.has(msg.labHost)) {
                     state.labyrinthNeighbors.set(msg.labHost, new Set());
                 }
@@ -1851,41 +1855,23 @@ function refreshKnownServers(ns, state) {
             continue;
         }
         const isLab = details.modelId === "(The Labyrinth)";
-        if (isLab && !(details.depth > 0)) {
-            // A labyrinth from an earlier install (solved; it lingers off the network with depth -1)
-            state.labyrinthServers.delete(hostname);
-            state.serverDepths.delete(hostname);
-            continue;
-        }
+        if (isLab) continue; // labyrinths are tracked from probe reports
         if (typeof details.depth === "number") state.serverDepths.set(hostname, details.depth);
         try {
             if (ns.ps(hostname).some((p) => p.filename === probeScript)) state.probeHosts.add(hostname);
         } catch {}
         if (!state.discoveredServers.has(hostname)) state.discoveredServers.set(hostname, new DarknetServerInfo(hostname, details));
-        if (isLab) state.labyrinthServers.add(hostname);
     }
-    // Labyrinths have fixed names: look them up directly, so the target depth is known before a probe reaches one
-    for (const lab of Object.keys(LAB_GRID)) {
-        try {
-            const details = ns.dnet.getServerDetails(lab);
-            // Earlier labyrinths linger off the network (depth -1): only the current one has a depth
-            if (details?.isOnline && details.depth > 0) state.labyrinthServers.add(lab);
-        } catch {}
-    }
-    for (const lab of [...state.labyrinthServers]) {
-        try {
-            const details = ns.dnet.getServerDetails(lab);
-            if (details?.isOnline && details.depth > 0) state.serverDepths.set(lab, details.depth);
-            else state.labyrinthServers.delete(lab); // an earlier labyrinth (or gone)
-        } catch {}
-    }
+    // Labyrinths: the current one is the one probes report next to them (port 17, labReportedAt); earlier ones linger
+    // off the network with their passwords still known. Depths come from the game's fixed table.
+    for (const lab of state.labyrinthServers) if (LAB_DEPTH[lab]) state.serverDepths.set(lab, LAB_DEPTH[lab]);
 }
 
 /** Determine the anchoring phase and the labyrinth it is targeting. */
 async function getAnchorPhase(ns, state) {
     // The current labyrinth: discovered, online lab server(s); prefer an unsolved one
     // Only the current labyrinth has a depth: earlier ones (solved, passwords still known) linger with depth -1
-    const labs = [...state.labyrinthServers].filter((h) => safeGetAuthDetails(ns, h)?.isOnline !== false && state.serverDepths.get(h) > 0);
+    const labs = [...state.labyrinthServers].filter((h) => Date.now() - (state.labReportedAt?.get(h) ?? 0) < 15 * 60 * 1000);
     const unsolved = labs.filter((h) => !isServerAuthenticated(state, h));
     if (labs.length === 0) return { phase: "push", lab: null, reason: "labyrinth not found yet" };
     if (unsolved.length === 0) return { phase: "stable", lab: labs[0], reason: "labyrinth solved" };
