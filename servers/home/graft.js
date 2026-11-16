@@ -34,10 +34,21 @@ export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
     if (!options) return;
     ns.disableLog("ALL");
+    // A graft that disappears long before it could finish was cancelled by something else (another script starting
+    // work): back off instead of paying for a new graft every few seconds (2026-11-16: ~5 OmniTek grafts paid in 80s).
+    let lastStart = null, backoffMs = 120_000;
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
         if (work?.type === "GRAFTING") {
             await ns.sleep(15_000);
+            continue;
+        }
+        if (lastStart && Date.now() - lastStart.at < Math.min(lastStart.time * 0.9, 5 * 60_000) + 30_000) {
+            log(ns, `WARNING: The graft of ${lastStart.name} stopped after ${formatDuration(Date.now() - lastStart.at)} ` +
+                `(of ${formatDuration(lastStart.time)}): something cancelled it. Waiting ${formatDuration(backoffMs)} before grafting again.`, true, "warning");
+            await ns.sleep(backoffMs);
+            backoffMs = Math.min(backoffMs * 2, 30 * 60_000);
+            lastStart = null;
             continue;
         }
         const info = await getNsDataThroughFile(ns,
@@ -85,6 +96,7 @@ export async function main(ns) {
             `${formatDuration(choice.time)}; entropy ${info.entropy} -> ${info.owned.includes(CONGRUITY) ? info.entropy : info.entropy + 1}; ` +
             `hack ${info.hack}${target ? ` / ${target}` : ""})`, true, "info");
         if (options.once) return;
-        await ns.sleep(10_000);
+        lastStart = { name: choice.name, at: Date.now(), time: choice.time };
+        await ns.sleep(20_000);
     }
 }
