@@ -1851,6 +1851,13 @@ function refreshKnownServers(ns, state) {
         if (!state.discoveredServers.has(hostname)) state.discoveredServers.set(hostname, new DarknetServerInfo(hostname, details));
         if (details.modelId === "(The Labyrinth)") state.labyrinthServers.add(hostname);
     }
+    // Labyrinths have fixed names: look them up directly, so the target depth is known before a probe reaches one
+    for (const lab of Object.keys(LAB_GRID)) {
+        try {
+            const details = ns.dnet.getServerDetails(lab);
+            if (details?.isOnline) state.labyrinthServers.add(lab);
+        } catch {}
+    }
     for (const lab of state.labyrinthServers) {
         try {
             const details = ns.dnet.getServerDetails(lab);
