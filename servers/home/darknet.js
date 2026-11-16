@@ -1834,6 +1834,10 @@ const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
  * labyrinth neighbours (+1000) ever scored as anchors. getServerDetails works at any distance.
  */
 function refreshKnownServers(ns, state) {
+    // Servers with a probe running: the frontier is where our probes are, not where we hold passwords (root access
+    // and passwords survive an install, probes don't)
+    const probeScript = normalizeFilename(getFilePath(PROBE_SCRIPT));
+    state.probeHosts = new Set();
     for (const hostname of new Set([...state.knownPasswords.keys(), ...state.stasisServers])) {
         if (hostname === DARKWEB_HOSTNAME || hostname === "home") continue;
         let details;
@@ -1854,6 +1858,9 @@ function refreshKnownServers(ns, state) {
             continue;
         }
         if (typeof details.depth === "number") state.serverDepths.set(hostname, details.depth);
+        try {
+            if (ns.ps(hostname).some((p) => p.filename === probeScript)) state.probeHosts.add(hostname);
+        } catch {}
         if (!state.discoveredServers.has(hostname)) state.discoveredServers.set(hostname, new DarknetServerInfo(hostname, details));
         if (isLab) state.labyrinthServers.add(hostname);
     }
@@ -1946,10 +1953,11 @@ function writeAnchorStatus(ns, state, phaseInfo, ctx, limit, score) {
         }
         candidates.sort((a, b) => b.score - a.score);
         const top = candidates.slice(0, 12).map((c) => ({ ...c, ready: anchorReadiness(ns, state, c.h) }));
-        const depths = [...state.serverDepths.entries()].filter(([h]) => isServerAuthenticated(state, h)).map(([, d]) => d);
+        const depths = [...state.serverDepths.entries()].filter(([h]) => state.probeHosts?.has(h)).map(([, d]) => d);
         ns.write(ANCHOR_STATUS_FILE, JSON.stringify({
             t: Date.now(), phase: phaseInfo.phase, reason: phaseInfo.reason, lab: phaseInfo.lab, labDepth: phaseInfo.lab ? depthOf(phaseInfo.lab) : null,
-            limit, frontierSegment: ctx.frontierSegment, gap: ctx.gap, deepestCracked: depths.length ? Math.max(...depths) : null,
+            limit, frontierSegment: ctx.frontierSegment, gap: ctx.gap, deepestProbe: depths.length ? Math.max(...depths) : null,
+            probeHosts: state.probeHosts?.size ?? 0,
             knownDepths: state.serverDepths.size, pending: state.anchorPending ?? null,
             sinceLastChangeMin: Math.round((Date.now() - (state.lastAnchorChange ?? 0)) / 60000), anchors, top,
             plan: phaseInfo.phase === "push" ? planSegmentAnchors(ns, state, phaseInfo, limit) : null,
@@ -2019,7 +2027,7 @@ async function manageAnchors(ns, state, options) {
     // labyrinth neighbour
     let frontierSegment = 0;
     for (const [h, depth] of state.serverDepths)
-        if (isServerAuthenticated(state, h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
+        if (state.probeHosts?.has(h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
     const labNeighbors = phaseInfo.lab ? state.labyrinthNeighbors.get(phaseInfo.lab) : undefined;
     let labAnchor = null;
     const maxRamOf = (h) => {
@@ -2663,7 +2671,7 @@ async function chooseWorkerMode(ns, options, state) {
 function getFrontierGap(ns, state) {
     let frontierSegment = 0;
     for (const [h, depth] of state.serverDepths)
-        if (isServerAuthenticated(state, h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
+        if (state.probeHosts?.has(h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
     const gap = (frontierSegment + 1) * AIR_GAP_DEPTH;
     const unsolvedLab = [...state.labyrinthServers].find((h) => !isServerAuthenticated(state, h));
     const labDepth = unsolvedLab ? state.serverDepths.get(unsolvedLab) : undefined;

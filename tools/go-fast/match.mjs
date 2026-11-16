@@ -8,7 +8,7 @@ import { fastSearch } from "../../servers/home/go-fast.js";
 import fs from "fs";
 const [opp = "Illuminati", games = "20", size = "5", optsJson = "{}"] = process.argv.slice(2);
 const opts = JSON.parse(optsJson);
-const KOMI = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5 };
+const KOMI = { Netburners: 1.5, "Slum Snakes": 3.5, "The Black Hand": 3.5, Tetrads: 5.5, Daedalus: 5.5, Illuminati: 7.5, "????????????": 9.5 };
 const [cheatKind, cheatA, cheatB] = (opts.cheat ?? "none").split(":");
 const crime = opts.crime ?? 1.6;
 const cheatChance = (c) => Math.max(Math.min(0.6 * (0.7 - 0.02 * c) ** c * crime + 0.25, 1), 0);
