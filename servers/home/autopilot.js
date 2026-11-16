@@ -1761,9 +1761,12 @@ export async function main(ns) {
             const pending = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
             const labRewardPending = options["install-for-augs"].some((a) => pending.includes(a));
             const dnetCurrent = dnet && dnet.t > resetInfo.lastAugReset && Date.now() - dnet.t < 10 * 60_000;
-            if (dnetCurrent && dnet.phase === "push" && !labRewardPending) {
-                setStatus(ns, `Not installing for up to ${formatDuration(darknetHoldMs - getTimeInAug())} more: the darknet is pushing toward ` +
-                    `${dnet.lab ?? "the next labyrinth"}, and an install would regenerate it (--darknet-install-hold-minutes).`);
+            // Also while "stable": a solved labyrinth's reward only arrives once a probe opens the cache file on it. On
+            // 2026-11-16 Endless was solved while no probes ran, the hold released, and the install lost the reward.
+            if (dnetCurrent && (dnet.phase === "push" || dnet.phase === "stable") && !labRewardPending) {
+                setStatus(ns, `Not installing for up to ${formatDuration(darknetHoldMs - getTimeInAug())} more: the darknet is ` +
+                    (dnet.phase === "push" ? `pushing toward ${dnet.lab ?? "the next labyrinth"}` : `opening ${dnet.lab}'s reward cache`) +
+                    `, and an install would regenerate it (--darknet-install-hold-minutes).`);
                 return true;
             }
         }
