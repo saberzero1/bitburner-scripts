@@ -161,7 +161,10 @@ function normalizeFilename(path) {
 /** Remove saved darknet state that was written before the last install (see EPOCH_FILE). */
 async function discardStateFromEarlierInstalls(ns) {
     const lastAugReset = await getNsDataThroughFile(ns, "ns.getResetInfo().lastAugReset", "/Temp/reset-lastAugReset.txt");
-    if (!lastAugReset || Number(ns.read(EPOCH_FILE)) === lastAugReset) return;
+    const epoch = ns.read(EPOCH_FILE);
+    if (!lastAugReset || Number(epoch) === lastAugReset) return;
+    // No epoch yet (first run of this version): adopt the current install rather than wipe state that may be valid
+    if (!epoch) return ns.write(EPOCH_FILE, String(lastAugReset), "w");
     const removed = PER_INSTALL_FILES.filter((f) => ns.fileExists(f, "home") && ns.rm(f, "home"));
     ns.write(EPOCH_FILE, String(lastAugReset), "w");
     if (removed.length) log(ns, `INFO: Discarded darknet state from before the last install: ${removed.join(", ")}`, true, "info");
