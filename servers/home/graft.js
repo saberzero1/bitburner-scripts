@@ -37,6 +37,7 @@ export async function main(ns) {
     // A graft that disappears long before it could finish was cancelled by something else (another script starting
     // work): back off instead of paying for a new graft every few seconds (2026-11-16: ~5 OmniTek grafts paid in 80s).
     let lastStart = null, backoffMs = 120_000;
+    let moneySample = null, moneyRate = 0; // $/ms, to count the wait for an augmentation we can't afford yet
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
         if (work?.type === "GRAFTING") {
@@ -64,19 +65,35 @@ export async function main(ns) {
             target = await getNsDataThroughFile(ns, `ns.getServerRequiredHackingLevel("w0r1d_d43m0n")`, "/Temp/graft-daemon-req.txt");
         if (target && info.hack >= target) return log(ns, `SUCCESS: hacking ${info.hack} >= ${target}: done grafting.`, true, "success");
         const budget = info.money - options.reserve;
-        const ready = info.augs.filter((a) => a.cost <= budget && a.prereqs.every((p) => info.owned.includes(p)));
-        let choice = ready.find((a) => a.name === CONGRUITY); // stops entropy for every later graft
+        const now = Date.now();
+        if (moneySample && now > moneySample.at && info.money > moneySample.money)
+            moneyRate = 0.5 * moneyRate + 0.5 * ((info.money - moneySample.money) / (now - moneySample.at));
+        moneySample = { at: now, money: info.money };
+        const eligible = info.augs.filter((a) => a.prereqs.every((p) => info.owned.includes(p)));
+        // Time to afford it at the current income (purchases elsewhere make this optimistic; it only decides waiting)
+        const waitMs = (a) => (a.cost <= budget ? 0 : moneyRate > 0 ? (a.cost - budget) / moneyRate : Infinity);
+        let choice = eligible.find((a) => a.name === CONGRUITY && a.cost <= budget); // stops entropy for every later graft
         if (!choice) {
             const owned = new Set(info.owned);
             const entropyPenalty = owned.has(CONGRUITY) ? 0 : ENTROPY;
-            const scored = ready.map((a) => {
+            const scored = eligible.map((a) => {
                 const gain = Math.log(a.stats.hacking ?? 1) + options["exp-weight"] * Math.log(a.stats.hacking_exp ?? 1) + entropyPenalty;
-                return { ...a, gain, rate: gain / a.time };
-            }).filter((a) => a.gain >= options["min-gain"]);
+                return { ...a, gain, wait: waitMs(a), rate: gain / (a.time + waitMs(a)) };
+            }).filter((a) => a.gain >= options["min-gain"] && Number.isFinite(a.rate));
             scored.sort((a, b) => b.rate - a.rate);
             choice = scored[0];
+            // The best use of grafting time is something we can't afford yet: wait for the money rather than graft worse
+            if (choice && choice.wait > 0) {
+                log(ns, `INFO: Waiting ~${formatDuration(choice.wait)} to afford ${choice.name} (${formatMoney(choice.cost)}), ` +
+                    `better per minute than any affordable graft.`);
+                await ns.sleep(Math.min(Math.max(choice.wait, 10_000), 60_000));
+                continue;
+            }
         }
-        if (!choice) return log(ns, `INFO: No graft is worth its entropy (affordable candidates: ${ready.length}). Done.`, true);
+        if (!choice) {
+            if (!moneyRate) { await ns.sleep(30_000); continue; } // no income measured yet
+            return log(ns, `INFO: No graft is worth its entropy. Done.`, true);
+        }
         if (info.city !== "New Tokyo") {
             const travelled = await getNsDataThroughFile(ns, `ns.singularity.travelToCity("New Tokyo")`, "/Temp/graft-travel.txt");
             if (!travelled) {
