@@ -1,4 +1,6 @@
-const PROBE_VERSION = 51;
+// Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
+// left the darknet without probes for over an hour, 2026-11-16)
+const PROBE_VERSION = 52;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
