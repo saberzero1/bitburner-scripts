@@ -739,7 +739,7 @@ function findInfiltrationBottomUp() {
     ];
 
     for (const selector of selectors) {
-        const elements = doc.querySelectorAll(selector);
+        const elements = [...doc.querySelectorAll(selector)].slice(0, 40); // the infiltration page is small
         for (const el of elements) {
             const fiber = getReactFiber(el);
             if (!fiber) continue;
@@ -770,8 +770,11 @@ function findInfiltrationTopDown() {
 
     const stack = [rootFiber];
     const visited = new WeakSet();
+    const deadline = performance.now() + 8; // bounded: this runs on the page's thread
+    let walked = 0;
 
     while (stack.length > 0) {
+        if (++walked > 20000 || performance.now() > deadline) return null;
         const fiber = stack.pop();
         if (!fiber || visited.has(fiber)) continue;
         visited.add(fiber);
@@ -1261,7 +1264,16 @@ function clickButton(btn) {
 
 /** Tracks whether we've detected an active infiltration this session */
 /** Tracks the last known stage name to detect transitions */
+// infLoop runs every 50 ms on the page's thread. Searching the React tree for an infiltration (every button/paper
+// element walked up 100 fibers, then the whole fiber tree) took longer than that on big pages (19x19 Go board, darknet
+// map), so the timer ran back to back and froze the game. While not infiltrating, search at most once a second.
+let lastIdleSearch = 0;
 function infLoop() {
+    if (!isInfiltrating) {
+        const now = Date.now();
+        if (now - lastIdleSearch < 1000) return;
+        lastIdleSearch = now;
+    }
     const infiltration = getInfiltrationState();
 
     if (!infiltration) {
