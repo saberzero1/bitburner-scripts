@@ -1846,9 +1846,16 @@ function refreshKnownServers(ns, state) {
             state.serverDepths.delete(hostname);
             continue;
         }
+        const isLab = details.modelId === "(The Labyrinth)";
+        if (isLab && !(details.depth > 0)) {
+            // A labyrinth from an earlier install (solved; it lingers off the network with depth -1)
+            state.labyrinthServers.delete(hostname);
+            state.serverDepths.delete(hostname);
+            continue;
+        }
         if (typeof details.depth === "number") state.serverDepths.set(hostname, details.depth);
         if (!state.discoveredServers.has(hostname)) state.discoveredServers.set(hostname, new DarknetServerInfo(hostname, details));
-        if (details.modelId === "(The Labyrinth)") state.labyrinthServers.add(hostname);
+        if (isLab) state.labyrinthServers.add(hostname);
     }
     // Labyrinths have fixed names: look them up directly, so the target depth is known before a probe reaches one
     for (const lab of Object.keys(LAB_GRID)) {
@@ -1858,10 +1865,11 @@ function refreshKnownServers(ns, state) {
             if (details?.isOnline && details.depth > 0) state.labyrinthServers.add(lab);
         } catch {}
     }
-    for (const lab of state.labyrinthServers) {
+    for (const lab of [...state.labyrinthServers]) {
         try {
             const details = ns.dnet.getServerDetails(lab);
-            if (details?.isOnline && typeof details.depth === "number") state.serverDepths.set(lab, details.depth);
+            if (details?.isOnline && details.depth > 0) state.serverDepths.set(lab, details.depth);
+            else state.labyrinthServers.delete(lab); // an earlier labyrinth (or gone)
         } catch {}
     }
 }
@@ -1869,7 +1877,8 @@ function refreshKnownServers(ns, state) {
 /** Determine the anchoring phase and the labyrinth it is targeting. */
 async function getAnchorPhase(ns, state) {
     // The current labyrinth: discovered, online lab server(s); prefer an unsolved one
-    const labs = [...state.labyrinthServers].filter((h) => safeGetAuthDetails(ns, h)?.isOnline !== false);
+    // Only the current labyrinth has a depth: earlier ones (solved, passwords still known) linger with depth -1
+    const labs = [...state.labyrinthServers].filter((h) => safeGetAuthDetails(ns, h)?.isOnline !== false && state.serverDepths.get(h) > 0);
     const unsolved = labs.filter((h) => !isServerAuthenticated(state, h));
     if (labs.length === 0) return { phase: "push", lab: null, reason: "labyrinth not found yet" };
     if (unsolved.length === 0) return { phase: "stable", lab: labs[0], reason: "labyrinth solved" };
