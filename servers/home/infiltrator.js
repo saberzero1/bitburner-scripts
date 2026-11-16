@@ -2533,7 +2533,22 @@ async function infiltrate(ns, city, target, faction) {
  * @param {boolean} [display=]
  * @returns {Promise<Array<{city: string, maxClearanceLevel: number, name: string, reward: {SoARep: number, tradeRep: number, sellCash: number, repScore: number, moneyScore: number, actualTradeRep: number, actualSellCash: number}}>>} Array of locations
  */
+/** getLocationsOnce, waiting while home lacks the RAM for its temp scripts (16.6 GB): early in a BitNode the
+ * daemon fills home, and the error ended infiltrator.js with a runtime error modal (2026-11-16, BN12.77 start). */
 async function getLocations(ns, display = false) {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await getLocationsOnce(ns, display);
+        } catch (err) {
+            if (!/RAM/i.test(String(err?.message ?? err))) throw err;
+            if (attempt === 0)
+                log(ns, `INFO: Not enough free RAM on home to look up infiltration targets yet; retrying every 30s.`, false, "info");
+            await ns.sleep(30_000);
+        }
+    }
+}
+
+async function getLocationsOnce(ns, display = false) {
     let locations = [];
     let locationsRAW = await getNsDataThroughFile(
         ns,
@@ -2541,14 +2556,15 @@ async function getLocations(ns, display = false) {
         "/Temp/infiltration-getPossibleLocations.txt",
     );
     const marketMultiplier = getMarketDemandMultiplier();
-    for (const l of locationsRAW) {
-        if (ignoreTarget.some((location) => location === l.name)) continue;
-        let info = await getNsDataThroughFile(
-            ns,
-            "ns.infiltration.getInfiltration(ns.args[0])",
-            "/Temp/infiltration-getInfiltration.txt",
-            [l.name],
-        );
+    // One temp script for all locations (it was one 16.6 GB script per location)
+    const names = locationsRAW.map((l) => l.name).filter((n) => !ignoreTarget.includes(n));
+    const infos = await getNsDataThroughFile(
+        ns,
+        "ns.args.map((name) => ns.infiltration.getInfiltration(name))",
+        "/Temp/infiltration-getInfiltration-all.txt",
+        names,
+    );
+    for (const info of infos) {
         // Skip locations that are too difficult — the game immediately fails
         // if difficulty >= 3.5 (MaxDifficultyForInfiltration in source).
         // difficulty = startingSecurityLevel - (totalStats^0.9)/250 - intelligence/1600
