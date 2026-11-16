@@ -1812,10 +1812,9 @@ async function ensureHomeProbe(ns, state, options) {
 // 1-4 of them (+1 each for The W1ngs of Icarus, The H4mmer of Daedalus, The St4ff of Asclepius).
 //
 // Phases:
-//  - push:   while the current labyrinth is unsolved (also while charisma is still short of it), anchors serve
-//            depth: one labyrinth neighbour (to host the solver), then footholds in the deepest air-gap segment
-//            reached (deeper is better, so they can't drift back across the gap), with a bonus for a charger 4 rows
-//            before the gap being crossed (it charges its neighbours' migrations and is itself out of range).
+//  - push:   while the current labyrinth is unsolved (also while charisma is still short of it): one anchor per
+//            air-gap segment for the deepest segments reached, on the server nearest the next gap (its probe charges
+//            neighbours' migrations across), or on a labyrinth neighbour in the labyrinth's segment (planSegmentAnchors).
 //  - stable: once the labyrinth is solved, anchors keep high-RAM servers stable.
 //
 // Swaps are conservative: an anchor is held at least ANCHOR_MIN_HOLD_MS, a candidate must beat the weakest
@@ -1835,7 +1834,7 @@ const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
  * labyrinth neighbours (+1000) ever scored as anchors. getServerDetails works at any distance.
  */
 function refreshKnownServers(ns, state) {
-    for (const hostname of state.knownPasswords.keys()) {
+    for (const hostname of new Set([...state.knownPasswords.keys(), ...state.stasisServers])) {
         if (hostname === DARKWEB_HOSTNAME || hostname === "home") continue;
         let details;
         try {
@@ -1855,7 +1854,8 @@ function refreshKnownServers(ns, state) {
     for (const lab of Object.keys(LAB_GRID)) {
         try {
             const details = ns.dnet.getServerDetails(lab);
-            if (details?.isOnline) state.labyrinthServers.add(lab);
+            // Earlier labyrinths linger off the network (depth -1): only the current one has a depth
+            if (details?.isOnline && details.depth > 0) state.labyrinthServers.add(lab);
         } catch {}
     }
     for (const lab of state.labyrinthServers) {
@@ -1943,6 +1943,7 @@ function writeAnchorStatus(ns, state, phaseInfo, ctx, limit, score) {
             limit, frontierSegment: ctx.frontierSegment, gap: ctx.gap, deepestCracked: depths.length ? Math.max(...depths) : null,
             knownDepths: state.serverDepths.size, pending: state.anchorPending ?? null,
             sinceLastChangeMin: Math.round((Date.now() - (state.lastAnchorChange ?? 0)) / 60000), anchors, top,
+            plan: phaseInfo.phase === "push" ? planSegmentAnchors(ns, state, phaseInfo, limit) : null,
         }), "w");
     } catch (err) {
         log(ns, `WARNING: anchor status failed: ${getErrorInfo(err)}`);
@@ -2053,6 +2054,34 @@ async function manageAnchors(ns, state, options) {
     }
     publishAnchorCommand(ns, []);
 
+    // 2 (push phase). One anchor per air-gap segment, for the deepest `limit` segments past the entry segment: in each,
+    // the server closest to the next gap (its probe charges neighbours' migrations across), or a labyrinth neighbour in
+    // the labyrinth's segment (to host the solver). Four anchors used to cluster in one segment.
+    if (phaseInfo.phase === "push") {
+        const plan = planSegmentAnchors(ns, state, phaseInfo, limit);
+        const wanted = new Set(plan.map((p) => p.hostname));
+        const toAdd = plan.filter((p) => !linked.has(p.hostname));
+        if (!toAdd.length) return;
+        if (linked.size < limit) {
+            await startAnchorLink(ns, state, options, toAdd[0]);
+            return;
+        }
+        if (now - (state.lastAnchorChange ?? 0) < ANCHOR_SWAP_COOLDOWN_MS) return;
+        // Replace an anchor outside the plan: the shallowest one first
+        const removable = [...linked].filter((h) => !wanted.has(h) && now - (state.anchorSince.get(h) ?? now) >= ANCHOR_MIN_HOLD_MS &&
+            !isRunningLabSolver(ns, h)).sort((a, b) => (state.serverDepths.get(a) ?? -1) - (state.serverDepths.get(b) ?? -1));
+        if (!removable.length) return;
+        const remove = removable[0];
+        log(ns, `Anchors: moving ${remove} (depth ${state.serverDepths.get(remove) ?? "?"}) to ${toAdd[0].hostname} (depth ${toAdd[0].score}, segment ${toAdd[0].segment})`);
+        if (!(await execStasisLink(ns, state, remove, false, options))) {
+            log(ns, `WARNING: Anchors: could not unlink ${remove}; keeping it`, false, "warning");
+            state.lastAnchorChange = now;
+            return;
+        }
+        state.anchorPending = { stage: "unlinking", remove, candidate: toAdd[0], startedAt: now };
+        return;
+    }
+
     // 2. Rank candidates. Only cracked servers with room for the link can be anchored; filter them first (the deepest
     // discovered servers are mostly uncracked, and used to fill the whole shortlist, so nothing away from the
     // labyrinth was ever anchored).
@@ -2112,13 +2141,55 @@ async function manageAnchors(ns, state, options) {
     state.anchorPending = { stage: "unlinking", remove: weakest.hostname, candidate: best, startedAt: now };
 }
 
+/**
+ * The wanted anchor of each of the deepest `limit` segments (segment 0 holds the entrance and is skipped): a labyrinth
+ * neighbour in the labyrinth's segment, otherwise the deepest ready server (ties: more RAM). A current anchor within a
+ * row of the best stays, to avoid churn. Returns [{hostname, segment, score: depth, direct}], deepest segment first.
+ */
+function planSegmentAnchors(ns, state, phaseInfo, limit) {
+    const labNeighbors = phaseInfo.lab ? state.labyrinthNeighbors.get(phaseInfo.lab) : null;
+    const bySegment = new Map();
+    for (const h of new Set([...state.discoveredServers.keys(), ...state.stasisServers])) {
+        const depth = state.serverDepths.get(h);
+        if (depth === undefined || depth < AIR_GAP_DEPTH || h === DARKWEB_HOSTNAME) continue;
+        if (state.labyrinthServers.has(h)) continue;
+        if (!state.stasisServers.has(h) && !isServerAuthenticated(state, h)) continue;
+        let ram = 0;
+        try {
+            ram = ns.getServerMaxRam(h);
+        } catch {}
+        if (ram < STASIS_RAM_NEEDED && !state.stasisServers.has(h)) continue;
+        const seg = Math.floor(depth / AIR_GAP_DEPTH);
+        if (!bySegment.has(seg)) bySegment.set(seg, []);
+        bySegment.get(seg).push({ h, depth, ram, lab: !!labNeighbors?.has(h) });
+    }
+    const plan = [];
+    for (const seg of [...bySegment.keys()].sort((a, b) => b - a)) {
+        if (plan.length >= limit) break;
+        const servers = bySegment.get(seg).sort((a, b) => b.lab - a.lab || b.depth - a.depth || b.ram - a.ram);
+        const best = servers[0];
+        const current = servers.find((s) => state.stasisServers.has(s.h) && s.lab === best.lab && s.depth >= best.depth - 1);
+        if (current) {
+            plan.push({ hostname: current.h, segment: seg, score: current.depth, direct: false });
+            continue;
+        }
+        for (const s of servers) {
+            const r = state.stasisServers.has(s.h) ? { ok: true, direct: false } : anchorReadiness(ns, state, s.h);
+            if (!r.ok) continue;
+            plan.push({ hostname: s.h, segment: seg, score: s.depth, direct: r.direct });
+            break;
+        }
+    }
+    return plan;
+}
+
 /** Start linking a candidate: directly when home can exec there, otherwise via the server's own probe. */
 async function startAnchorLink(ns, state, options, cand, replaced) {
     let direct = cand.direct;
     if (direct && !(await execStasisLink(ns, state, cand.hostname, true, options))) direct = false; // fall back to its probe
     state.anchorPending = { stage: "linking", add: cand.hostname, startedAt: Date.now(), direct, replaced };
     publishAnchorCommand(ns, direct ? [] : [cand.hostname]);
-    log(ns, `Anchors: linking ${cand.hostname} (score ${cand.score.toFixed(0)}, ${direct ? "direct" : "via its probe"})`);
+    log(ns, `Anchors: linking ${cand.hostname} (${cand.segment !== undefined ? `depth ${cand.score}, segment ${cand.segment}` : `score ${cand.score.toFixed(0)}`}, ${direct ? "direct" : "via its probe"})`);
 }
 
 /**
