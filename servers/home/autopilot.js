@@ -56,6 +56,7 @@ const argsSchema = [
     ["xp-mode-hack-income-share", 0.01], // Always run daemon.js in --xp-only mode while hacking earns less than this share of our other income
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["disable-darknet", false], // Set to true to keep daemon.js from launching darknet.js
     ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
 ];
 
@@ -1132,6 +1133,7 @@ export async function main(ns) {
             getFilePath("work-for-factions.js"),
         );
         daemonArgs.push("--disable-script", getFilePath("infiltrator.js"));
+        if (options["disable-darknet"]) daemonArgs.push("--disable-script", getFilePath("darknet.js"));
         // In BN8, always run in a mode that prioritizes stock market manipulation
         if (resetInfo.currentNode == 8)
             daemonArgs.push("--stock-manipulation-focus");
