@@ -82,6 +82,15 @@ export async function main(ns) {
             } catch {
                 /* sleeve.js hasn't written its files yet */
             }
+            // Darknet (from darknet.js's anchor status file; no RAM): current labyrinth, phase, frontier
+            try {
+                const d = JSON.parse(ns.read("/data/darknet-anchor-status.txt") || "null");
+                if (d && snap.t - d.t < 15 * 60_000)
+                    snap.darknet = { lab: d.lab, phase: d.phase, deepestProbe: d.deepestProbe ?? null, probeHosts: d.probeHosts ?? null, anchors: d.anchors?.length ?? 0 };
+            } catch {
+                /* darknet.js not running */
+            }
+            snap.cha = (await getNsDataThroughFile(ns, "ns.getPlayer().skills.charisma", "/Temp/run-logger-cha.txt")) ?? null;
             // Gaps: the game was closed, frozen, or this script wasn't running
             const previous = lastWrite || lastLineTime(ns);
             if (previous && snap.t - previous > 3 * intervalMs) snap.gapH = +((snap.t - previous) / 3.6e6).toFixed(3);
