@@ -90,8 +90,7 @@ let importantStats = [];
 
 let options;
 const argsSchema = [
-    ["create-gang", false], // Create the gang once karma allows. OFF for now: on 2026-11-16 the game froze right after
-    // gangs.js created the gang, on every restart (the first-members recruit loop was bounded and it still froze)
+    ["create-gang", true], // Create the gang once karma allows
     ["training-percentage", 0.05], // Spend this percent of time randomly training gang members versus doing crime
     ["no-training", false], // Don't train unless all other tasks generate no gains or the member ascended recently (--min-training-ticks)
     ["no-auto-ascending", false], // Don't ascend members
