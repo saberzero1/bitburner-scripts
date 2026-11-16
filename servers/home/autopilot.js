@@ -1160,14 +1160,16 @@ export async function main(ns) {
             );
 
         // After The Red Pill only hacking level matters: switch Stanek's Gift to the hacking-only layout (both hacking
-        // fragments ringed by boosters, hacking x1.92 vs ~x1.5) once, while stanek.js isn't charging, then charge it.
+        // fragments ringed by boosters) once, then charge it. stanek.js charging the old layout is stopped first: a higher
+        // peak charge resets the charge count, so it can run for a long time (BN12.77: 20+ minutes, never finishing).
         if (13 in unlockedSFs && !options["disable-hacking-stanek"] && !hackingStanekChecked &&
-            installedAugmentations.includes(augTRP) && !findScript("stanek.js")) {
+            installedAugmentations.includes(augTRP)) {
             hackingStanekChecked = true;
             try {
                 const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
                 if (ids.some((id) => id < 100 && id !== 0 && id !== 1)) {
                     log(ns, `INFO: The Red Pill is installed: switching Stanek's Gift to the hacking-only layout.`, true);
+                    if (findScript("stanek.js")) await killScript(ns, "stanek.js");
                     const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--hacking"]);
                     if (pid) await waitForProcessToComplete(ns, pid);
                     stanekLaunched = false; // charge the new layout
