@@ -1867,12 +1867,22 @@ function refreshKnownServers(ns, state) {
     for (const lab of state.labyrinthServers) if (LAB_DEPTH[lab]) state.serverDepths.set(lab, LAB_DEPTH[lab]);
 }
 
+/** A labyrinth counts as solved only with root access on it now: its password from an earlier BitNode (labyrinth
+ * names repeat, and the password file persists) made BN12.76's Merciless look solved while it was not. */
+function isLabSolved(ns, state, hostname) {
+    try {
+        return ns.hasRootAccess(hostname);
+    } catch {
+        return isServerAuthenticated(state, hostname);
+    }
+}
+
 /** Determine the anchoring phase and the labyrinth it is targeting. */
 async function getAnchorPhase(ns, state) {
     // The current labyrinth: discovered, online lab server(s); prefer an unsolved one
     // Only the current labyrinth has a depth: earlier ones (solved, passwords still known) linger with depth -1
     const labs = [...state.labyrinthServers].filter((h) => Date.now() - (state.labReportedAt?.get(h) ?? 0) < 15 * 60 * 1000);
-    const unsolved = labs.filter((h) => !isServerAuthenticated(state, h));
+    const unsolved = labs.filter((h) => !isLabSolved(ns, state, h));
     if (labs.length === 0) return { phase: "push", lab: null, reason: "labyrinth not found yet" };
     if (unsolved.length === 0) return { phase: "stable", lab: labs[0], reason: "labyrinth solved" };
     const lab = unsolved[0];
@@ -2640,7 +2650,7 @@ async function chooseWorkerMode(ns, options, state) {
         } catch {
             state.workerStock = "";
         }
-        const unsolvedLab = [...state.labyrinthServers].find((h) => !isServerAuthenticated(state, h));
+        const unsolvedLab = [...state.labyrinthServers].find((h) => !isLabSolved(ns, state, h));
         if (unsolvedLab) {
             try {
                 state.labCharismaRequired = ns.dnet.getServerRequiredCharismaLevel(unsolvedLab);
@@ -2660,7 +2670,7 @@ function getFrontierGap(ns, state) {
     for (const [h, depth] of state.serverDepths)
         if (state.probeHosts?.has(h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
     const gap = (frontierSegment + 1) * AIR_GAP_DEPTH;
-    const unsolvedLab = [...state.labyrinthServers].find((h) => !isServerAuthenticated(state, h));
+    const unsolvedLab = [...state.labyrinthServers].find((h) => !isLabSolved(ns, state, h));
     const labDepth = unsolvedLab ? state.serverDepths.get(unsolvedLab) : undefined;
     if (labDepth !== undefined && labDepth < gap) return 0;
     return gap;
