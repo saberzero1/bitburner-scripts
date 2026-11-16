@@ -2139,8 +2139,12 @@ export async function main(ns) {
      * @param {boolean} alsoPrintToTerminal Set to true to print not only to the current script's tail file, but to the terminal
      * @param {""|"success"|"warning"|"error"|"info"} toastStyle - If specified, your log will will also become a toast notification */
     function log_once(ns, message, alsoPrintToTerminal, toastStyle) {
-        if (logged_once.has(message)) return;
-        logged_once.add(log(ns, message, alsoPrintToTerminal, toastStyle));
+        // Messages that differ only in their numbers count as the same: "Not boosting servers ... hack income ($705/s)"
+        // was logged every 10 s with a new figure, flooding the log (its tail is all that getScriptLogs returns)
+        const key = String(message).replace(/[\d.,]+/g, "#");
+        if (logged_once.has(key)) return;
+        logged_once.add(key);
+        log(ns, message, alsoPrintToTerminal, toastStyle);
     }
 
     // Invoke the main function
