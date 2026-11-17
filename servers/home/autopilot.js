@@ -1801,12 +1801,15 @@ export async function main(ns) {
         // Every install regenerates the darknet. Quick installs of a few cheap augs (SoA, social) every 6-14 minutes kept
         // it from ever reaching the next labyrinth (2026-11-16, Endless at depth 31). Hold installs while darknet.js pushes
         // toward an unsolved labyrinth, unless a labyrinth reward is pending (it must be installed to unlock the next one).
-        const darknetHoldMs = options["darknet-install-hold-minutes"] * 60_000;
+        let dnet = null;
+        try {
+            dnet = JSON.parse(ns.read("/data/darknet-anchor-status.txt") || "null");
+        } catch {}
+        // Twice as long once the labyrinth is found: an install throws away the solver's progress, and moves are slow
+        // while charisma is barely above the requirement (BN12.79: Eternal found 32 min in at 3108/3000 charisma, not
+        // solved by the 60-minute cap; the next install, at 4152, solved it in minutes)
+        const darknetHoldMs = options["darknet-install-hold-minutes"] * 60_000 * (dnet?.lab ? 2 : 1);
         if (darknetHoldMs > 0 && !installedAugmentations.includes(augTRP) && getTimeInAug() < darknetHoldMs) {
-            let dnet = null;
-            try {
-                dnet = JSON.parse(ns.read("/data/darknet-anchor-status.txt") || "null");
-            } catch {}
             const pending = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
             const labRewardPending = options["install-for-augs"].some((a) => pending.includes(a));
             const dnetCurrent = dnet && dnet.t > resetInfo.lastAugReset && Date.now() - dnet.t < 10 * 60_000;
