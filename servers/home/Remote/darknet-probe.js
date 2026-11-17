@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 53;
+const PROBE_VERSION = 54;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1673,31 +1673,49 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
         // game centres it on its difficulty, not its row), so pick the one most likely to land past the gap. tools/dnet-sim
         // (20+ trials): this beat "within 3 rows of the gap" in median and worst case for every anchor policy.
         let best = null;
+        // Measurement (2026-11-17): live, probes started no migrations at all; count why candidates are rejected
+        const why = { self: 0, labNeighbor: 0, anchored: 0, offline: 0, notConnected: 0, stationary: 0, pastGap: 0, lowChance: 0, noRoot: 0, noProbe: 0 };
+        let maxChance = 0;
         for (const target of (await runScan(ns)) || []) {
-            if (target === host || options.labNeighbors.includes(target) || anchored.has(target)) continue;
+            if (target === host) { why.self++; continue; }
+            if (options.labNeighbors.includes(target)) { why.labNeighbor++; continue; }
+            if (anchored.has(target)) { why.anchored++; continue; }
             const details = await getAuthDetails(ns, target);
-            if (!details?.isOnline || !details.isConnectedToCurrentServer || details.isStationary) continue;
+            if (!details?.isOnline) { why.offline++; continue; }
+            if (!details.isConnectedToCurrentServer) { why.notConnected++; continue; }
+            if (details.isStationary) { why.stationary++; continue; }
             const depth = details.depth;
-            if (typeof depth !== "number" || depth >= gap || typeof details.difficulty !== "number") continue;
+            if (typeof depth !== "number" || depth >= gap || typeof details.difficulty !== "number") { why.pastGap++; continue; }
             const chance = Math.max(0, Math.min(7, details.difficulty + 4 - gap)) / 7;
-            if (chance < MIGRATION_MIN_CHANCE || (best && chance <= best.chance)) continue;
+            maxChance = Math.max(maxChance, chance);
+            if (chance < MIGRATION_MIN_CHANCE || (best && chance <= best.chance)) { why.lowChance++; continue; }
             // Only servers that carry a probe across (cracked, probe running)
             let hasRoot = false;
             try {
                 hasRoot = ns.hasRootAccess(target);
             } catch {}
-            if (!hasRoot) continue;
+            if (!hasRoot) { why.noRoot++; continue; }
             const targetProcs = (await nsPs(ns, target)) || [];
-            if (!targetProcs.some((p) => /darknet-probe/.test(p.filename))) continue;
+            if (!targetProcs.some((p) => /darknet-probe/.test(p.filename))) { why.noProbe++; continue; }
             best = { target, depth, chance };
         }
-        if (best) {
+        // RAM we could use, counting our worker's (it is paused only if a migration actually starts)
+        const workerRam = procs.filter((p) => /darknet-worker-/.test(p.filename)).reduce((t, p) => t + p.threads * WORKER_THREAD_RAM, 0);
+        const free = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) + workerRam - 4;
+        const affordable = Math.floor(free / MIGRATION_THREAD_RAM);
+        let myDepth = null;
+        try {
+            myDepth = (await getAuthDetails(ns, host))?.depth ?? null;
+        } catch {}
+        portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migcheck", host, depth: myDepth, gap, maxRam: nsGetServerMaxRam(ns, host),
+            free: +free.toFixed(1), affordable, best: best?.target ?? null, maxChance: +maxChance.toFixed(2), why }));
+        if (best && affordable >= 1) {
             const { target, depth } = best;
             // Pause our worker for the RAM; manageWorker restarts it afterwards
             for (const p of procs.filter((p) => /darknet-worker-/.test(p.filename))) await nsKill(ns, p.pid);
             await ns.sleep(100);
-            const free = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) - 4;
-            const threads = Math.floor(free / MIGRATION_THREAD_RAM);
+            const freeNow = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) - 4;
+            const threads = Math.floor(freeNow / MIGRATION_THREAD_RAM);
             if (threads < 1) return;
             ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
             const pid = ns.exec(MIGRATION_HELPER, host, threads, target);
