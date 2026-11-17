@@ -120,9 +120,11 @@ export async function main(ns) {
         const starter = pendingStarters.find(([, ready]) => ready(info.owned));
         const starterAug = starter && info.augs.find((a) => a.name === starter[0]);
         if (starterAug && starterAug.cost <= info.money) {
-            // (status "charisma": a labyrinth reward's install may cancel it unless it's nearly done, see autopilot)
-            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: "charisma", focus: needFocus }), "w");
-            lastMode = "charisma";
+            // (status "starter": autopilot holds installs for it like any graft. As "charisma", a labyrinth reward's install
+            // could cancel it, and BN12.82's Eternal install cancelled Enhanced Social Interaction 11 minutes in: $4.1b lost,
+            // and with installs 25-45 minutes apart a 47-minute graft could be cancelled again and again)
+            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: "starter", focus: needFocus }), "w");
+            lastMode = "starter";
             if (info.city !== "New Tokyo" &&
                 !(await getNsDataThroughFile(ns, `ns.singularity.travelToCity("New Tokyo")`, "/Temp/graft-travel.txt"))) {
                 await ns.sleep(60_000);
