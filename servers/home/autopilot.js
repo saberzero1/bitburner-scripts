@@ -1777,8 +1777,17 @@ export async function main(ns) {
      */
     const lastFactionRep = {}; // faction -> rep at the previous install check
     async function shouldDelayInstall(ns, player, facmanOutput) {
-        // Don't install if we're currently grafting an augmentation
-        if (await checkIfGrafting(ns)) return true;
+        // Don't install if we're currently grafting an augmentation, except a charisma graft when a labyrinth reward is
+        // pending: graft.js grafts charisma past the requirement (1.3x), and the reward must not wait for it
+        if (await checkIfGrafting(ns)) {
+            let graftMode = null;
+            try {
+                graftMode = JSON.parse(ns.read("/Temp/graft-status.txt") || "null")?.mode;
+            } catch {}
+            const pendingAugs = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
+            const labRewardPending = options["install-for-augs"].some((a) => pendingAugs.includes(a));
+            if (!(graftMode === "charisma" && labRewardPending)) return true;
+        }
         // After The Red Pill only hacking level gates the BitNode. An install resets Go stats (the World Daemon's bonus is
         // a hacking level multiplier, +80% after 14 minutes of games in BN12.77) and hacking experience, so it must bring
         // more hacking multiplier than that: hold unless the pending augs' hacking multipliers beat the Go bonus x1.1.

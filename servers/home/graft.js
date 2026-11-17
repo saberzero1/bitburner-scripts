@@ -26,6 +26,7 @@ const argsSchema = [
     // infiltrator.js (its UI navigation takes focus away) and refocusing while grafting. --focus false to keep infiltrating.
     ["once", false], // Graft at most one augmentation, then exit
     ["no-charisma", false], // Don't graft for darknet labyrinth charisma
+    ["charisma-margin", 1.3], // Charisma mode grafts up to this times the labyrinth's requirement (moves are slow near it)
     ["eta-slack", 1.5], // Hacking mode: skip grafts longer than this times the projected time to reach the target by experience
 ];
 export function autocomplete(data) {
@@ -34,6 +35,11 @@ export function autocomplete(data) {
 }
 
 const CONGRUITY = "violet Congruity Implant";
+// Darknet labyrinths in order (outside BN15): the reward that unlocks the next one, and the charisma each requires
+const LABS = [["The W1ngs of Icarus", 300], ["The B00ts of Perseus", 600], ["The H4mmer of Daedalus", 1500],
+    ["The St4ff of Asclepius", 2500], ["The L4w of Bayes", 3000], ["The B1ade of Solomonoff", 3500], ["The Red Pill", 4000]];
+/** Charisma the next labyrinth requires, from the labyrinth rewards owned (undefined once all are owned). */
+const nextLabCharisma = (owned) => LABS.find(([reward]) => !owned.includes(reward))?.[1];
 const ENTROPY = Math.log(0.98);
 const IDLE_MS = 2 * 60_000;
 const STATUS_FILE = "/Temp/graft-status.txt"; // {t, mode}: read by autopilot.js
@@ -105,9 +111,14 @@ export async function main(ns) {
             } catch {}
             // (status from before the last install is about a darknet that no longer exists)
             const fresh = dnet && Date.now() - dnet.t < 10 * 60_000 && dnet.t > info.lastAugReset;
-            if (fresh && dnet.lab && dnet.phase === "push" && dnet.labCha > info.cha) {
+            // Up to 1.3x the requirement: moves take (5 x required + base) / (charisma + 150) as long, so a labyrinth
+            // found just above it is slow (BN12.79: Eternal at 3108/3000 wasn't solved within the install hold). Before the
+            // labyrinth is found, the next one's requirement comes from the rewards we own (BN12.79: Uber went unfound
+            // while charisma sat at 2200/2500, and no graft started because no labyrinth was known yet).
+            const labCha = dnet?.labCha ?? nextLabCharisma(info.owned);
+            if (fresh && dnet.phase === "push" && labCha && info.cha < options["charisma-margin"] * labCha) {
                 mode = "charisma";
-                target = dnet.labCha;
+                target = Math.ceil(options["charisma-margin"] * labCha);
             }
         }
         // Tell autopilot whether we're in a graft series (it holds installs then; idle = installs may go ahead)
