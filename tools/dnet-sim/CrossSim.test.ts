@@ -8,7 +8,11 @@
  *  - migration charging (SIM_POLICY): "none"; "depth" (the probes' rule: a cracked probe neighbour 1-3 rows before
  *    the frontier gap); "difficulty" (the neighbour whose landing window, which the game centres on the server's
  *    difficulty, puts the most open slots past the frontier gap);
- *  - anchors (SIM_ANCHORS slots): "none", "lab" (only next to the labyrinth), "frontier" (the deepest probe hosts).
+ *  - anchors (SIM_ANCHORS slots; default as in the game: 1 + W1ngs + H4mmer + St4ff owned): "none", "lab" (only next
+ *    to the labyrinth), "frontier" (the deepest probe hosts), "segment" (darknet.js since 2026-11-16: one per segment past
+ *    the first, its deepest probe host, plus the labyrinth neighbour), "push" (boundary pushing: the labyrinth neighbour,
+ *    then the deepest-segment hosts with the most crossable neighbours, so a server that crossed is anchored at once;
+ *    anchored hosts charge migrations continuously with all spare RAM instead of rechecking every 3 minutes).
  * Measures the time until a probe sits next to the labyrinth. Env: SIM_LAB (1-7: Cruel..Final), SIM_CHA, SIM_HOURS,
  * SIM_TRIALS, SIM_POLICY, SIM_ANCHOR_POLICY, SIM_ANCHORS, SIM_THRESHOLD (min crossing chance), SIM_OUT.
  */
@@ -38,7 +42,7 @@ const HOURS = Number(env.SIM_HOURS ?? 12);
 const TRIALS = Number(env.SIM_TRIALS ?? 5);
 const POLICY = env.SIM_POLICY ?? "depth";
 const ANCHOR_POLICY = env.SIM_ANCHOR_POLICY ?? "lab";
-const ANCHORS = Number(env.SIM_ANCHORS ?? 4);
+const ANCHORS = Number(env.SIM_ANCHORS ?? 1 + (LAB >= 1 ? 1 : 0) + (LAB >= 3 ? 1 : 0) + (LAB >= 4 ? 1 : 0));
 const THRESHOLD = Number(env.SIM_THRESHOLD ?? 0.3);
 const OUT = env.SIM_OUT ?? "/tmp/crosssim.json";
 const THREADS = env.SIM_THREADS ?? "1"; // "1": auth and RAM freeing in 1-thread scripts (current probe); "auto": spare RAM
@@ -150,6 +154,25 @@ async function runTrial(trial: number) {
         // the deepest hosts, but leave launch candidates (those that could cross) free to migrate
         wanted = [...best, ...rest.filter((s) => !gap || crossChance(s, gap) < THRESHOLD)].slice(0, ANCHORS).map((s) => s.hostname);
       }
+      else if (ANCHOR_POLICY === "segment") {
+        const best = hosts.filter((s) => lab && s.serversOnNetwork.includes(lab.hostname)).slice(0, 1);
+        const bySeg = new Map<number, DarknetServer>();
+        for (const s of hosts) {
+          if (best.includes(s) || s.depth < AIR_GAP_DEPTH) continue; // segment 0 is reached from home
+          const cur = bySeg.get(segOf(s.depth));
+          if (!cur || s.depth > cur.depth) bySeg.set(segOf(s.depth), s);
+        }
+        const perSeg = [...bySeg.entries()].sort((a, b) => b[0] - a[0]).map(([, s]) => s);
+        wanted = [...best, ...perSeg].slice(0, ANCHORS).map((s) => s.hostname);
+      } else if (ANCHOR_POLICY === "push") {
+        const gap = frontierGap();
+        const best = hosts.filter((s) => lab && s.serversOnNetwork.includes(lab.hostname)).slice(0, 1);
+        const crossable = (s: DarknetServer) => !gap ? 0 : s.serversOnNetwork.map(dnet)
+          .filter((n): n is DarknetServer => !!n && probes.has(n.hostname) && !n.hasStasisLink && n.depth < gap && crossChance(n, gap) >= THRESHOLD).length;
+        const rest = hosts.filter((s) => !best.includes(s))
+          .sort((a, b) => segOf(b.depth) - segOf(a.depth) || crossable(b) - crossable(a) || b.depth - a.depth);
+        wanted = [...best, ...rest].slice(0, ANCHORS).map((s) => s.hostname);
+      }
       for (const s of anchored) if (!wanted.includes(s.hostname)) s.hasStasisLink = s.backdoorInstalled = false;
       for (const h of wanted) {
         const s = dnet(h)!;
@@ -233,7 +256,8 @@ async function runTrial(trial: number) {
         }
         continue;
       }
-      if (t - (lastChargeCheck.get(h) ?? -1e9) < MIGRATION_RECHECK_S) continue;
+      const pusher = ANCHOR_POLICY === "push" && host.hasStasisLink; // anchors push continuously
+      if (!pusher && t - (lastChargeCheck.get(h) ?? -1e9) < MIGRATION_RECHECK_S) continue;
       lastChargeCheck.set(h, t);
       const threads = Math.floor(Math.max(0, freeRam(host)) / MIGRATION_THREAD_RAM);
       if (threads < 1) continue;

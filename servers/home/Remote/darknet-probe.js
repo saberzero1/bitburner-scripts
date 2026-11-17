@@ -1650,6 +1650,7 @@ let lastMigrationCheck = 0;
 // Charge per call: (charisma + 500) / (difficulty * 200 + 1000) * 1% per thread, 6 s per call; one thread needed
 // ~100 calls (one per 3 minutes here before: ~5 h), so the helper runs with all spare RAM, pausing the worker.
 const MIGRATION_HELPER = "/Temp/dnet-migrate.js";
+const MIGRATION_MIN_CHANCE = 0.3; // only charge a neighbour with at least this chance of landing past the gap
 const MIGRATION_HELPER_SOURCE =
     `export async function main(ns){const t=ns.args[0];for(let i=0;i<500;i++){let r;` +
     `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch{return;}` +
@@ -1668,12 +1669,18 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
         const procs = (await nsPs(ns, host)) || [];
         if (procs.some((p) => /dnet-migrate/.test(p.filename))) return; // already charging
         const anchored = new Set((await runGetStasisList(ns)) || []); // stasis-linked servers can't move
+        // Which neighbour to charge: a migrated server lands at a random open slot in [difficulty-2, difficulty+4] (the
+        // game centres it on its difficulty, not its row), so pick the one most likely to land past the gap. tools/dnet-sim
+        // (20+ trials): this beat "within 3 rows of the gap" in median and worst case for every anchor policy.
+        let best = null;
         for (const target of (await runScan(ns)) || []) {
             if (target === host || options.labNeighbors.includes(target) || anchored.has(target)) continue;
             const details = await getAuthDetails(ns, target);
             if (!details?.isOnline || !details.isConnectedToCurrentServer || details.isStationary) continue;
             const depth = details.depth;
-            if (typeof depth !== "number" || depth < gap - 3 || depth >= gap) continue;
+            if (typeof depth !== "number" || depth >= gap || typeof details.difficulty !== "number") continue;
+            const chance = Math.max(0, Math.min(7, details.difficulty + 4 - gap)) / 7;
+            if (chance < MIGRATION_MIN_CHANCE || (best && chance <= best.chance)) continue;
             // Only servers that carry a probe across (cracked, probe running)
             let hasRoot = false;
             try {
@@ -1682,6 +1689,10 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
             if (!hasRoot) continue;
             const targetProcs = (await nsPs(ns, target)) || [];
             if (!targetProcs.some((p) => /darknet-probe/.test(p.filename))) continue;
+            best = { target, depth, chance };
+        }
+        if (best) {
+            const { target, depth } = best;
             // Pause our worker for the RAM; manageWorker restarts it afterwards
             for (const p of procs.filter((p) => /darknet-worker-/.test(p.filename))) await nsKill(ns, p.pid);
             await ns.sleep(100);
@@ -1690,9 +1701,8 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
             if (threads < 1) return;
             ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
             const pid = ns.exec(MIGRATION_HELPER, host, threads, target);
-            if (pid) portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migrate", host, target, depth, gap, threads })); // metrics
-            if (pid) ns.print(`Migrating ${target} (depth ${depth}, gap at ${gap}) with ${threads} threads`);
-            return; // one target at a time
+            if (pid) portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migrate", host, target, depth, gap, threads, chance: +best.chance.toFixed(2) })); // metrics
+            if (pid) ns.print(`Migrating ${target} (depth ${depth}, gap at ${gap}, ~${Math.round(best.chance * 100)}% to cross) with ${threads} threads`);
         }
     } catch (err) {
         logError(ns, `Migration charging error`, err);
