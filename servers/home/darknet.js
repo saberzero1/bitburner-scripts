@@ -81,8 +81,11 @@ const STASIS_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(
 const MUTATION_HELPER_SCRIPT = "/Temp/darknet-mutation-wait.js";
 const MUTATION_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { await ns.dnet.nextMutation(); ns.write('/Temp/mutation-done.txt', 'done', 'w'); ns.rm('${MUTATION_HELPER_SCRIPT}'); }`;
 const RAMFREE_HELPER_SCRIPT = "/Temp/darknet-ramfree.js";
-const RAMFREE_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { while (ns.dnet.getBlockedRam() > 0) { await ns.dnet.memoryReallocation(); await ns.sleep(50); } ns.write('/Temp/ramfree-done.txt', 'done', 'w'); }`;
+// Frees blocked RAM on its own host until arg 0 GB are free (enough for a probe, whose own freeing grows its threads),
+// stopping on a failed call. It used to free everything with 1 thread and spin forever if the call kept failing.
+const RAMFREE_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const need = Number(ns.args[0]) || 1e9, h = ns.getHostname(); while (ns.dnet.getBlockedRam() > 0 && ns.getServerMaxRam(h) - ns.getServerUsedRam(h) < need) { const r = await ns.dnet.memoryReallocation(); if (!r || !r.success) break; await ns.sleep(50); } ns.write('/Temp/ramfree-done.txt', 'done', 'w'); }`;
 const RAMFREE_RESULT_FILE = "/Temp/ramfree-done.txt";
+const RAMFREE_HELPER_RAM = 2.75; // 1.6 base + 1.0 memoryReallocation + getServerMaxRam/UsedRam + getHostname (checked in game)
 const LAB_SOLVER_SCRIPT = "/Temp/darknet-lab-solver.js";
 const LAB_SOLVER_RESULT_PORT = 18; // Netscript port for labyrinth solver results
 const LAB_NEIGHBOR_REPORT_PORT = 17; // Netscript port for probe-reported labyrinth neighbors
@@ -113,6 +116,7 @@ const LAB_SOLVER_CONTENT = [
     `  let pos = [rep.coords[0], rep.coords[1]];`,
     `  let open = { north: rep.north, south: rep.south, east: rep.east, west: rep.west };`,
     `  const visited = new Set([pos.join(",")]);`,
+    `  let misses = 0; // responses that are neither a move nor a wall`,
     `  const stack = [];`,
     `  const score = (d) => (aimX - pos[0]) * D[d][0] + (aimY - pos[1]) * D[d][1];`,
     `  for (let i = 0; i < 50000; i++) {`,
@@ -124,6 +128,7 @@ const LAB_SOLVER_CONTENT = [
     `    if (r.success) { send({ password: r.data ?? r.message }); return; }`,
     `    const msg = r.message || "";`,
     `    const m = msg.match(/moved to (\\d+),(\\d+)/);`,
+    `    if (m || /cannot go that way/i.test(msg)) misses = 0;`,
     `    if (m) {`,
     `      if (back) stack.pop(); else stack.push(dir);`,
     `      pos = [parseInt(m[1], 10), parseInt(m[2], 10)];`,
@@ -135,6 +140,7 @@ const LAB_SOLVER_CONTENT = [
     `      if (back) { send({ error: "backtrack blocked" }); return; }`,
     `      open[dir] = false;`,
     `    } else if (/charism|moxie|charming/i.test(msg)) { send({ error: "charisma" }); return; }`,
+    `    else if (++misses > 100) { send({ error: "unreachable" }); return; } // the labyrinth moved away`,
     `    else await ns.sleep(200); // timeout (network instability): retry`,
     `  }`,
     `  send({ error: "max iterations" });`,
@@ -904,6 +910,11 @@ async function orchestrateDarknet(ns, state, options) {
                 try {
                     ns.rm(LAB_SOLVER_SCRIPT, info.solverHost);
                 } catch {}
+            } else if (labSolverShouldRestart(ns, state, labHost, info)) {
+                try {
+                    ns.kill(info.pid);
+                } catch {}
+                state.activeLabSolvers.delete(labHost); // redeployed (on a current neighbour, with today's RAM) next pass
             } else if (Date.now() - info.deployedAt > 3 * 3600 * 1000) {
                 // The solver always ends by itself (solved, stuck, charisma, max iterations); this only catches a hang.
                 // (Was 5 minutes, but a large labyrinth takes hundreds of ~3 s steps, and a restarted solver starts
@@ -1464,6 +1475,9 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
             pid,
             solverHost,
             deployedAt: Date.now(),
+            threads,
+            threadRam,
+            adjacentAt: Date.now(),
         });
         log(
             ns,
@@ -1501,7 +1515,7 @@ function logAuthFailure(ns, state, hostname, serverInfo) {
  * getBlockedRam costs 0 GB and doesn't require direct connection — safe from home.
  * memoryReallocation requires direct connection + admin — must run on target.
  */
-async function freeBlockedRamOnServer(ns, state, hostname, options) {
+async function freeBlockedRamOnServer(ns, state, hostname, options, needGb = 1e9) {
     try {
         const blockedRam = ns.dnet.getBlockedRam(hostname);
         if (blockedRam <= 0) return; // Already free
@@ -1510,7 +1524,7 @@ async function freeBlockedRamOnServer(ns, state, hostname, options) {
         const maxRam = ns.getServerMaxRam(hostname);
         const usedRam = ns.getServerUsedRam(hostname);
         const freeRam = Math.max(0, maxRam - usedRam);
-        const helperCost = 2.6; // 1.6 base + 1.0 memoryReallocation
+        const helperCost = RAMFREE_HELPER_RAM;
         if (freeRam < helperCost) {
             if (options.verbose) {
                 log(
@@ -1555,7 +1569,9 @@ async function freeBlockedRamOnServer(ns, state, hostname, options) {
             ns.rm(RAMFREE_RESULT_FILE);
         } catch {}
 
-        const pid = ns.exec(RAMFREE_HELPER_SCRIPT, hostname, 1);
+        // Freeing per call is proportional to threads: use what fits (the helper exits once the probe fits)
+        const threads = Math.max(1, Math.min(256, Math.floor(freeRam / helperCost)));
+        const pid = ns.exec(RAMFREE_HELPER_SCRIPT, hostname, threads, needGb);
         if (pid <= 0) {
             if (options.verbose) {
                 log(
@@ -1679,8 +1695,8 @@ async function deployProbe(ns, state, hostname, options) {
             return;
         }
 
-        // Free blocked RAM before checking if probe fits (especially important for 16GB servers)
-        await freeBlockedRamOnServer(ns, state, hostname, options);
+        // Free blocked RAM until the probe fits (especially important for 16GB servers); the probe frees the rest itself
+        await freeBlockedRamOnServer(ns, state, hostname, options, ns.getScriptRam(probeScript, "home") + 1);
 
         // Probe logic is not thread-parallelized; extra threads just duplicate work and waste RAM
         const threads = 1;
@@ -2022,6 +2038,27 @@ function workerRamOn(ns, hostname) {
     } catch {
         return 0;
     }
+}
+
+/** Like the probe's own solvers: the darknet can move a labyrinth away from the solver's host (its moves then fail
+ * forever: the Cruel solver, 2026-11-16), and a host's blocked RAM is freed after launch (threads are fixed then). */
+function labSolverShouldRestart(ns, state, labHost, info) {
+    if (state.labyrinthNeighbors.get(labHost)?.has(info.solverHost) ?? true) info.adjacentAt = Date.now();
+    // (the neighbour sets are rebuilt every tick from probe reports, and a busy probe can miss a few: allow 3 minutes)
+    else if (Date.now() - (info.adjacentAt ?? info.deployedAt) > 180_000) {
+        log(ns, `Labyrinth ${labHost} is no longer next to ${info.solverHost}: stopping its solver to redeploy it.`);
+        return true;
+    }
+    if (info.threads && info.threadRam) {
+        const possible = Math.floor((ns.getServerMaxRam(info.solverHost) - ns.getServerUsedRam(info.solverHost) +
+            info.threads * info.threadRam - 0.5) / info.threadRam);
+        const speed = (t) => 1 + 0.2 * (t - 1);
+        if (speed(possible) >= 3 * speed(info.threads)) {
+            log(ns, `Labyrinth solver for ${labHost}: relaunching with ~${possible} threads (had ${info.threads}).`);
+            return true;
+        }
+    }
+    return false;
 }
 
 function isRunningLabSolver(ns, hostname) {
