@@ -67,10 +67,12 @@ export async function main(ns) {
     let statSample = null; // {at, level, mode}: how fast the gating stat rises without grafts
     let lastMode;
     let needFocus = options.focus; // false once Neuroreceptor Management Implant is owned (no focus penalty then)
+    let starterReserve = 0; // last starter-graft cash requirement (kept fresh while another graft runs)
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
         if (work?.type === "GRAFTING") {
             ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: lastMode ?? "grafting", focus: needFocus }), "w");
+            ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve }), "w");
             if (needFocus) {
                 // Unfocused grafting runs at 0.8x (Player.focusPenalty). infiltrator.js drives the UI and takes focus;
                 // autopilot doesn't relaunch it while the status says focus.
@@ -113,8 +115,8 @@ export async function main(ns) {
         // reserves the casino's $8b for stocks, which left graft.js ~$2b and Enhanced Social Interaction ungrafted.
         const pendingStarters = options["no-starter"] || info.redPill ? [] :
             STARTERS.filter(([name]) => !info.owned.includes(name) && info.augs.some((a) => a.name === name));
-        ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: pendingStarters.reduce((t, [name]) =>
-            t + info.augs.find((a) => a.name === name).cost, 0) }), "w");
+        starterReserve = pendingStarters.reduce((t, [name]) => t + info.augs.find((a) => a.name === name).cost, 0);
+        ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve }), "w");
         const starter = pendingStarters.find(([, ready]) => ready(info.owned));
         const starterAug = starter && info.augs.find((a) => a.name === starter[0]);
         if (starterAug && starterAug.cost <= info.money) {
