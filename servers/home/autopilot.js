@@ -40,7 +40,7 @@ const argsSchema = [
     ], // or... automatically install as soon as we can afford one of these augmentations
     ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
     ["disable-wd-install-check", false], // After The Red Pill, install even if the pending augs bring less hacking multiplier than the Go bonus lost
-    ["darknet-install-hold-minutes", 60], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never)
+    ["darknet-install-hold-minutes", 90], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never; twice as long once it is found). Searches took 26-60+ min (2026-11-17); a cut-short search is lost
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ["time-before-boosting-best-hack-server", 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
     ["reduced-aug-requirement-per-hour", 0.5], // For every hour since the last reset, require this many fewer augs to install.
@@ -1817,7 +1817,7 @@ export async function main(ns) {
         // Twice as long once the labyrinth is found: an install throws away the solver's progress, and moves are slow
         // while charisma is barely above the requirement (BN12.79: Eternal found 32 min in at 3108/3000 charisma, not
         // solved by the 60-minute cap; the next install, at 4152, solved it in minutes)
-        const darknetHoldMs = options["darknet-install-hold-minutes"] * 60_000 * (dnet?.lab ? 2 : 1);
+        const darknetHoldMs = options["darknet-install-hold-minutes"] * 60_000 * (dnet?.lab ? 4 / 3 : 1); // 90 -> 120 min
         if (darknetHoldMs > 0 && !installedAugmentations.includes(augTRP) && getTimeInAug() < darknetHoldMs) {
             const pending = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
             const labRewardPending = options["install-for-augs"].some((a) => pending.includes(a));
