@@ -90,6 +90,8 @@ const LAB_SOLVER_SCRIPT = "/Temp/darknet-lab-solver.js";
 const LAB_SOLVER_RESULT_PORT = 18; // Netscript port for labyrinth solver results
 const LAB_NEIGHBOR_REPORT_PORT = 17; // Netscript port for probe-reported labyrinth neighbors
 const STASIS_SWAP_REQUEST_PORT = 21; // Legacy: probe stasis swap requests (drained, no longer used)
+const METRICS_PORT = 25; // Probes -> orchestrator: {type: "migrate", ...} when they start charging a migration
+const METRICS_FILE = "/data/darknet-metrics.txt"; // JSONL: migrations started and depth changes observed (for tuning)
 const ANCHOR_COMMAND_PORT = 22; // Orchestrator -> probes: {link: [hostnames]} (peeked, not consumed)
 const PROBE_OPTIONS_PORT = 23; // Orchestrator -> probes: the probe options (peeked). Probes can only read files on their
 // own server, so the options file on home never reached them.
@@ -858,6 +860,7 @@ async function orchestrateDarknet(ns, state, options) {
     // server when it is published on ANCHOR_COMMAND_PORT. Older probes may still send swap requests: drain them.
     while (portPeek(ns, STASIS_SWAP_REQUEST_PORT) !== "NULL PORT DATA") portRead(ns, STASIS_SWAP_REQUEST_PORT);
     refreshKnownServers(ns, state);
+    recordMetrics(ns, state);
     await manageAnchors(ns, state, options);
 
     // Step 7: Migration charging (air gap crossing) is done by the probes, at the gap published in the probe options
@@ -1880,6 +1883,28 @@ const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
  * looked up, so every server cracked deeper by probes counted as depth 0: the frontier gap stayed at row 8 and only
  * labyrinth neighbours (+1000) ever scored as anchors. getServerDetails works at any distance.
  */
+/** Measurement for boundary crossing: migrations the probes started (port 25) and every depth change of a known server
+ * (migration or the network's own mutation), noting boundary crossings, anchors and probes. */
+function recordMetrics(ns, state) {
+    const lines = [];
+    while (portPeek(ns, METRICS_PORT) !== "NULL PORT DATA") lines.push(String(portRead(ns, METRICS_PORT)));
+    const now = Date.now();
+    const prev = state.prevDepths ?? new Map();
+    for (const [h, depth] of state.serverDepths) {
+        if (state.labyrinthServers.has(h)) continue;
+        const from = prev.get(h);
+        if (from === undefined || from === depth) continue;
+        lines.push(JSON.stringify({ t: now, type: "move", host: h, from, to: depth,
+            crossed: Math.floor(depth / AIR_GAP_DEPTH) > Math.floor(from / AIR_GAP_DEPTH),
+            anchored: state.stasisServers.has(h), probe: !!state.probeHosts?.has(h) }));
+    }
+    state.prevDepths = new Map(state.serverDepths);
+    if (!lines.length) return;
+    ns.write(METRICS_FILE, lines.join("\n") + "\n", "a");
+    const text = ns.read(METRICS_FILE);
+    if (text.length > 1_000_000) ns.write(METRICS_FILE, text.slice(text.indexOf("\n", text.length - 500_000) + 1), "w");
+}
+
 function refreshKnownServers(ns, state) {
     // Servers with a probe running: the frontier is where our probes are, not where we hold passwords (root access
     // and passwords survive an install, probes don't)

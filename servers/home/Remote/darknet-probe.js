@@ -1690,6 +1690,7 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
             if (threads < 1) return;
             ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
             const pid = ns.exec(MIGRATION_HELPER, host, threads, target);
+            if (pid) portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migrate", host, target, depth, gap, threads })); // metrics
             if (pid) ns.print(`Migrating ${target} (depth ${depth}, gap at ${gap}) with ${threads} threads`);
             return; // one target at a time
         }
