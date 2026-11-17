@@ -1343,8 +1343,15 @@ export async function main(ns) {
 
         // Infiltration earns money and faction rep passively via automated mini-game solving.
         // Note: Unlike work-for-factions, infiltration has no SF requirements (it's DOM-based).
+        // (not while graft.js grafts focused: infiltrator.js's UI navigation takes focus, and unfocused grafting runs at 0.8x)
+        let focusedGraft = false;
+        try {
+            const st = JSON.parse(ns.read("/Temp/graft-status.txt") || "null");
+            focusedGraft = !!st?.focus && !!st?.mode && Date.now() - st.t < 60_000;
+        } catch {}
         if (
             !options["disable-infiltration"] &&
+            !focusedGraft &&
             !findScript("infiltrator.js") &&
             homeRam >= 32 && // Don't waste RAM on infiltration when we're still low on home RAM
             Date.now() - daemonStartTime > 30000 // Wait for daemon to warm up

@@ -22,7 +22,8 @@ const argsSchema = [
     ["min-gain", 0.03], // Only graft if ln(gain) net of entropy is at least this
     ["exp-weight", 0.15], // Weight of the matching exp multiplier relative to the level multiplier
     ["reserve", null], // Keep this much money (default: reserve.txt, i.e. autopilot's reserve)
-    ["focus", false], // Focus on grafting (only matters without Neuroreceptor Manager)
+    ["focus", true], // Graft focused (unfocused work runs at 0.8x without Neuroreceptor Management Implant), stopping
+    // infiltrator.js (its UI navigation takes focus away) and refocusing while grafting. --focus false to keep infiltrating.
     ["once", false], // Graft at most one augmentation, then exit
     ["no-charisma", false], // Don't graft for darknet labyrinth charisma
     ["eta-slack", 1.5], // Hacking mode: skip grafts longer than this times the projected time to reach the target by experience
@@ -48,10 +49,19 @@ export async function main(ns) {
     let moneySample = null, moneyRate = 0; // $/ms, to count the wait for an augmentation we can't afford yet
     let statSample = null; // {at, level, mode}: how fast the gating stat rises without grafts
     let lastMode;
+    let needFocus = options.focus; // false once Neuroreceptor Management Implant is owned (no focus penalty then)
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
         if (work?.type === "GRAFTING") {
-            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: lastMode ?? "grafting" }), "w");
+            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: lastMode ?? "grafting", focus: needFocus }), "w");
+            if (needFocus) {
+                // Unfocused grafting runs at 0.8x (Player.focusPenalty). infiltrator.js drives the UI and takes focus;
+                // autopilot doesn't relaunch it while the status says focus.
+                try {
+                    await getNsDataThroughFile(ns, `ns.scriptKill("infiltrator.js", "home")`, "/Temp/graft-kill-infiltrator.txt");
+                    await getNsDataThroughFile(ns, `ns.singularity.isFocused() || ns.singularity.setFocus(true)`, "/Temp/graft-refocus.txt");
+                } catch {}
+            }
             await ns.sleep(15_000);
             continue;
         }
@@ -79,6 +89,7 @@ export async function main(ns) {
                 stats: ns.singularity.getAugmentationStats(name) }]))`,
             "/Temp/graft-aug-details.txt", graftable.map((a) => a.name));
         info.augs = graftable.map((a) => ({ ...a, ...details[a.name] }));
+        needFocus = options.focus && !info.owned.includes("Neuroreceptor Management Implant");
 
         // What gates us now?
         let mode = null, target = 0;
@@ -170,7 +181,7 @@ export async function main(ns) {
             }
         }
         const started = await getNsDataThroughFile(ns, `ns.grafting.graftAugmentation(ns.args[0], ns.args[1])`,
-            "/Temp/graft-start.txt", [choice.name, options.focus]);
+            "/Temp/graft-start.txt", [choice.name, needFocus]);
         if (!started) {
             log(ns, `WARNING: Failed to start grafting ${choice.name}. Retrying in a minute.`, false, "warning");
             await ns.sleep(60_000);
