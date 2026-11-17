@@ -28,6 +28,7 @@ const argsSchema = [
     ["no-charisma", false], // Don't graft for darknet labyrinth charisma
     ["charisma-margin", 1.3], // Charisma mode grafts up to this times the labyrinth's requirement (moves are slow near it)
     ["eta-slack", 1.5], // Hacking mode: skip grafts longer than this times the projected time to reach the target by experience
+    ["no-starter", false], // Don't graft the starter augmentations first (Neuroreceptor, Enhanced Social Interaction)
 ];
 export function autocomplete(data) {
     data.flags(argsSchema);
@@ -43,6 +44,16 @@ const nextLabCharisma = (owned) => LABS.find(([reward]) => !owned.includes(rewar
 const ENTROPY = Math.log(0.98);
 const IDLE_MS = 2 * 60_000;
 const STATUS_FILE = "/Temp/graft-status.txt"; // {t, mode}: read by autopilot.js
+const GRAFT_RESERVE_FILE = "/Temp/graft-reserve.txt"; // {t, amount}: cash the starter grafts need (autopilot, stockmaster)
+// Starter grafts, in order, with when each may start (from the augmentations owned): Neuroreceptor Management Implant
+// ($1.65b, ~11 min) removes the unfocused-work penalty for the whole BitNode (grafts no longer need focus, so
+// infiltrator.js keeps running); Enhanced Social Interaction Implant ($4.1b, ~47 min, charisma x1.6) pays at every
+// labyrinth from Merciless, but starts after Cruel's install (the first two labyrinths' installs come within ~15 minutes
+// and would cancel it).
+const STARTERS = [
+    ["Neuroreceptor Management Implant", () => true],
+    ["Enhanced Social Interaction Implant", (owned) => owned.includes("The B00ts of Perseus")],
+];
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -96,6 +107,33 @@ export async function main(ns) {
             "/Temp/graft-aug-details.txt", graftable.map((a) => a.name));
         info.augs = graftable.map((a) => ({ ...a, ...details[a.name] }));
         needFocus = options.focus && !info.owned.includes("Neuroreceptor Management Implant");
+
+        // Starter grafts: worth their price for the whole BitNode, so they come first and skip the reserve. Their cost is
+        // published (GRAFT_RESERVE_FILE) so autopilot adds it to reserve.txt and stockmaster keeps it as cash: autopilot
+        // reserves the casino's $8b for stocks, which left graft.js ~$2b and Enhanced Social Interaction ungrafted.
+        const pendingStarters = options["no-starter"] || info.redPill ? [] :
+            STARTERS.filter(([name]) => !info.owned.includes(name) && info.augs.some((a) => a.name === name));
+        ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: pendingStarters.reduce((t, [name]) =>
+            t + info.augs.find((a) => a.name === name).cost, 0) }), "w");
+        const starter = pendingStarters.find(([, ready]) => ready(info.owned));
+        const starterAug = starter && info.augs.find((a) => a.name === starter[0]);
+        if (starterAug && starterAug.cost <= info.money) {
+            // (status "charisma": a labyrinth reward's install may cancel it unless it's nearly done, see autopilot)
+            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: "charisma", focus: needFocus }), "w");
+            lastMode = "charisma";
+            if (info.city !== "New Tokyo" &&
+                !(await getNsDataThroughFile(ns, `ns.singularity.travelToCity("New Tokyo")`, "/Temp/graft-travel.txt"))) {
+                await ns.sleep(60_000);
+                continue;
+            }
+            if (await getNsDataThroughFile(ns, `ns.grafting.graftAugmentation(ns.args[0], ns.args[1])`,
+                "/Temp/graft-start.txt", [starterAug.name, needFocus])) {
+                log(ns, `INFO: Starter graft: ${starterAug.name} (${formatMoney(starterAug.cost)}, ${formatDuration(starterAug.time)}).`, true, "info");
+                lastStart = { name: starterAug.name, at: Date.now(), time: starterAug.time };
+                await ns.sleep(20_000);
+            } else await ns.sleep(60_000);
+            continue;
+        }
 
         // What gates us now?
         let mode = null, target = 0;

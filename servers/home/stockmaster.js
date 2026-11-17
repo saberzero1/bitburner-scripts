@@ -77,6 +77,16 @@ export function autocomplete(data, args) {
 
 /** Requires access to the TIX API. Purchases access to the 4S Mkt Data API as soon as it can
  * @param {NS} ns */
+/** Cash graft.js needs for its starter grafts (/Temp/graft-reserve.txt, fresh within 5 minutes): kept out of stocks. */
+function graftReserve(ns) {
+    try {
+        const r = JSON.parse(ns.read("/Temp/graft-reserve.txt") || "null");
+        return r && Date.now() - r.t < 5 * 60_000 ? Number(r.amount) || 0 : 0;
+    } catch {
+        return 0;
+    }
+}
+
 export async function main(ns) {
     const runOptions = getConfiguration(ns, argsSchema);
     if (!runOptions) return; // Invalid options, or ran in --help mode.
@@ -173,9 +183,9 @@ export async function main(ns) {
             await ns.sleep(sleepInterval);
             try {
                 const reserve =
-                    options["reserve"] != null
+                    (options["reserve"] != null
                         ? options["reserve"]
-                        : Number(ns.read("reserve.txt") || 0);
+                        : Number(ns.read("reserve.txt") || 0)) + graftReserve(ns);
                 player = await getPlayerInfo(ns);
                 success = await tryGetStockMarketAccess(
                     ns,
@@ -231,10 +241,11 @@ export async function main(ns) {
     while (true) {
         try {
             const playerStats = await getPlayerInfo(ns);
+            // (+ graft.js's starter-graft cash: autopilot runs us with --reserve 0, so we'd invest it otherwise)
             const reserve =
-                options["reserve"] != null
+                (options["reserve"] != null
                     ? options["reserve"]
-                    : Number(ns.read("reserve.txt") || 0);
+                    : Number(ns.read("reserve.txt") || 0)) + graftReserve(ns);
             // Get all market data in one temp script - unless the market cannot have ticked since our last fetch and we haven't traded since
             const snapshot = await getMarketSnapshot(ns, allStocks);
             // Check whether we have 4s access yes (once we do, we can stop checking)

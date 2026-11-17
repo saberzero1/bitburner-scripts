@@ -1725,7 +1725,7 @@ export async function main(ns) {
                 }
                 log(ns, purchaseChangeLog, true);
             }
-            ns.write("reserve.txt", totalCost, "w"); // Should prevent other scripts from spending this money
+            writeReserve(ns, totalCost); // Should prevent other scripts from spending this money
         }
         // We must wait until the configured cooldown elapses before we install augs.
         if (installCountdown > Date.now()) {
@@ -2067,9 +2067,9 @@ export async function main(ns) {
         const currentReserve = Number(ns.read("reserve.txt") || 0);
         if (reservingMoneyForDaedalus)
             // Reserve 100b to get the daedalus invite
-            return currentReserve == 100e9
+            return currentReserve == 100e9 + graftReserve(ns)
                 ? true
-                : ns.write("reserve.txt", 100e9, "w");
+                : writeReserve(ns, 100e9);
         // Otherwise, reserve money for stocks for a while, as it's our main source of income early in the BN
         // It also acts as a decent way to save up for augmentations
         const minStockValue = 8e9; // At a minimum 8 of the 10 billion earned from the casino must be reserved for buying stock
@@ -2088,9 +2088,9 @@ export async function main(ns) {
                 minStockValue - stocksValue,
             ),
         );
-        return currentReserve == reserve
+        return currentReserve == reserve + graftReserve(ns)
             ? true
-            : ns.write("reserve.txt", reserve, "w"); // Reserve for stocks
+            : writeReserve(ns, reserve); // Reserve for stocks
         // NOTE: After several iterations, I decided that the above is actually best to keep in all scenarios:
         // - Casino.js ignores the reserve, so the above takes care of ensuring our casino seed money isn't spent
         // - In low-income situations, stockmaster will be our best source of income. We invoke it such that it ignores
@@ -2209,6 +2209,21 @@ export async function main(ns) {
      * @param {string} message The message to log, only if it hasn't been previously logged.
      * @param {boolean} alsoPrintToTerminal Set to true to print not only to the current script's tail file, but to the terminal
      * @param {""|"success"|"warning"|"error"|"info"} toastStyle - If specified, your log will will also become a toast notification */
+    /** Cash graft.js needs for its starter grafts (/Temp/graft-reserve.txt, fresh within 5 minutes). */
+    function graftReserve(ns) {
+        try {
+            const r = JSON.parse(ns.read("/Temp/graft-reserve.txt") || "null");
+            return r && Date.now() - r.t < 5 * 60_000 ? Number(r.amount) || 0 : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    /** Write reserve.txt, adding graft.js's starter-graft cash so other scripts (which respect reserve.txt) leave it. */
+    function writeReserve(ns, amount) {
+        return ns.write("reserve.txt", amount + graftReserve(ns), "w");
+    }
+
     function log_once(ns, message, alsoPrintToTerminal, toastStyle) {
         // Messages that differ only in their numbers count as the same: "Not boosting servers ... hack income ($705/s)"
         // was logged every 10 s with a new figure, flooding the log (its tail is all that getScriptLogs returns)
