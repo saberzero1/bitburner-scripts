@@ -111,8 +111,10 @@ export async function main(ns) {
             }
 
             // Free blocked RAM on neighbours remotely (memoryReallocation needs admin, i.e. a known password):
-            // labyrinth neighbours first (they host solvers), then the most blocked RAM
-            try {
+            // labyrinth neighbours first (they host solvers), then the most blocked RAM. Only once our own host is
+            // free: freeing our own RAM compounds (each call makes room for more threads), and remote jobs took the
+            // RAM our local job needed to grow (2026-11-17).
+            if (runGetBlockedRam(ns, HOST) <= 0) try {
                 const labNeighbors = loadProbeOptions(ns, OPTIONS_FILE).labNeighbors;
                 const targets = nearbyServers.filter((h) => passwords.has(h))
                     .map((h) => ({ h, lab: labNeighbors.includes(h), blocked: runGetBlockedRam(ns, h) }))
