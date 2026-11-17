@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 54;
+const PROBE_VERSION = 55;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -130,6 +130,8 @@ export async function main(ns) {
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
             await manageWorker(ns, OPTIONS_FILE, HOST);
             await manageStasis(ns, OPTIONS_FILE, HOST, passwords);
+            await requestOwnMigration(ns, OPTIONS_FILE, HOST);
+            await serveMigrationRequests(ns, OPTIONS_FILE, HOST);
             await attemptMigrationCharging(ns, OPTIONS_FILE, HOST);
             await checkAndUnleashStormSeed(ns, HOST);
             await deployHackScript(ns, OPTIONS_FILE);
@@ -1297,6 +1299,7 @@ function loadProbeOptions(ns, filePath) {
         workerStock: "",
         labNeighbors: [],
         frontierGap: 0,
+        migrationRequests: [],
     };
     try {
         const published = portPeek(ns, PROBE_OPTIONS_PORT);
@@ -1321,6 +1324,7 @@ function loadProbeOptions(ns, filePath) {
             workerStock: typeof parsed.workerStock === "string" ? parsed.workerStock : "",
             labNeighbors: Array.isArray(parsed.labNeighbors) ? parsed.labNeighbors : [],
             frontierGap: Number(parsed.frontierGap) || 0,
+            migrationRequests: Array.isArray(parsed.migrationRequests) ? parsed.migrationRequests : [],
         };
     } catch {
         return defaults;
@@ -1656,6 +1660,70 @@ const MIGRATION_HELPER_SOURCE =
     `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch{return;}` +
     `if(!r||!r.success||r.progress>=1||(i>0&&r.progress===0))return;}}`;
 const MIGRATION_THREAD_RAM = 5.6; // 1.6 base + 4.0 induceServerMigration
+
+// ===== Requested migrations (2026-11-17) =====
+// Live, probes started no migrations: one 16 GB host can't afford a single 5.6 GB thread next to its probe, and few
+// neighbours were close enough to the gap to qualify. A migration's charge is kept per target server (the engine's
+// migrationInductionServers), so several neighbours can charge the same server at once. Servers whose own difficulty puts
+// a migration past the gap ask for it (MIGRATION_REQUEST_PORT -> darknet.js -> probe options), and every probe next to a
+// requested server charges it with all its spare RAM, pausing its worker.
+const MIGRATION_REQUEST_PORT = 26;
+const MIGRATION_REQUEST_INTERVAL = 60_000;
+const MIGRATION_SERVE_HEADROOM_GB = 3; // a 16 GB host with a 7 GB probe can then afford one thread
+let lastMigrationRequest = 0;
+
+/** Ask darknet.js to have our neighbours migrate us, if our difficulty makes landing past the gap likely. */
+async function requestOwnMigration(ns, optionsFile, host) {
+    if (host === "home" || host === "darkweb" || Date.now() - lastMigrationRequest < MIGRATION_REQUEST_INTERVAL) return;
+    lastMigrationRequest = Date.now();
+    const options = loadProbeOptions(ns, optionsFile);
+    const gap = options.frontierGap;
+    if (!options.enableMigration || !gap || options.labNeighbors.includes(host)) return;
+    try {
+        const me = await getAuthDetails(ns, host);
+        if (!me || me.isStationary || typeof me.depth !== "number" || me.depth >= gap || typeof me.difficulty !== "number") return;
+        const chance = Math.max(0, Math.min(7, me.difficulty + 4 - gap)) / 7;
+        if (chance < MIGRATION_MIN_CHANCE) return;
+        if (((await runGetStasisList(ns)) || []).includes(host)) return; // anchored servers can't move
+        let chargers = 0;
+        for (const n of (await runScan(ns)) || []) {
+            if (n === host) continue;
+            const procs = (await nsPs(ns, n)) || [];
+            if (procs.some((p) => /darknet-probe/.test(p.filename))) chargers++;
+        }
+        if (chargers < 1) return;
+        portWrite(ns, MIGRATION_REQUEST_PORT, JSON.stringify({ t: Date.now(), host, chance: +chance.toFixed(2), chargers, depth: me.depth, gap }));
+    } catch {}
+}
+
+/** Charge a neighbour that asked to be migrated (see requestOwnMigration), with all our spare RAM. */
+async function serveMigrationRequests(ns, optionsFile, host) {
+    if (host === "home") return;
+    const options = loadProbeOptions(ns, optionsFile);
+    if (!options.enableMigration || !options.migrationRequests.length) return;
+    try {
+        const procs = (await nsPs(ns, host)) || [];
+        if (procs.some((p) => /dnet-migrate/.test(p.filename))) return; // already charging
+        const nearby = new Set((await runScan(ns)) || []);
+        const req = options.migrationRequests.find((r) => r?.host && r.host !== host && nearby.has(r.host));
+        if (!req) return;
+        const workerRam = procs.filter((p) => /darknet-worker-/.test(p.filename)).reduce((t, p) => t + p.threads * WORKER_THREAD_RAM, 0);
+        const spare = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) + workerRam - MIGRATION_SERVE_HEADROOM_GB;
+        if (Math.floor(spare / MIGRATION_THREAD_RAM) < 1) return;
+        for (const p of procs.filter((p) => /darknet-worker-/.test(p.filename))) await nsKill(ns, p.pid);
+        await ns.sleep(100);
+        const threads = Math.floor((nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) - MIGRATION_SERVE_HEADROOM_GB) / MIGRATION_THREAD_RAM);
+        if (threads < 1) return;
+        ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
+        const pid = ns.exec(MIGRATION_HELPER, host, threads, req.host);
+        if (pid) {
+            portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migrate", requested: true, host, target: req.host, threads, chance: req.chance }));
+            ns.print(`Charging requested migration of ${req.host} (~${Math.round((req.chance ?? 0) * 100)}% to cross) with ${threads} threads`);
+        }
+    } catch (err) {
+        logError(ns, `Requested migration error`, err);
+    }
+}
 
 async function attemptMigrationCharging(ns, optionsFile, hostname) {
     const options = loadProbeOptions(ns, optionsFile);

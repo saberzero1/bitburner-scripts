@@ -90,6 +90,7 @@ const LAB_SOLVER_SCRIPT = "/Temp/darknet-lab-solver.js";
 const LAB_SOLVER_RESULT_PORT = 18; // Netscript port for labyrinth solver results
 const LAB_NEIGHBOR_REPORT_PORT = 17; // Netscript port for probe-reported labyrinth neighbors
 const STASIS_SWAP_REQUEST_PORT = 21; // Legacy: probe stasis swap requests (drained, no longer used)
+const MIGRATION_REQUEST_PORT = 26; // Probes -> orchestrator: {host, chance, chargers} servers that ask to be migrated
 const METRICS_PORT = 25; // Probes -> orchestrator: {type: "migrate", ...} when they start charging a migration
 const METRICS_FILE = "/data/darknet-metrics.txt"; // JSONL: migrations started and depth changes observed (for tuning)
 const ANCHOR_COMMAND_PORT = 22; // Orchestrator -> probes: {link: [hostnames]} (peeked, not consumed)
@@ -157,7 +158,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 54; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 55; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1885,6 +1886,22 @@ const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
  */
 /** Measurement for boundary crossing: migrations the probes started (port 25) and every depth change of a known server
  * (migration or the network's own mutation), noting boundary crossings, anchors and probes. */
+/** Servers that asked to be migrated past the gap (probes' requestOwnMigration), freshest 3 minutes, best first by
+ * crossing chance x chargers (capped at 3): their neighbours' probes charge them together. */
+function collectMigrationRequests(ns, state) {
+    const reqs = (state.migrationRequests ??= new Map());
+    while (portPeek(ns, MIGRATION_REQUEST_PORT) !== "NULL PORT DATA") {
+        try {
+            const r = JSON.parse(String(portRead(ns, MIGRATION_REQUEST_PORT)));
+            if (r?.host) reqs.set(r.host, r);
+        } catch {}
+    }
+    const now = Date.now();
+    for (const [h, r] of reqs) if (now - r.t > 180_000 || state.stasisServers.has(h)) reqs.delete(h);
+    return [...reqs.values()].sort((a, b) => b.chance * Math.min(b.chargers, 3) - a.chance * Math.min(a.chargers, 3))
+        .slice(0, 5).map((r) => ({ host: r.host, chance: r.chance }));
+}
+
 function recordMetrics(ns, state) {
     const lines = [];
     while (portPeek(ns, METRICS_PORT) !== "NULL PORT DATA") lines.push(String(portRead(ns, METRICS_PORT)));
@@ -2779,6 +2796,7 @@ async function writeProbeOptions(ns, options, state) {
     const labNeighbors = [...state.labyrinthNeighbors.values()].flatMap((set) => [...set]);
     const payload = {
         frontierGap: options["enable-migration"] ? getFrontierGap(ns, state) : 0,
+        migrationRequests: collectMigrationRequests(ns, state),
         ...(await chooseWorkerMode(ns, options, state)),
         labNeighbors,
         enablePhishing: Boolean(options["enable-phishing"]),
