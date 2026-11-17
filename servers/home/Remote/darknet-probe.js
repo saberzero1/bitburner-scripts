@@ -111,15 +111,18 @@ export async function main(ns) {
             }
 
             // Free blocked RAM on neighbours remotely (memoryReallocation needs admin, i.e. a known password):
-            // labyrinth neighbours first (they host solvers), then the most blocked RAM. Only once our own host is
-            // free: freeing our own RAM compounds (each call makes room for more threads), and remote jobs took the
-            // RAM our local job needed to grow (2026-11-17).
-            if (runGetBlockedRam(ns, HOST) <= 0) try {
+            // labyrinth neighbours first (they host solvers), then neighbours too blocked to host a probe, then the most
+            // blocked RAM. While our own host still has blocked RAM (freeing it compounds), only neighbours that can't
+            // fit a probe yet: waiting for our own host to be fully free stalled the frontier (BN12.79: no probe could
+            // be deployed past depth 4 for 25 minutes, and Uber wasn't found within the 60-minute install hold).
+            try {
+                const ownBlocked = runGetBlockedRam(ns, HOST) > 0;
                 const labNeighbors = loadProbeOptions(ns, OPTIONS_FILE).labNeighbors;
                 const targets = nearbyServers.filter((h) => passwords.has(h))
-                    .map((h) => ({ h, lab: labNeighbors.includes(h), blocked: runGetBlockedRam(ns, h) }))
-                    .filter((t) => t.blocked > 0)
-                    .sort((a, b) => b.lab - a.lab || b.blocked - a.blocked);
+                    .map((h) => ({ h, lab: labNeighbors.includes(h), blocked: runGetBlockedRam(ns, h),
+                        cramped: nsGetServerMaxRam(ns, h) - nsGetServerUsedRam(ns, h) < PROBE_FIT_GB }))
+                    .filter((t) => t.blocked > 0 && (!ownBlocked || t.cramped))
+                    .sort((a, b) => b.lab - a.lab || b.cramped - a.cramped || b.blocked - a.blocked);
                 for (const t of targets) await freeNeighborBlockedRam(ns, t.h);
             } catch {}
 
@@ -3676,6 +3679,7 @@ const AUTH_TIMEOUT_CODE = 408;
 // much per call, so they run in temp scripts with the host's spare RAM (tools/dnet-sim/CrossSim: at low charisma,
 // 1-thread cracking never reached the Eternal labyrinth in 24h). They use the RAM workers leave free (WORKER_RESERVE_*):
 // pausing workers for them stopped the workers for good, since a probe nearly always has something to crack.
+const PROBE_FIT_GB = 12; // free RAM a neighbour needs to host a probe (~7 GB) plus its first temp scripts
 const HELPER_HEADROOM_GB = 4; // left for the probe's other temp scripts (ps, kill, scp: up to ~2.3 GB; openCache 3.6 GB)
 const HELPER_MAX_THREADS = 64;
 function helperThreads(ns, ramPerThread) {
