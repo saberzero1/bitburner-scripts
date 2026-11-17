@@ -26,7 +26,11 @@ export async function main(ns) {
 
     while (true) {
         try {
-            // Free blocked RAM FIRST — maximizes available RAM for all subsequent operations
+            // Open cache files first: a solved labyrinth's reward is one (autopilot holds installs until it is pending).
+            // They were opened only after the whole neighbour loop, and RAM freeing left too little RAM for it, so a
+            // freshly cracked server could sit on its cache for a long time (2026-11-17).
+            await handleCacheFiles(ns, HOST);
+            // Then free blocked RAM — maximizes available RAM for all subsequent operations
             await freeBlockedRam(ns);
 
             const nearbyServers = (await runScan(ns)) || [];
@@ -3670,7 +3674,7 @@ const AUTH_TIMEOUT_CODE = 408;
 // much per call, so they run in temp scripts with the host's spare RAM (tools/dnet-sim/CrossSim: at low charisma,
 // 1-thread cracking never reached the Eternal labyrinth in 24h). They use the RAM workers leave free (WORKER_RESERVE_*):
 // pausing workers for them stopped the workers for good, since a probe nearly always has something to crack.
-const HELPER_HEADROOM_GB = 3; // left for the probe's other temp scripts (ps, kill, scp: up to ~2.3 GB each)
+const HELPER_HEADROOM_GB = 4; // left for the probe's other temp scripts (ps, kill, scp: up to ~2.3 GB; openCache 3.6 GB)
 const HELPER_MAX_THREADS = 64;
 function helperThreads(ns, ramPerThread) {
     const host = ns.getHostname();
