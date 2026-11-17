@@ -1801,6 +1801,16 @@ function wrapEventListeners() {
 /** Infiltrating takes the UI away from the player's work (faction work, crime), which then runs unfocused (0.8x without
  * Neuroreceptor Management Implant) and nothing gave focus back (2026-11-17). Called whenever we release the infiltration
  * lock to wait: if there is current work and it isn't focused, focus it. (The casino and focused grafts stop this script.) */
+/** Sleep while the infiltration lock is released, keeping the player's work focused: work-for-factions.js restarts its
+ * work a few seconds after we release the lock, so focus is re-checked every 5 s rather than once. */
+async function sleepFocused(ns, ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+        await restoreWorkFocus(ns);
+        await ns.sleep(Math.min(5000, Math.max(0, end - Date.now())));
+    }
+}
+
 async function restoreWorkFocus(ns) {
     try {
         await getNsDataThroughFile(ns,
@@ -2141,8 +2151,7 @@ export async function main(ns) {
             }
             if (options["sleep-Between-Infiltration-Time"]) {
                 portClear(ns, 30); // Release lock so faction worker can run during downtime
-                await restoreWorkFocus(ns);
-                await ns.sleep(options["sleep-Between-Infiltration-Time"]);
+                await sleepFocused(ns, options["sleep-Between-Infiltration-Time"]);
                 portWrite(ns, 30, ns.pid); // Re-acquire lock before next infiltration
             }
 
@@ -2227,8 +2236,7 @@ export async function main(ns) {
                         verbose,
                     );
                     portClear(ns, 30); // Release lock during market demand wait
-                    await restoreWorkFocus(ns);
-                    await ns.sleep(delay);
+                    await sleepFocused(ns, delay);
                     portWrite(ns, 30, ns.pid); // Re-acquire lock
                 }
             }
@@ -2245,8 +2253,7 @@ export async function main(ns) {
         if (goal === null && Object.values(pausedFactions).some((t) => t > Date.now())) {
             // Factions still need rep, but faction work earns it faster: don't stop that work to infiltrate for money
             portClear(ns, 30);
-            await restoreWorkFocus(ns);
-            await ns.sleep(PAUSE_MS);
+            await sleepFocused(ns, PAUSE_MS);
             portWrite(ns, 30, ns.pid);
             player = await getPlayerInfo(ns);
             locations = await getLocations(ns, verbose);
