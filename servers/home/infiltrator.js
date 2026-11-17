@@ -1798,6 +1798,17 @@ function wrapEventListeners() {
     }
 }
 
+/** Infiltrating takes the UI away from the player's work (faction work, crime), which then runs unfocused (0.8x without
+ * Neuroreceptor Management Implant) and nothing gave focus back (2026-11-17). Called whenever we release the infiltration
+ * lock to wait: if there is current work and it isn't focused, focus it. (The casino and focused grafts stop this script.) */
+async function restoreWorkFocus(ns) {
+    try {
+        await getNsDataThroughFile(ns,
+            "(() => { const w = ns.singularity.getCurrentWork(); return !!w && !ns.singularity.isFocused() && ns.singularity.setFocus(true); })()",
+            "/Temp/infiltrator-refocus.txt");
+    } catch {} // (no SF4, or no RAM for the temp script: nothing to do)
+}
+
 function restoreEventListeners() {
     if (doc._addEventListener) {
         doc.addEventListener = doc._addEventListener;
@@ -2130,6 +2141,7 @@ export async function main(ns) {
             }
             if (options["sleep-Between-Infiltration-Time"]) {
                 portClear(ns, 30); // Release lock so faction worker can run during downtime
+                await restoreWorkFocus(ns);
                 await ns.sleep(options["sleep-Between-Infiltration-Time"]);
                 portWrite(ns, 30, ns.pid); // Re-acquire lock before next infiltration
             }
@@ -2192,6 +2204,7 @@ export async function main(ns) {
                         `Infiltration timed out or failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
                     );
                     portClear(ns, 30);
+                    await restoreWorkFocus(ns);
                     await ns.sleep(2000);
                     portWrite(ns, 30, ns.pid);
                 } else {
@@ -2214,6 +2227,7 @@ export async function main(ns) {
                         verbose,
                     );
                     portClear(ns, 30); // Release lock during market demand wait
+                    await restoreWorkFocus(ns);
                     await ns.sleep(delay);
                     portWrite(ns, 30, ns.pid); // Re-acquire lock
                 }
@@ -2231,6 +2245,7 @@ export async function main(ns) {
         if (goal === null && Object.values(pausedFactions).some((t) => t > Date.now())) {
             // Factions still need rep, but faction work earns it faster: don't stop that work to infiltrate for money
             portClear(ns, 30);
+            await restoreWorkFocus(ns);
             await ns.sleep(PAUSE_MS);
             portWrite(ns, 30, ns.pid);
             player = await getPlayerInfo(ns);
@@ -2252,6 +2267,7 @@ export async function main(ns) {
             const outcome = await infiltrateForMoney(ns, player, maxMoney, forceTarget, stock, 10);
             if (outcome !== "loop-cap") break; // reached the money target (or gave up)
             portClear(ns, 30); // release the lock so other scripts can use the gap
+            await restoreWorkFocus(ns);
             await ns.sleep(30000);
             portWrite(ns, 30, ns.pid);
             player = await getPlayerInfo(ns);
