@@ -1787,6 +1787,17 @@ export async function main(ns) {
             const pendingAugs = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
             const labRewardPending = options["install-for-augs"].some((a) => pendingAugs.includes(a));
             if (!(graftMode === "charisma" && labRewardPending)) return true;
+            // ...unless the charisma graft is nearly done: BN12.82's Merciless install cancelled a TITN-41 graft 22 minutes in,
+            // and graft.js started it over
+            try {
+                const remainingMs = await getNsDataThroughFile(ns,
+                    "(() => { const w = ns.singularity.getCurrentWork(); return w?.type === 'GRAFTING' ? ns.grafting.getAugmentationGraftTime(w.augmentation) - w.cyclesWorked * 200 : 0; })()",
+                    "/Temp/graft-remaining.txt");
+                if (remainingMs > 0 && remainingMs <= 10 * 60_000) {
+                    setStatus(ns, `Waiting ~${formatDuration(remainingMs)} for the charisma graft to finish before installing the labyrinth reward.`);
+                    return true;
+                }
+            } catch {}
         }
         // After The Red Pill only hacking level gates the BitNode. An install resets Go stats (the World Daemon's bonus is
         // a hacking level multiplier, +80% after 14 minutes of games in BN12.77) and hacking experience, so it must bring
