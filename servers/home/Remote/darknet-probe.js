@@ -102,14 +102,20 @@ export async function main(ns) {
                     failedServers.set(hostname, prev);
                 }
 
-                // Try to free blocked RAM on this neighbor remotely.
-                // Only attempt if we have admin (password known) — memoryReallocation requires it.
-                if (passwords.has(hostname)) {
-                    try {
-                        await freeNeighborBlockedRam(ns, hostname);
-                    } catch {}
-                }
+                // A local freeing job that outgrew its threads is relaunched bigger right away (not next loop)
+                await freeBlockedRam(ns);
             }
+
+            // Free blocked RAM on neighbours remotely (memoryReallocation needs admin, i.e. a known password):
+            // labyrinth neighbours first (they host solvers), then the most blocked RAM
+            try {
+                const labNeighbors = loadProbeOptions(ns, OPTIONS_FILE).labNeighbors;
+                const targets = nearbyServers.filter((h) => passwords.has(h))
+                    .map((h) => ({ h, lab: labNeighbors.includes(h), blocked: runGetBlockedRam(ns, h) }))
+                    .filter((t) => t.blocked > 0)
+                    .sort((a, b) => b.lab - a.lab || b.blocked - a.blocked);
+                for (const t of targets) await freeNeighborBlockedRam(ns, t.h);
+            } catch {}
 
             await handleCacheFiles(ns, HOST);
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
@@ -970,6 +976,8 @@ function buildRamFreeScript(isRemote) {
         `  try { startBlocked = ${blockedCall}; } catch {}`,
         `  let iterations = 0;`,
         `  const maxIter = 200;`,
+        `  const host = String(ns.args[2]), threads = Number(ns.args[3]); // (args, not getHostname/getRunningScript: RAM)`,
+        `  let grow = false;`,
         `  for (let i = 0; i < maxIter; i++) {`,
         `    iterations++;`,
         `    let blocked = 0;`,
@@ -979,12 +987,14 @@ function buildRamFreeScript(isRemote) {
         `      const r = await (${memCall});`,
         `      if (!r || !r.success) break;`,
         `    } catch { break; }`,
+        `    // Freed RAM on our own host makes room for more threads: exit so the probe relaunches us bigger`,
+        `    if (ns.getServerMaxRam(host) - ns.getServerUsedRam(host) >= 0.5 * threads * ${RAM_FREE_SCRIPT_COST} + 3) { grow = true; break; }`,
         `    await ns.sleep(50);`,
         `  }`,
         `  let endBlocked = startBlocked;`,
         `  try { endBlocked = ${blockedCall}; } catch {}`,
         `  totalFreed = startBlocked - endBlocked;`,
-        `  ns.write(rf, JSON.stringify({ target, totalFreed, startBlocked, endBlocked, iterations, threads: ns.getRunningScript().threads }), "w");`,
+        `  ns.write(rf, JSON.stringify({ target, totalFreed, startBlocked, endBlocked, iterations, threads, grow }), "w");`,
         `}`,
     ].join("\n");
 }
@@ -1008,14 +1018,18 @@ function spawnRamFreeJob(ns, execHost, targetHost, isRemote) {
     ns.write(scriptFile, script, "w");
     ns.write(resultFile, "<pending>", "w");
 
+    // Freeing per call is proportional to threads (0.02 x 2 x 0.92^(difficulty+1) x threads x (1 + cha/100) GB), so use
+    // what fits; a remote job takes at most half our spare RAM so the next neighbour gets some too
     const free = nsGetServerMaxRam(ns, execHost) - nsGetServerUsedRam(ns, execHost) - HELPER_HEADROOM_GB;
-    const threads = Math.max(1, Math.min(128, Math.floor(free / RAM_FREE_SCRIPT_COST)));
+    const threads = Math.max(1, Math.min(1024, Math.floor((isRemote ? free / 2 : free) / RAM_FREE_SCRIPT_COST)));
     const pid = ns.exec(
         scriptFile,
         execHost,
         { threads, ramOverride: RAM_FREE_SCRIPT_COST },
         targetHost,
         resultFile,
+        execHost,
+        threads,
     );
     if (!pid) return 0;
 
@@ -1044,6 +1058,7 @@ function cleanupRamFreeJob(ns, targetHost) {
         // Job completed
         try {
             const result = JSON.parse(data);
+            if (result.grow) ramFreeLastCheck.set(targetHost, 0); // relaunch with more threads on the next call
             if (result.totalFreed > 0) {
                 ns.print(
                     `RAM-free: ${job.isRemote ? "remote" : "local"} job on ${job.execHost} freed ${result.totalFreed.toFixed(2)} GB on ${targetHost} in ${result.iterations} iterations`,
