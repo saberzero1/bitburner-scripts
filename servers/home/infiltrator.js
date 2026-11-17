@@ -1814,7 +1814,10 @@ async function sleepFocused(ns, ms) {
 async function restoreWorkFocus(ns) {
     try {
         await getNsDataThroughFile(ns,
-            "(() => { const w = ns.singularity.getCurrentWork(); return !!w && !ns.singularity.isFocused() && ns.singularity.setFocus(true); })()",
+            // (not with Neuroreceptor Management Implant: unfocused work then runs at full speed, and refocusing every 5 s
+            // only pulled the UI back to the work page)
+            "(() => { if (ns.singularity.getOwnedAugmentations().includes('Neuroreceptor Management Implant')) return false; " +
+            "const w = ns.singularity.getCurrentWork(); return !!w && !ns.singularity.isFocused() && ns.singularity.setFocus(true); })()",
             "/Temp/infiltrator-refocus.txt");
     } catch {} // (no SF4, or no RAM for the temp script: nothing to do)
 }
