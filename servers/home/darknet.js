@@ -2751,6 +2751,22 @@ function cleanupOrphanedProbes(ns, state) {
 
 /** What probes do with their host's spare RAM (see manageWorker in darknet-probe.js): charisma (promoteStock) while
  * it's below the current labyrinth's requirement, else phishing for money. Charisma restarts at every install. */
+// Labyrinth rewards in order (outside BN15) and the charisma each labyrinth requires
+const LAB_CHARISMA = [["The W1ngs of Icarus", 300], ["The B00ts of Perseus", 600], ["The H4mmer of Daedalus", 1500],
+    ["The St4ff of Asclepius", 2500], ["The L4w of Bayes", 3000], ["The B1ade of Solomonoff", 3500], ["The Red Pill", 4000]];
+/** Charisma the next labyrinth requires, from the labyrinth rewards owned (cached per minute with the worker check). */
+async function nextLabCharisma(ns, state) {
+    if (state.nextLabChaAt && Date.now() - state.nextLabChaAt < 60_000) return state.nextLabCha;
+    state.nextLabChaAt = Date.now();
+    try {
+        const owned = await getNsDataThroughFile(ns, "ns.singularity.getOwnedAugmentations(true)", "/Temp/darknet-owned-augs.txt");
+        state.nextLabCha = LAB_CHARISMA.find(([reward]) => !owned.includes(reward))?.[1] ?? 0;
+    } catch {
+        state.nextLabCha = 0;
+    }
+    return state.nextLabCha;
+}
+
 async function chooseWorkerMode(ns, options, state) {
     if (options["worker"] === "off") return { workerMode: "off", workerStock: "" };
     if (!state.workerCheckedAt || Date.now() - state.workerCheckedAt > 60 * 1000) {
@@ -2758,23 +2774,32 @@ async function chooseWorkerMode(ns, options, state) {
         try {
             state.playerCharisma = await getNsDataThroughFile(ns, "ns.getPlayer().skills.charisma", "/Temp/player-charisma.txt");
         } catch {}
-        // promoteStock raises a stock's volatility: use one we hold no position in
+        // promoteStock raises a stock's volatility: use one we hold no position in, else the one with the smallest
+        // position (stockmaster often holds every stock, which left the workers in money mode)
         try {
             state.workerStock = await getNsDataThroughFile(ns,
-                "ns.stock.hasTixApiAccess() ? (ns.stock.getSymbols().find(s => { const p = ns.stock.getPosition(s); return p[0] === 0 && p[2] === 0; }) ?? '') : ''",
+                "(() => { if (!ns.stock.hasTixApiAccess()) return ''; const v = s => { const p = ns.stock.getPosition(s); return p[0] * p[1] + p[2] * p[3]; }; " +
+                "return ns.stock.getSymbols().map(s => [s, v(s)]).sort((a, b) => a[1] - b[1])[0]?.[0] ?? ''; })()",
                 "/Temp/darknet-worker-stock.txt");
         } catch {
             state.workerStock = "";
         }
         const unsolvedLab = [...state.labyrinthServers].find((h) => !isLabSolved(ns, state, h));
+        state.labCharismaRequired = undefined; // (a solved labyrinth's requirement must not linger: the next one's applies)
         if (unsolvedLab) {
             try {
                 state.labCharismaRequired = ns.dnet.getServerRequiredCharismaLevel(unsolvedLab);
             } catch {}
         }
     }
-    const needCharisma = (state.labCharismaRequired ?? 0) > (state.playerCharisma ?? Infinity);
-    if (options["worker"] === "cha" || (options["worker"] === "auto" && needCharisma && state.workerStock))
+    // Charisma is "needed" below 1.3x the labyrinth's requirement (moves are slow near it), from the next labyrinth in
+    // order (by the rewards owned) before the current one is found, like graft.js. While it is needed, use the worker
+    // mode that earns more charisma exp per thread-second: promoteStock gives 10 x (200 + cha)/200 per 8000 x 600/(600 +
+    // cha) ms, phishingAttack a flat 50 per 10000 x 400/(400 + cha) ms (plus money); they cross at ~830 charisma.
+    const required = state.labCharismaRequired ?? (await nextLabCharisma(ns, state));
+    const cha = state.playerCharisma ?? Infinity;
+    const needCharisma = required > 0 && cha < 1.3 * required;
+    if (options["worker"] === "cha" || (options["worker"] === "auto" && needCharisma && state.workerStock && cha >= 830))
         return { workerMode: "cha", workerStock: state.workerStock ?? "" };
     return { workerMode: "money", workerStock: "" };
 }
