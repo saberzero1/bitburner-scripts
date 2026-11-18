@@ -2766,10 +2766,14 @@ async function nextLabCharisma(ns, state) {
     if (state.nextLabChaAt && Date.now() - state.nextLabChaAt < 60_000) return state.nextLabCha;
     state.nextLabChaAt = Date.now();
     try {
-        const owned = await getNsDataThroughFile(ns, "ns.singularity.getOwnedAugmentations(true)", "/Temp/darknet-owned-augs.txt");
+        const [owned, installed] = await getNsDataThroughFile(ns,
+            "[ns.singularity.getOwnedAugmentations(true), ns.singularity.getOwnedAugmentations(false)]", "/Temp/darknet-owned-augs.txt");
         state.nextLabCha = LAB_CHARISMA.find(([reward]) => !owned.includes(reward))?.[1] ?? 0;
+        // A labyrinth reward waiting to be installed: the install resets charisma exp, so exp earned now is lost
+        state.labRewardQueued = LAB_CHARISMA.some(([reward]) => owned.includes(reward) && !installed.includes(reward));
     } catch {
         state.nextLabCha = 0;
+        state.labRewardQueued = false;
     }
     return state.nextLabCha;
 }
@@ -2814,7 +2818,10 @@ async function chooseWorkerMode(ns, options, state) {
         if (st && Date.now() - st.t < 5 * 60_000 && st.chaMult > 1) graftChaMult = st.chaMult * 0.98;
     } catch {}
     const target = graftChaMult > 1 && cha * graftChaMult >= 1.3 * required ? required : 1.3 * required;
-    const needCharisma = required > 0 && cha < target;
+    // (no charisma while a labyrinth reward waits for its install, e.g. held by a graft: that install resets charisma
+    // exp, while money still buys augmentations first; BN12.83 farmed charisma with H4mmer queued behind ESII)
+    await nextLabCharisma(ns, state);
+    const needCharisma = required > 0 && cha < target && !state.labRewardQueued;
     if (options["worker"] === "cha" || (options["worker"] === "auto" && needCharisma && state.workerStock && cha >= 830))
         return { workerMode: "cha", workerStock: state.workerStock ?? "" };
     return { workerMode: "money", workerStock: "" };
