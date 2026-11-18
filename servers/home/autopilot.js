@@ -40,6 +40,7 @@ const argsSchema = [
     ], // or... automatically install as soon as we can afford one of these augmentations
     ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
     ["wd-stanek-charges", 1000], // After The Red Pill, charge Stanek's fragments to this many charges (stanek.js --max-charges, default 120)
+    ["disable-charisma-stanek", false], // Before The Red Pill, keep the generic Stanek layout instead of the charisma one
     ["disable-hacknet-xp", false], // After The Red Pill, don't let daemon.js farm hacking XP on hacknet servers (it costs their hash rate)
     ["disable-wd-install-check", false], // After The Red Pill, install even if that reaches the World Daemon later (rebuilding experience, Stanek and the Go bonus)
     ["darknet-install-hold-minutes", 90], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never; twice as long once it is found). Searches took 26-60+ min (2026-11-17); a cut-short search is lost
@@ -151,7 +152,8 @@ export async function main(ns) {
     let installedAugmentations = [];
     let acceptedStanek = false,
         stanekLaunched = false,
-        hackingStanekChecked = false; // after The Red Pill: whether we've checked/switched to the hacking-only layout
+        hackingStanekChecked = false, // after The Red Pill: whether we've checked/switched to the hacking-only layout
+        charismaStanekChecked = false; // before The Red Pill: whether we've checked/switched to the charisma layout
     let daemonStartTime = 0; // The time we personally launched daemon.
     let installCountdown = 0; // Start of a countdown before we install augmentations.
     const WD_CLIMB_FILE = "/data/wd-climb.txt"; // {reset, target, samples: [msSinceInstall, exp, level, mult, goBonus]} (recordWdClimb)
@@ -1163,6 +1165,27 @@ export async function main(ns) {
                 // 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16),
             );
 
+        // Before The Red Pill charisma gates the labyrinths: switch to the charisma layout (checked once per autopilot start;
+        // the layout persists across installs): the charisma fragment (power 3) ringed by boosters in hacking fragment 0's
+        // place. With hacknet helpers (below) a big hacknet server's call sets the peak while home is still small (BN12.86:
+        // home 1 TB, peaks ~400 on the generic 14-fragment layout): charisma x~2 by the formula. The Red Pill switch below
+        // replaces it.
+        if (13 in unlockedSFs && !options["disable-charisma-stanek"] && !charismaStanekChecked &&
+            installedAugmentations.includes(augStanek) && !installedAugmentations.includes(augTRP)) {
+            charismaStanekChecked = true;
+            try {
+                const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
+                if (!ids.includes(18) || ids.some((id) => id < 100 && id !== 18 && id !== 1)) {
+                    log(ns, `INFO: Switching Stanek's Gift to the charisma layout (charisma gates the labyrinths).`, true);
+                    if (findScript("stanek.js")) await killScript(ns, "stanek.js");
+                    const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--charisma"]);
+                    if (pid) await waitForProcessToComplete(ns, pid);
+                    stanekLaunched = false; // charge the new layout
+                }
+            } catch (err) {
+                log(ns, `WARNING: Could not check Stanek's layout: ${getErrorInfo(err)}`);
+            }
+        }
         // After The Red Pill only hacking level matters: switch Stanek's Gift to the hacking-only layout (both hacking
         // fragments ringed by boosters) once, then charge it. stanek.js charging the old layout is stopped first: a higher
         // peak charge resets the charge count, so it can run for a long time (BN12.77: 20+ minutes, never finishing).
@@ -1201,10 +1224,8 @@ export async function main(ns) {
             // After The Red Pill: charge to 1000 charges instead of 120 (both hacking fragments: hacking skill and exp x~1.24,
             // for ~30 more minutes of home charging; no money needed), from the hacknet servers too as they're rebought
             // (stanek.js --hacknet-helpers; hashes have no use then, and daemon.js only gets them once Stanek is done, below)
-            if (installedAugmentations.includes(augTRP)) {
-                stanekArgs.push("--max-charges", options["wd-stanek-charges"]);
-                if (!options["disable-hacknet-xp"]) stanekArgs.push("--hacknet-helpers");
-            }
+            if (installedAugmentations.includes(augTRP)) stanekArgs.push("--max-charges", options["wd-stanek-charges"]);
+            if (!options["disable-hacknet-xp"]) stanekArgs.push("--hacknet-helpers"); // (before The Red Pill too: see the charisma layout)
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
@@ -1216,7 +1237,8 @@ export async function main(ns) {
         if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"] && !stanekRunning) daemonArgs.push("--use-hacknet-servers");
         // ...and buy hacknet RAM rather than hash production (hacknet-upgrade-manager.js --ram-first): ~$1M/GB, ~260x cheaper than
         // home RAM, for Stanek's helper charges and XP farming. Grafts keep priority through graft.js's reserve.
-        if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"]) daemonArgs.push("--hacknet-ram-first");
+        // (from the start: hashes have no use before The Red Pill either, and Stanek's helpers need the RAM)
+        if (!options["disable-hacknet-xp"]) daemonArgs.push("--hacknet-ram-first");
 
         // Launch (or re-launch) daemon if it is not already running with all our desired args.
         // Hack: Ignore numeric arguments in the comparison, since we e.g. tweak --recovery-thread-padding over time

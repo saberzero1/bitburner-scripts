@@ -5,6 +5,8 @@ const argsSchema = [
     ["force-width", null], // Force the layout less than or equal to the specified width
     ["force-height", null], // Force the layout less than or equal to the specified height
     ["hacking", false], // Place a hacking-only layout (the two hacking fragments ringed by boosters), for after The Red Pill
+    ["charisma", false], // Before The Red Pill: the same layouts with the charisma fragment (id 18, power 3, the same S shape as
+    // hacking fragment 0) in fragment 0's place, ringed by its boosters: charisma gates the labyrinths
 ];
 
 // After The Red Pill only hacking level matters. Both hacking fragments (the only ones that raise hacking skill) with as
@@ -96,11 +98,12 @@ export async function main(ns) {
     const width =
         options["force-width"] ||
         (await getNsDataThroughFile(ns, "ns.stanek.giftWidth()"));
-    const usableLayouts = (options["hacking"] ? hackingLayouts : layouts).filter(
+    const ringed = options["hacking"] || options["charisma"];
+    const usableLayouts = (ringed ? hackingLayouts : layouts).filter(
         (l) => l.height <= height && l.width <= width,
     );
-    if (options["hacking"]) usableLayouts.sort((a, b) => b.boosters - a.boosters || b.height * b.width - a.height * a.width);
-    const bestLayout = options["hacking"] ? usableLayouts[0] : usableLayouts.sort(
+    if (ringed) usableLayouts.sort((a, b) => b.boosters - a.boosters || b.height * b.width - a.height * a.width);
+    let bestLayout = ringed ? usableLayouts[0] : usableLayouts.sort(
         (
             l1,
             l2, // Use the layout with the least amount of unused rows/columns
@@ -113,6 +116,8 @@ export async function main(ns) {
     )[0];
     if (!bestLayout)
         return log(ns, `WARNING: No ${options["hacking"] ? "hacking " : ""}layout fits a ${width}x${height} Stanek grid.`, true, "warning");
+    if (options["charisma"] && !options["hacking"])
+        bestLayout = { ...bestLayout, fragments: bestLayout.fragments.map((f) => (f.id === 0 ? { ...f, id: 18 } : f)) };
     log(
         ns,
         `Best layout found for current Stanek grid dimentions (height: ${height} width: ${width}) ` +
