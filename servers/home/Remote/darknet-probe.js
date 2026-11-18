@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 59;
+const PROBE_VERSION = 60;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1652,11 +1652,11 @@ const MIGRATION_MIN_CHANCE = 0.3; // only charge a neighbour with at least this 
 // 2026-11-18: of 101 targets charged, none was seen moving within 30 minutes, so labyrinths were reached only by the
 // game's own random moves.)
 const MIGRATION_HELPER_SOURCE =
-    `export async function main(ns){const t=ns.args[0];let i=0,r=null,why="max";` +
-    `const end=()=>{try{ns.writePort(25,JSON.stringify({t:Date.now(),type:"migend",host:ns.getHostname(),target:t,` +
-    `threads:ns.args[1],calls:i,progress:r?r.progress:null,code:r?r.code:null,why}));}catch{}};` +
-    `ns.atExit(end);for(;i<500;i++){` +
-    `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch(e){why="error";return;}` +
+    `export async function main(ns){const t=ns.args[0];let i=0,r=null,why="max";const p=[];` +
+    `const rec=(o)=>{try{ns.writePort(25,JSON.stringify(Object.assign({t:Date.now(),host:ns.getHostname(),target:t,threads:ns.args[1]},o)));}catch{}};` +
+    `rec({type:"migrun"});ns.atExit(()=>rec({type:"migend",calls:i,progress:r?r.progress:null,code:r?r.code:null,why,p}));for(;i<500;i++){` +
+    `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch(e){why="error:"+String(e).slice(0,60);return;}` +
+    `if(p.length<10)p.push(r?Math.round((r.progress??-1)*1000)/1000:null);` +
     `if(!r||!r.success){why="fail";return;}if(r.progress>=1||(i>0&&r.progress===0)){why="done";return;}}}`;
 const MIGRATION_THREAD_RAM = 5.65; // 1.6 base + 4.0 induceServerMigration + 0.05 getHostname (its migend report)
 
