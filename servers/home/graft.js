@@ -50,9 +50,11 @@ const GRAFT_RESERVE_FILE = "/Temp/graft-reserve.txt"; // {t, amount}: cash the s
 // infiltrator.js keeps running); Enhanced Social Interaction Implant ($4.1b, ~47 min, charisma x1.6) pays at every
 // labyrinth from Merciless, but starts after Cruel's install (the first two labyrinths' installs come within ~15 minutes
 // and would cancel it).
+// The check uses installed augmentations: with queued ones counted, ESII started the moment Cruel was solved (B00ts
+// queued) and held that reward's install for its whole 47 minutes (BN12.83).
 const STARTERS = [
     ["Neuroreceptor Management Implant", () => true],
-    ["Enhanced Social Interaction Implant", (owned) => owned.includes("The B00ts of Perseus")],
+    ["Enhanced Social Interaction Implant", (installed) => installed.includes("The B00ts of Perseus")],
 ];
 
 /** @param {NS} ns */
@@ -97,7 +99,8 @@ export async function main(ns) {
         const info = await getNsDataThroughFile(ns,
             `(() => { const p = ns.getPlayer(), owned = ns.singularity.getOwnedAugmentations(true);
                 return { lastAugReset: ns.getResetInfo().lastAugReset, money: p.money, city: p.city, hack: p.skills.hacking,
-                    cha: p.skills.charisma, entropy: p.entropy, owned, redPill: owned.includes("The Red Pill") }; })()`,
+                    cha: p.skills.charisma, entropy: p.entropy, owned, installed: ns.singularity.getOwnedAugmentations(false),
+                    redPill: owned.includes("The Red Pill") }; })()`,
             "/Temp/graft-player.txt");
         const graftable = await getNsDataThroughFile(ns,
             `ns.grafting.getGraftableAugmentations().map(name => ({ name,
@@ -117,7 +120,9 @@ export async function main(ns) {
             STARTERS.filter(([name]) => !info.owned.includes(name) && info.augs.some((a) => a.name === name));
         starterReserve = pendingStarters.reduce((t, [name]) => t + info.augs.find((a) => a.name === name).cost, 0);
         ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve }), "w");
-        const starter = pendingStarters.find(([, ready]) => ready(info.owned));
+        // (and none while augmentations wait to be installed, e.g. a labyrinth reward: the graft would hold that install)
+        const queued = info.owned.length > info.installed.length;
+        const starter = !queued && pendingStarters.find(([, ready]) => ready(info.installed));
         const starterAug = starter && info.augs.find((a) => a.name === starter[0]);
         if (starterAug && starterAug.cost <= info.money) {
             // (status "starter": autopilot holds installs for it like any graft. As "charisma", a labyrinth reward's install
