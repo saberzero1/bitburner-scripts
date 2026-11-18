@@ -271,7 +271,7 @@ export function upgradeHacknet(
     return success ? cost : 0;
 }
 
-/** --ram-first: the RAM upgrade with the lowest cost per added GB; once every server is at max RAM, a new server (cores,
+/** --ram-first: the RAM upgrade with the lowest cost per added GB, or a new server when it costs no more than that (cores,
  * levels and cache add only hash production). Returns the money spent, 0 when it can't afford it yet, false when done. */
 function upgradeHacknetRam(ns, maxSpend, options) {
     let best = null;
@@ -281,7 +281,11 @@ function upgradeHacknetRam(ns, maxSpend, options) {
         const perGb = cost / ns.hacknet.getNodeStats(i).ram; // a RAM upgrade doubles it
         if (!best || perGb < best.perGb) best = { i, cost, perGb };
     }
-    const newServer = !best && ns.hacknet.numNodes() < ns.hacknet.maxNumNodes();
+    // A new server whenever it costs no more than that upgrade: its own first RAM upgrades are the cheapest per GB of all,
+    // and waiting until every server is at max RAM stalled the fleet at 4 servers while new ones cost ~$1M (BN12.85)
+    const canBuy = ns.hacknet.numNodes() < ns.hacknet.maxNumNodes();
+    const newServer = canBuy && (!best || ns.hacknet.getPurchaseNodeCost() <= best.cost);
+    if (newServer) best = null;
     if (!best && !newServer) {
         setStatus(ns, `Every hacknet server is at max RAM and the server limit is reached.`);
         return false;
