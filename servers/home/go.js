@@ -336,8 +336,19 @@ export async function main(ns) {
     }
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
+    /** Run TIMED_CHEAT, or skip the cheat (null: the caller plays normally) when home lacks the RAM: waiting for it
+     * stalled go.js for minutes after installs, while the daemon filled home. */
+    async function timedCheat(ns, args) {
+        const TIMED_CHEAT_RAM = 35.1;
+        if (ns.getServerMaxRam("home") - ns.getServerUsedRam("home") < TIMED_CHEAT_RAM + 16) return null;
+        try {
+            return await getNsDataThroughFile(ns, TIMED_CHEAT, { fName: "/Temp/go-timed-cheat.txt", maxRetries: 1, silent: true, args });
+        } catch {
+            return null;
+        }
+    }
     async function go_cheat_playTwoMoves(ns, x1, y1, x2, y2, maxChecks) {
-        if (!maxChecks) return await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt", ["playTwoMoves", x1, y1, x2, y2]);
+        if (!maxChecks) return await timedCheat(ns, ["playTwoMoves", x1, y1, x2, y2]);
         // Opportunistic (maxChecks 20 ms checks, ~1-2 ticks): optional, so a lighter playTwoMoves-only script, run only when
         // home has room, with no retries (the 35 GB all-cheats script waited 10 minutes for RAM after installs, stalling go)
         const free = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
@@ -2798,7 +2809,7 @@ export async function main(ns) {
         if (chance < cheatChanceThreshold) return false;
         cheatsThisGame++;
         try {
-            const results = await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt", [kind, ...target.coords]);
+            const results = await timedCheat(ns, [kind, ...target.coords]);
             if (!results) {
                 cheatsThisGame--; // no successful tick: nothing was attempted
                 return false;
