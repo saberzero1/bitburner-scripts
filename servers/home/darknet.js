@@ -119,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 61; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 62; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -830,6 +830,7 @@ async function orchestrateDarknet(ns, state, options) {
 
     // Step 8: Clean up orphaned probes
     cleanupOrphanedProbes(ns, state);
+    pushProbeFiles(ns, state);
 
     // Step 8b: Collect labyrinth solver results from port
     while (portPeek(ns, LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
@@ -1902,6 +1903,22 @@ function collectMigrationRequests(ns, state) {
     for (const [h, r] of reqs) if (now - r.t > 180_000 || state.stasisServers.has(h)) reqs.delete(h);
     return [...reqs.values()].sort((a, b) => b.chance * Math.min(b.chargers, 3) - a.chance * Math.min(a.chargers, 3))
         .slice(0, 5).map((r) => ({ host: r.host, chance: r.chance }));
+}
+
+/** Every 3 minutes, copy the current probe and labyrinth solver to every server whose password we know (scp works at any
+ * distance with a session): probes upgrade themselves from it (selfUpgrade in the probe), including those past an air gap
+ * that no up-to-date neighbour can reach. */
+function pushProbeFiles(ns, state) {
+    if (state.lastProbePush && Date.now() - state.lastProbePush < 180_000) return;
+    state.lastProbePush = Date.now();
+    const probeScript = getFilePath(PROBE_SCRIPT);
+    for (const [hostname, pwd] of state.knownPasswords) {
+        if (hostname === "home" || hostname === DARKWEB_HOSTNAME) continue;
+        try {
+            if (pwd !== undefined) ns.dnet.connectToSession(hostname, pwd);
+            ns.scp([probeScript, LAB_SOLVER_SCRIPT], hostname, "home");
+        } catch {}
+    }
 }
 
 function recordMetrics(ns, state) {

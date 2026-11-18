@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 61;
+const PROBE_VERSION = 62;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -35,6 +35,7 @@ export async function main(ns) {
             // Open cache files first: a solved labyrinth's reward is one (autopilot holds installs until it is pending).
             // They were opened only after the whole neighbour loop, and RAM freeing left too little RAM for it, so a
             // freshly cracked server could sit on its cache for a long time (2026-11-17).
+            await selfUpgrade(ns, OPTIONS_FILE, HOST, SCRIPT_NAME);
             await handleCacheFiles(ns, HOST);
             // Then free blocked RAM — maximizes available RAM for all subsequent operations
             await freeBlockedRam(ns);
@@ -1341,6 +1342,7 @@ function loadProbeOptions(ns, filePath) {
             labNeighbors: Array.isArray(parsed.labNeighbors) ? parsed.labNeighbors : [],
             frontierGap: Number(parsed.frontierGap) || 0,
             migrationRequests: Array.isArray(parsed.migrationRequests) ? parsed.migrationRequests : [],
+            probeVersion: Number(parsed.probeVersion) || 0,
         };
     } catch {
         return defaults;
@@ -4234,4 +4236,26 @@ function revivePayload(value) {
     if (value && value.$type === "null") return null;
     if (value && value.$type === "undefined") return undefined;
     return value;
+}
+
+/** Self-upgrade: when darknet.js publishes a newer probe version and the probe file on this host already is that version
+ * (darknet.js copies it to every server whose password it knows), hand over to it: a helper kills this probe and starts
+ * the new one. Upgrades used to come only from a neighbour running the new version, so a version bump stranded the probes
+ * past an air gap on the old one, invisible to darknet.js and never anchored (BN12.87). Never restarts onto an old file. */
+let lastUpgradeCheck = 0;
+async function selfUpgrade(ns, optionsFile, host, scriptName) {
+    if (Date.now() - lastUpgradeCheck < 30_000) return;
+    lastUpgradeCheck = Date.now();
+    try {
+        const v = loadProbeOptions(ns, optionsFile).probeVersion;
+        if (!v || v <= PROBE_VERSION) return;
+        if (!String(ns.read(scriptName) || "").includes(`const PROBE_VERSION = ${v};`)) return; // new file not here yet
+        const helper = "/Temp/dnet-probe-upgrade.js";
+        ns.write(helper, `export async function main(ns){ns.kill(Number(ns.args[0]));await ns.sleep(100);` +
+            `ns.exec(String(ns.args[1]),ns.getHostname(),1,Number(ns.args[2]));}`, "w");
+        if (ns.exec(helper, host, 1, ns.pid, scriptName, v)) {
+            ns.print(`Upgrading to probe v${v}`);
+            await ns.sleep(60_000); // the helper kills us
+        }
+    } catch {}
 }
