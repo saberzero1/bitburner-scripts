@@ -69,6 +69,12 @@ export async function main(ns) {
     let statSample = null; // {at, level, mode}: how fast the gating stat rises without grafts
     let lastMode;
     let needFocus = options.focus; // false once Neuroreceptor Management Implant is owned (no focus penalty then)
+    // (checked now too: restarted mid-graft, the loop only learns what's owned after the graft, and took focus meanwhile)
+    if (needFocus)
+        try {
+            needFocus = !(await getNsDataThroughFile(ns, `ns.singularity.getOwnedAugmentations(false)`,
+                "/Temp/graft-installed.txt")).includes("Neuroreceptor Management Implant");
+        } catch {}
     let starterReserve = 0; // last starter-graft cash requirement (kept fresh while another graft runs)
     const chaMults = {}; // augmentation -> charisma multiplier (published while grafting it, for darknet.js's worker mode)
     while (true) {
