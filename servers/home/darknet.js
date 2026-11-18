@@ -119,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 60; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 61; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1918,6 +1918,22 @@ function recordMetrics(ns, state) {
             anchored: state.stasisServers.has(h), probe: !!state.probeHosts?.has(h) }));
     }
     state.prevDepths = new Map(state.serverDepths);
+    // Frontier snapshot each minute: probe hosts per segment (rows between air gaps) and the deepest. The "move" records
+    // above missed most crossings (they need a depth change between two reports), so "0 of 101 migrations crossed" was an
+    // artifact: BN12.87's charged servers were found past the gap. Crossing times come from these snapshots instead.
+    if (!state.lastFrontierAt || now - state.lastFrontierAt >= 60_000) {
+        state.lastFrontierAt = now;
+        const segs = {};
+        let deepest = -1;
+        for (const h of state.probeHosts ?? []) {
+            const d = state.serverDepths.get(h);
+            if (d === undefined) continue;
+            const seg = Math.floor(d / AIR_GAP_DEPTH);
+            segs[seg] = (segs[seg] ?? 0) + 1;
+            deepest = Math.max(deepest, d);
+        }
+        lines.push(JSON.stringify({ t: now, type: "frontier", deepest, segs, anchors: state.stasisServers.size }));
+    }
     if (!lines.length) return;
     ns.write(METRICS_FILE, lines.join("\n") + "\n", "a");
     const text = ns.read(METRICS_FILE);

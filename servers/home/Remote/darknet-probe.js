@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 60;
+const PROBE_VERSION = 61;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -15,6 +15,12 @@ export async function main(ns) {
     if (targetVersion !== PROBE_VERSION) return;
 
     const HOST = ns.getHostname();
+    // One probe per host: neighbours deploy in parallel (each checks for a running probe first), so several copies of the
+    // same version landed on one host (BN12.87: 3 on h0m3, 5 on cryptoorg; ~7 GB each, RAM its migration charging and
+    // worker needed). The oldest (lowest PID) stays.
+    const peers = (await nsPs(ns, HOST)) || [];
+    if (peers.some((p) => p.pid < ns.pid && (p.filename === SCRIPT_NAME || p.filename === "/" + SCRIPT_NAME) &&
+        Number(p.args?.[0]) === PROBE_VERSION)) return;
     const LOOP_INTERVAL = 5000;
     const PASSWORD_FILE = "/data/darknet-passwords.txt";
     const OPTIONS_FILE = "/data/darknet-options.txt";
