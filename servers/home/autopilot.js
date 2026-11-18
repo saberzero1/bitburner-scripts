@@ -1166,8 +1166,7 @@ export async function main(ns) {
             );
 
         // Before The Red Pill charisma gates the labyrinths: switch to the charisma layout (checked once per autopilot start;
-        // the layout persists across installs): the charisma fragment (power 3) ringed by boosters in hacking fragment 0's
-        // place. With hacknet helpers (below) a big hacknet server's call sets the peak while home is still small (BN12.86:
+        // the layout persists across installs): the charisma fragment (power 3) alone, ringed by up to 8 boosters. With hacknet helpers (below) a big hacknet server's call sets the peak while home is still small (BN12.86:
         // home 1 TB, peaks ~400 on the generic 14-fragment layout): charisma x~2 by the formula. The Red Pill switch below
         // replaces it.
         if (13 in unlockedSFs && !options["disable-charisma-stanek"] && !charismaStanekChecked &&
@@ -1175,7 +1174,7 @@ export async function main(ns) {
             charismaStanekChecked = true;
             try {
                 const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
-                if (!ids.includes(18) || ids.some((id) => id < 100 && id !== 18 && id !== 1)) {
+                if (!ids.includes(18) || ids.some((id) => id < 100 && id !== 18)) { // (charisma alone: charismaLayouts)
                     log(ns, `INFO: Switching Stanek's Gift to the charisma layout (charisma gates the labyrinths).`, true);
                     if (findScript("stanek.js")) await killScript(ns, "stanek.js");
                     const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--charisma"]);

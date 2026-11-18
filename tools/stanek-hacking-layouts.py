@@ -1,5 +1,6 @@
 # Placement search for stanek.js.create.js --hacking: both hacking fragments (ids 0, 1) ringed by as many distinct
-# boosters (ids 100-107) as fit, per grid size. usage: python3 tools/stanek-hacking-layouts.py fragdefs.json out.json
+# boosters (ids 100-107) as fit, per grid size. usage: python3 tools/stanek-hacking-layouts.py fragdefs.json out.json [ids]
+# (ids: the fragments to ring, default "0,1"; "18" = charisma alone, for --charisma before The Red Pill)
 # (fragdefs.json: JSON of ns.stanek.fragmentDefinitions() with id, type, power, shape). Mirrors the game's Fragment.fullAt.
 import json, random, sys, multiprocessing as mp
 defs = {f['id']: f for f in json.load(open(sys.argv[1]))}
@@ -28,9 +29,11 @@ def placements(fid, W, H):
         if p[4] not in seen: seen.add(p[4]); uniq.append(p)
     return uniq
 def nbrs(cs): return {(x + dx, y + dy) for x, y in cs for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))} - cs
+IDS = [int(i) for i in (sys.argv[3] if len(sys.argv) > 3 else "0,1").split(",")]
 def search(size, budget=60000, seed=1):
     W, H = size; rnd = random.Random(seed)
-    P0, P1 = placements(0, W, H), placements(1, W, H)
+    P0 = placements(IDS[0], W, H)
+    P1 = placements(IDS[1], W, H) if len(IDS) > 1 else []
     B = [p for b in range(100, 108) for p in placements(b, W, H)]
     best = (-1, None)
     pairs = [(a, b) for a in P0 for b in P1 if not (a[4] & b[4])]

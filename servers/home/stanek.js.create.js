@@ -5,8 +5,7 @@ const argsSchema = [
     ["force-width", null], // Force the layout less than or equal to the specified width
     ["force-height", null], // Force the layout less than or equal to the specified height
     ["hacking", false], // Place a hacking-only layout (the two hacking fragments ringed by boosters), for after The Red Pill
-    ["charisma", false], // Before The Red Pill: the same layouts with the charisma fragment (id 18, power 3, the same S shape as
-    // hacking fragment 0) in fragment 0's place, ringed by its boosters: charisma gates the labyrinths
+    ["charisma", false], // Before The Red Pill: the charisma fragment (id 18, power 3) alone, ringed by boosters (charismaLayouts)
 ];
 
 // After The Red Pill only hacking level matters. Both hacking fragments (the only ones that raise hacking skill) with as
@@ -14,6 +13,45 @@ const argsSchema = [
 // 1.1). In BN12 Stanek's power multiplier is 1.02^level (~4.6 at BN12.77), so on 9x8 the pair goes from hacking x4.0
 // to x7.6. Placement search per grid size (2026-11-16): a fragment's 10 neighbour cells fit at most 8 distinct boosters,
 // so 12x12 (8+8) is the ceiling; larger grids use it as is. Chosen by most boosters touching, not least unused space.
+// Charisma alone ringed by boosters (tools/stanek-hacking-layouts.py fragdefs.json out.json 18, 2026-11-18): before The Red
+// Pill only charisma limits anything (labyrinths, migration charging, RAM freeing, labyrinth moves). 8 distinct boosters
+// (the most a 4-cell fragment can touch) from 8x7 up; the hacking layouts gave it fewer (hacking fragment 1 shared them).
+const charismaLayouts = [
+    // 5x5: 3 boosters touching charisma:  .HHaa / HHz.a / .bz.a / .bzza / bbbz.
+    { height: 5, width: 5, boosters: 3, fragments: [{"id": 18, "x": 0, "y": 0, "rotation": 0}, {"id": 102, "x": 2, "y": 1, "rotation": 3}, {"id": 101, "x": 3, "y": 0, "rotation": 1}, {"id": 106, "x": 0, "y": 2, "rotation": 3}] },
+    // 6x5: 5 boosters touching charisma:  cccaaa / bcaazz / bcHHz. / bHHzzd / bbdddd
+    { height: 5, width: 6, boosters: 5, fragments: [{"id": 18, "x": 1, "y": 2, "rotation": 0}, {"id": 104, "x": 3, "y": 1, "rotation": 0}, {"id": 102, "x": 2, "y": 0, "rotation": 0}, {"id": 101, "x": 0, "y": 1, "rotation": 3}, {"id": 106, "x": 0, "y": 0, "rotation": 1}, {"id": 101, "x": 2, "y": 3, "rotation": 2}] },
+    // 6x6: 6 boosters touching charisma:  zzzzaa / ze.HHa / eeHHda / eccbda / ec.bdd / ccbbbd
+    { height: 6, width: 6, boosters: 6, fragments: [{"id": 18, "x": 2, "y": 1, "rotation": 0}, {"id": 101, "x": 0, "y": 0, "rotation": 0}, {"id": 101, "x": 4, "y": 0, "rotation": 1}, {"id": 106, "x": 2, "y": 3, "rotation": 3}, {"id": 104, "x": 0, "y": 3, "rotation": 0}, {"id": 102, "x": 4, "y": 2, "rotation": 3}, {"id": 103, "x": 0, "y": 1, "rotation": 3}] },
+    // 7x6: 6 boosters touching charisma:  .eeea.. / eeHHaaa / bHHccca / bdzz.cc / bddzzz. / bbdd...
+    { height: 6, width: 7, boosters: 6, fragments: [{"id": 18, "x": 1, "y": 1, "rotation": 0}, {"id": 103, "x": 2, "y": 3, "rotation": 2}, {"id": 104, "x": 4, "y": 0, "rotation": 1}, {"id": 101, "x": 0, "y": 2, "rotation": 3}, {"id": 103, "x": 3, "y": 2, "rotation": 0}, {"id": 105, "x": 1, "y": 3, "rotation": 1}, {"id": 102, "x": 0, "y": 0, "rotation": 0}] },
+    // 7x7: 7 boosters touching charisma:  c.z.... / c.zzzff / c.zfffa / ccHHaaa / eHHbbba / eedddbb / .ee.dd.
+    { height: 7, width: 7, boosters: 7, fragments: [{"id": 18, "x": 1, "y": 3, "rotation": 0}, {"id": 106, "x": 2, "y": 0, "rotation": 0}, {"id": 106, "x": 4, "y": 2, "rotation": 2}, {"id": 103, "x": 3, "y": 4, "rotation": 0}, {"id": 101, "x": 0, "y": 0, "rotation": 3}, {"id": 103, "x": 2, "y": 5, "rotation": 0}, {"id": 105, "x": 0, "y": 4, "rotation": 1}, {"id": 102, "x": 3, "y": 1, "rotation": 2}] },
+    // 8x7: 8 boosters touching charisma:  .fzzz.c. / ef.z.cc. / effzccb. / e.fHHbbb / eeHHgggb / dddaaagg / ..dd.aa.
+    { height: 7, width: 8, boosters: 8, fragments: [{"id": 18, "x": 2, "y": 3, "rotation": 0}, {"id": 106, "x": 2, "y": 0, "rotation": 1}, {"id": 103, "x": 3, "y": 5, "rotation": 0}, {"id": 100, "x": 5, "y": 2, "rotation": 1}, {"id": 105, "x": 4, "y": 0, "rotation": 0}, {"id": 103, "x": 0, "y": 5, "rotation": 0}, {"id": 101, "x": 0, "y": 1, "rotation": 3}, {"id": 102, "x": 1, "y": 0, "rotation": 3}, {"id": 103, "x": 4, "y": 4, "rotation": 0}] },
+    // 8x8: 8 boosters touching charisma:  ...g.z.. / .bgggzz. / bbbgzze. / ..bHHeee / .dHHcce. / ddfa.ccc / d.faaa.. / dfffa...
+    { height: 8, width: 8, boosters: 8, fragments: [{"id": 18, "x": 2, "y": 3, "rotation": 0}, {"id": 100, "x": 4, "y": 0, "rotation": 2}, {"id": 100, "x": 3, "y": 5, "rotation": 3}, {"id": 100, "x": 0, "y": 1, "rotation": 1}, {"id": 103, "x": 4, "y": 4, "rotation": 2}, {"id": 103, "x": 0, "y": 4, "rotation": 3}, {"id": 107, "x": 5, "y": 2, "rotation": 0}, {"id": 106, "x": 1, "y": 5, "rotation": 3}, {"id": 107, "x": 2, "y": 0, "rotation": 0}] },
+    // 9x8: 8 boosters touching charisma:  .b.dddda. / bbbdaaaag / ..bHHgggg / .fHHcc... / .fze.ccc. / ffzeee... / fzz..e... / .z.......
+    { height: 8, width: 9, boosters: 8, fragments: [{"id": 18, "x": 2, "y": 2, "rotation": 0}, {"id": 103, "x": 1, "y": 4, "rotation": 1}, {"id": 101, "x": 4, "y": 0, "rotation": 2}, {"id": 100, "x": 0, "y": 0, "rotation": 1}, {"id": 103, "x": 4, "y": 3, "rotation": 2}, {"id": 101, "x": 3, "y": 0, "rotation": 0}, {"id": 104, "x": 3, "y": 4, "rotation": 1}, {"id": 103, "x": 0, "y": 3, "rotation": 1}, {"id": 101, "x": 5, "y": 1, "rotation": 2}] },
+    // 9x9: 8 boosters touching charisma:  .zd...... / fzdd..... / fzzd.a... / f.zd.a... / ffHHaaa.. / cHHee.... / cgbbeee.. / cggbbb... / ccgg.....
+    { height: 9, width: 9, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 4, "rotation": 0}, {"id": 102, "x": 1, "y": 0, "rotation": 3}, {"id": 106, "x": 4, "y": 2, "rotation": 3}, {"id": 103, "x": 2, "y": 6, "rotation": 2}, {"id": 101, "x": 0, "y": 5, "rotation": 3}, {"id": 102, "x": 2, "y": 0, "rotation": 1}, {"id": 103, "x": 3, "y": 5, "rotation": 2}, {"id": 101, "x": 0, "y": 1, "rotation": 3}, {"id": 105, "x": 1, "y": 6, "rotation": 1}] },
+    // 10x9: 8 boosters touching charisma:  .a..c..... / ea.cc..... / ea.c...... / eaac..dd.. / eeHHddd... / gHHbb..... / gzffbb.... / gzzffb.... / ggzzf.....
+    { height: 9, width: 10, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 4, "rotation": 0}, {"id": 105, "x": 1, "y": 6, "rotation": 1}, {"id": 101, "x": 1, "y": 0, "rotation": 3}, {"id": 105, "x": 3, "y": 5, "rotation": 3}, {"id": 103, "x": 3, "y": 0, "rotation": 3}, {"id": 102, "x": 4, "y": 3, "rotation": 2}, {"id": 101, "x": 0, "y": 1, "rotation": 3}, {"id": 105, "x": 2, "y": 6, "rotation": 3}, {"id": 101, "x": 0, "y": 5, "rotation": 3}] },
+    // 10x10: 8 boosters touching charisma:  .e..ddg... / .eeddggc.. / ..edggcc.. / ..eHHcc... / .aHHff.... / aazbbfff.. / a.z.bb.... / a.z..b.... / ..zz...... / ..........
+    { height: 10, width: 10, boosters: 8, fragments: [{"id": 18, "x": 2, "y": 3, "rotation": 0}, {"id": 101, "x": 2, "y": 5, "rotation": 3}, {"id": 103, "x": 0, "y": 4, "rotation": 3}, {"id": 105, "x": 3, "y": 5, "rotation": 3}, {"id": 105, "x": 5, "y": 1, "rotation": 0}, {"id": 105, "x": 3, "y": 0, "rotation": 2}, {"id": 102, "x": 1, "y": 0, "rotation": 1}, {"id": 103, "x": 4, "y": 4, "rotation": 2}, {"id": 105, "x": 4, "y": 0, "rotation": 0}] },
+    // 11x10: 8 boosters touching charisma:  cc.aa...... / .caa.ee.... / .caeeedd... / .cHHddd.... / gHHfff..... / gbzz.ff.... / gbbzz...... / ggb.z...... / ..b........ / ...........
+    { height: 10, width: 11, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 3, "rotation": 0}, {"id": 105, "x": 2, "y": 5, "rotation": 3}, {"id": 105, "x": 2, "y": 0, "rotation": 2}, {"id": 102, "x": 1, "y": 5, "rotation": 1}, {"id": 101, "x": 0, "y": 0, "rotation": 1}, {"id": 102, "x": 4, "y": 2, "rotation": 2}, {"id": 102, "x": 3, "y": 1, "rotation": 2}, {"id": 103, "x": 3, "y": 4, "rotation": 0}, {"id": 101, "x": 0, "y": 4, "rotation": 3}] },
+    // 11x11: 8 boosters touching charisma:  cc.aa...... / .caa.ee.... / .caeeedd... / .cHHddd.... / gHHfff..... / gbzz.ff.... / gbbzz...... / ggb.z...... / ..b........ / ........... / ...........
+    { height: 11, width: 11, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 3, "rotation": 0}, {"id": 105, "x": 2, "y": 5, "rotation": 3}, {"id": 105, "x": 2, "y": 0, "rotation": 2}, {"id": 102, "x": 1, "y": 5, "rotation": 1}, {"id": 101, "x": 0, "y": 0, "rotation": 1}, {"id": 102, "x": 4, "y": 2, "rotation": 2}, {"id": 102, "x": 3, "y": 1, "rotation": 2}, {"id": 103, "x": 3, "y": 4, "rotation": 0}, {"id": 101, "x": 0, "y": 4, "rotation": 3}] },
+    // 12x11: 8 boosters touching charisma:  eb.......... / ebbb.aa..... / eebaaa...... / .eHHddd..... / gHHff.dd.... / gczzfff..... / gcczzz...... / ggc......... / ..c......... / ............ / ............
+    { height: 11, width: 12, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 3, "rotation": 0}, {"id": 103, "x": 2, "y": 5, "rotation": 2}, {"id": 102, "x": 3, "y": 1, "rotation": 2}, {"id": 100, "x": 1, "y": 0, "rotation": 3}, {"id": 102, "x": 1, "y": 5, "rotation": 1}, {"id": 103, "x": 4, "y": 3, "rotation": 0}, {"id": 102, "x": 0, "y": 0, "rotation": 3}, {"id": 103, "x": 3, "y": 4, "rotation": 2}, {"id": 101, "x": 0, "y": 4, "rotation": 3}] },
+    // 12x12: 8 boosters touching charisma:  e..aa....... / eeaa.cc..... / .eaccc.d.... / .eHHdddd.... / zHHbbb...... / zfgg.bb..... / zffggg...... / zzff........ / ............ / ............ / ............ / ............
+    { height: 12, width: 12, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 3, "rotation": 0}, {"id": 101, "x": 0, "y": 4, "rotation": 3}, {"id": 105, "x": 2, "y": 0, "rotation": 2}, {"id": 103, "x": 3, "y": 4, "rotation": 0}, {"id": 102, "x": 3, "y": 1, "rotation": 2}, {"id": 101, "x": 4, "y": 2, "rotation": 2}, {"id": 102, "x": 0, "y": 0, "rotation": 1}, {"id": 105, "x": 1, "y": 5, "rotation": 1}, {"id": 103, "x": 2, "y": 5, "rotation": 2}] },
+    // 13x12: 8 boosters touching charisma:  .d........... / gdda......... / g.daaa....... / ggda..cc..... / .gHHccc...... / zHHfff....... / zbeeeff...... / zbbbee....... / zzb.......... / ............. / ............. / .............
+    { height: 12, width: 13, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 4, "rotation": 0}, {"id": 101, "x": 0, "y": 5, "rotation": 3}, {"id": 106, "x": 3, "y": 1, "rotation": 0}, {"id": 100, "x": 1, "y": 6, "rotation": 3}, {"id": 102, "x": 4, "y": 3, "rotation": 2}, {"id": 102, "x": 1, "y": 0, "rotation": 1}, {"id": 103, "x": 2, "y": 6, "rotation": 0}, {"id": 103, "x": 3, "y": 5, "rotation": 0}, {"id": 102, "x": 0, "y": 1, "rotation": 3}] },
+    // 13x13: 8 boosters touching charisma:  .d........... / gdda......... / g.daaa....... / ggda..cc..... / .gHHccc...... / zHHfff....... / zbeeeff...... / zbbbee....... / zzb.......... / ............. / ............. / ............. / .............
+    { height: 13, width: 13, boosters: 8, fragments: [{"id": 18, "x": 1, "y": 4, "rotation": 0}, {"id": 101, "x": 0, "y": 5, "rotation": 3}, {"id": 106, "x": 3, "y": 1, "rotation": 0}, {"id": 100, "x": 1, "y": 6, "rotation": 3}, {"id": 102, "x": 4, "y": 3, "rotation": 2}, {"id": 102, "x": 1, "y": 0, "rotation": 1}, {"id": 103, "x": 2, "y": 6, "rotation": 0}, {"id": 103, "x": 3, "y": 5, "rotation": 0}, {"id": 102, "x": 0, "y": 1, "rotation": 3}] },
+];
 const hackingLayouts = [
     // 5x5: boosters touching the hacking fragments 3+2
     //   bHH.a / bHHHa / bHHaa / bbHac / .cccc
@@ -99,7 +137,7 @@ export async function main(ns) {
         options["force-width"] ||
         (await getNsDataThroughFile(ns, "ns.stanek.giftWidth()"));
     const ringed = options["hacking"] || options["charisma"];
-    const usableLayouts = (ringed ? hackingLayouts : layouts).filter(
+    const usableLayouts = (options["hacking"] ? hackingLayouts : options["charisma"] ? charismaLayouts : layouts).filter(
         (l) => l.height <= height && l.width <= width,
     );
     if (ringed) usableLayouts.sort((a, b) => b.boosters - a.boosters || b.height * b.width - a.height * a.width);
@@ -116,8 +154,6 @@ export async function main(ns) {
     )[0];
     if (!bestLayout)
         return log(ns, `WARNING: No ${options["hacking"] ? "hacking " : ""}layout fits a ${width}x${height} Stanek grid.`, true, "warning");
-    if (options["charisma"] && !options["hacking"])
-        bestLayout = { ...bestLayout, fragments: bestLayout.fragments.map((f) => (f.id === 0 ? { ...f, id: 18 } : f)) };
     log(
         ns,
         `Best layout found for current Stanek grid dimentions (height: ${height} width: ${width}) ` +
