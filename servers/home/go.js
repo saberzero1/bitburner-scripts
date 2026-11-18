@@ -55,6 +55,8 @@ const argsSchema = [
     // Illuminati 5x5: 0 cheats 50% won, 1: 63%, 2: ~88% (80/80 on boards without offline nodes), 3: 89%; cheating only when
     // behind did no better than cheating early
     ["opportunistic-cheats", true], // Also play two moves (playTwoMoves) whenever the tick we play on anyway passes the cheat roll
+    ["opportunistic-heuristics", false], // ...also in heuristic games (World Daemon etc.): second stone = the cascade's next move on
+    // the board with the first one placed. Off until tools/go-sim confirms it (19x19 World Daemon sims are slow)
     ["early-cheats-illuminati", 3], // Early cheats against Illuminati, the only opponent below ~97% (2026-11-16, match.mjs with the
     // reply check, 300 games each: 2 cheats won 271 and 275, 3 won 283 twice, 4 won 292 but took longer; node power/h was flat).
     // Wins matter beyond node power: the win streak multiplies it, and streaks convert to faction favour.
@@ -113,6 +115,7 @@ export async function main(ns) {
     let searchStats = { verified: 0, searched: 0, overridden: 0 };
     let maxCheatsPerGame = 1;
     let opportunisticCheats = true;
+    let opportunisticHeuristics = false;
     let capture = null; // {first: {x, y} | null} while choosing an opportunistic double move (see movePiece)
     let boardSize = 13;
     let randomOpponents = false;
@@ -222,6 +225,7 @@ export async function main(ns) {
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
         opportunisticCheats = runOptions["opportunistic-cheats"];
+        opportunisticHeuristics = runOptions["opportunistic-heuristics"];
         focusWorldDaemon = runOptions["focus-world-daemon"];
         searchOptions = {
             fast: runOptions["fast-search"], fastSkip: String(runOptions["fast-search-skip"]).split(",").map((s) => s.trim()),
@@ -478,7 +482,7 @@ export async function main(ns) {
             }
             // Opportunistic double moves for the heuristics (as fastTurn does): the cascade's first move is held, placed
             // on our view of the board, and the next tactic's move becomes the second stone (see movePiece/capture)
-            capture = cheats && opportunisticCheats && turn >= 3 ? { first: null } : null;
+            capture = cheats && opportunisticCheats && opportunisticHeuristics && turn >= 3 ? { first: null } : null;
             if (turn < 3) results = await movePiece(ns, getOpeningMove(ns));
 
             if (turn >= 3) {
