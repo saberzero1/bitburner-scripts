@@ -20,7 +20,10 @@ import { getConfiguration, getNsDataThroughFile, log, formatMoney, formatDuratio
 const argsSchema = [
     ["until-hack", 0], // Hacking mode target (0 = the World Daemon's requirement)
     ["min-gain", 0.03], // Only graft if ln(gain) net of entropy is at least this
-    ["exp-weight", 0.15], // Weight of the matching exp multiplier relative to the level multiplier
+    ["exp-weight", 0.05], // Weight of the matching exp multiplier relative to the level multiplier. Level = mult x (32 ln(exp) - 200)
+    // with that term ~430 late in BN12, so x m on all future exp is worth at most ~0.074 ln(m) of level, and only exp earned
+    // after the graft counts. At 0.15 Neuregen (hacking exp x1.4, skill x1.0) passed (0.030) and its entropy cut the level 2%
+    // at once (BN12.86's World Daemon phase); at 0.05 exp-only grafts net out below zero.
     ["reserve", null], // Keep this much money (default: reserve.txt, i.e. autopilot's reserve)
     ["focus", true], // Graft focused (unfocused work runs at 0.8x without Neuroreceptor Management Implant), stopping
     // infiltrator.js (its UI navigation takes focus away) and refocusing while grafting. --focus false to keep infiltrating.
