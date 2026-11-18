@@ -40,6 +40,7 @@ const argsSchema = [
     ], // or... automatically install as soon as we can afford one of these augmentations
     ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
     ["wd-stanek-charges", 1000], // After The Red Pill, charge Stanek's fragments to this many charges (stanek.js --max-charges, default 120)
+    ["keep-stocks-after-red-pill", false], // Keep stockmaster trading after The Red Pill (default: sell all, money goes to grafts and hacknet RAM)
     ["disable-charisma-stanek", false], // Before The Red Pill, keep the generic Stanek layout instead of the charisma one
     ["disable-hacknet-xp", false], // After The Red Pill, don't let daemon.js farm hacking XP on hacknet servers (it costs their hash rate)
     ["disable-wd-install-check", false], // After The Red Pill, install even if that reaches the World Daemon later (rebuilding experience, Stanek and the Go bonus)
@@ -153,7 +154,8 @@ export async function main(ns) {
     let acceptedStanek = false,
         stanekLaunched = false,
         hackingStanekChecked = false, // after The Red Pill: whether we've checked/switched to the hacking-only layout
-        charismaStanekChecked = false; // before The Red Pill: whether we've checked/switched to the charisma layout
+        charismaStanekChecked = false, // before The Red Pill: whether we've checked/switched to the charisma layout
+        stocksLiquidated = false; // after The Red Pill: whether we've sold all stocks (once per autopilot start)
     let daemonStartTime = 0; // The time we personally launched daemon.
     let installCountdown = 0; // Start of a countdown before we install augmentations.
     const WD_CLIMB_FILE = "/data/wd-climb.txt"; // {reset, target, samples: [msSinceInstall, exp, level, mult, goBonus]} (recordWdClimb)
@@ -886,8 +888,19 @@ export async function main(ns) {
         // Runs scripts queued in /Temp/cmd-queue.txt (external tooling can write files over the Remote API, not run scripts)
         if (!findScript("cmd-runner.js") && homeRam >= 64) launchScriptHelper(ns, "cmd-runner.js", [], false);
 
+        // After The Red Pill money only buys hacking grafts and hacknet RAM: sell all stocks once and stop trading (BN12.86:
+        // $16b sat in positions while hacknet RAM, ~$1M/GB, waited for money). --keep-stocks-after-red-pill keeps trading.
+        const stocksOff = installedAugmentations.includes(augTRP) && !options["keep-stocks-after-red-pill"];
+        if (stocksOff && !stocksLiquidated) {
+            stocksLiquidated = true;
+            const trader = findScript("stockmaster.js", (s) => !s.args.includes("--liquidate") && !s.args.includes("-l"));
+            if (trader) await killScript(ns, "stockmaster.js", null, trader);
+            log(ns, `INFO: The Red Pill is installed: selling all stocks for grafts and hacknet RAM.`, true);
+            launchScriptHelper(ns, "stockmaster.js", ["--liquidate"]);
+        }
         // Launch stock-master in a way that emphasizes it as our main source of income early-on
         if (
+            !stocksOff &&
             !findScript("stockmaster.js") &&
             !disableStockmasterForDaedalus &&
             homeRam >= 32
@@ -1193,7 +1206,7 @@ export async function main(ns) {
             hackingStanekChecked = true;
             try {
                 const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
-                if (ids.some((id) => id < 100 && id !== 0 && id !== 1)) {
+                if (!ids.includes(0) || ids.some((id) => id < 100 && id !== 0 && id !== 1 && id !== 18)) { // (18: charisma beside the pair)
                     log(ns, `INFO: The Red Pill is installed: switching Stanek's Gift to the hacking-only layout.`, true);
                     if (findScript("stanek.js")) await killScript(ns, "stanek.js");
                     const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--hacking"]);
@@ -1223,7 +1236,8 @@ export async function main(ns) {
             // After The Red Pill: charge to 1000 charges instead of 120 (both hacking fragments: hacking skill and exp x~1.24,
             // for ~30 more minutes of home charging; no money needed), from the hacknet servers too as they're rebought
             // (stanek.js --hacknet-helpers; hashes have no use then, and daemon.js only gets them once Stanek is done, below)
-            if (installedAugmentations.includes(augTRP)) stanekArgs.push("--max-charges", options["wd-stanek-charges"]);
+            // (the charisma fragment beside the hacking pair only needs to lift darknet money: 120 charges)
+            if (installedAugmentations.includes(augTRP)) stanekArgs.push("--max-charges", options["wd-stanek-charges"], "--charge-cap", "18:120");
             if (!options["disable-hacknet-xp"]) stanekArgs.push("--hacknet-helpers"); // (before The Red Pill too: see the charisma layout)
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
             launchScriptHelper(ns, "stanek.js", stanekArgs);
@@ -1238,6 +1252,8 @@ export async function main(ns) {
         // home RAM, for Stanek's helper charges and XP farming. Grafts keep priority through graft.js's reserve.
         // (from the start: hashes have no use before The Red Pill either, and Stanek's helpers need the RAM)
         if (!options["disable-hacknet-xp"]) daemonArgs.push("--hacknet-ram-first");
+        if (installedAugmentations.includes(augTRP) && !options["keep-stocks-after-red-pill"])
+            daemonArgs.push("--disable-script", getFilePath("stockmaster.js")); // (stocks are sold after The Red Pill, see above)
 
         // Launch (or re-launch) daemon if it is not already running with all our desired args.
         // Hack: Ignore numeric arguments in the comparison, since we e.g. tweak --recovery-thread-padding over time

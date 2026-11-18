@@ -22,6 +22,8 @@ const argsSchema = [
     ["reserved-ram", 32], // Don't use this RAM
     ["reserved-ram-ideal", 128], // Leave up to this much RAM free: 1/8 of home's RAM, capped at this (and at least reserved-ram)
     ["max-charges", 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
+    ["charge-cap", ""], // Per-fragment charge targets below --max-charges, "id:charges,..." (autopilot: "18:120" for the charisma
+    // fragment beside the hacking pair after The Red Pill: it only needs to lift darknet money, not 1000 charges)
     ["hacknet-helpers", false], // Also charge from every hacknet server at once (autopilot: after The Red Pill, with --max-charges 1000)
     ["on-startup-script", null], // Spawn this script when stanek is launched
     ["on-startup-script-args", []], // Args for the above
@@ -274,7 +276,7 @@ async function getFragmentsToCharge(ns) {
                 chargeAttempts[fragment.id] = 2; // Hack: We will never try to charge this fragment again. Abuse this dict value so we don't see htis log again.
             }
         } else if (fragment.id < 100)
-            minCharges = Math.min(minCharges, fragment.numCharge); // Track the least-charged fragment (ignoring fragments that take no charge)
+            minCharges = Math.min(minCharges, fragment.numCharge * maxCharges / capOf(fragment)); // Track the least-charged fragment (ignoring fragments that take no charge), relative to its cap
     }
     minCharges = Math.ceil(minCharges); // Fractional charges now occur. Round these up.
     if (
@@ -286,7 +288,8 @@ async function getFragmentsToCharge(ns) {
     // We will only charge non-booster fragments, and fragments that aren't stuck at 0 charge
     const fragmentsToCharge = fragments.filter(
         (f) =>
-            f.id < 100 && ((chargeAttempts[f.id] || 0) < 2 || f.numCharge > 0),
+            f.id < 100 && ((chargeAttempts[f.id] || 0) < 2 || f.numCharge > 0) &&
+            (shouldContinue || f.numCharge < capOf(f)), // (fragments at their --charge-cap wait for the rest)
     );
     // Log a status update
     log(
@@ -381,4 +384,11 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
  * @returns {Promise<ActiveFragment[]>} **/
 async function getActiveFragments(ns) {
     return await getNsDataThroughFile(ns, "ns.stanek.activeFragments()");
+}
+
+/** A fragment's charge target: --charge-cap "id:charges,..." where given, else --max-charges. */
+function capOf(fragment) {
+    const caps = Object.fromEntries(String(options["charge-cap"] || "").split(",").filter((x) => x.includes(":"))
+        .map((x) => x.split(":").map(Number)));
+    return Math.min(caps[fragment.id] ?? maxCharges, maxCharges);
 }
