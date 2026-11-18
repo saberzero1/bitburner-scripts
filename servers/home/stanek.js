@@ -20,7 +20,7 @@ let awakeningRep = 1e6,
 
 const argsSchema = [
     ["reserved-ram", 32], // Don't use this RAM
-    ["reserved-ram-ideal", 64], // Leave this amount of RAM free if it represents less than 5% of available RAM
+    ["reserved-ram-ideal", 128], // Leave up to this much RAM free: 1/8 of home's RAM, capped at this (and at least reserved-ram)
     ["max-charges", 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
     ["on-startup-script", null], // Spawn this script when stanek is launched
     ["on-startup-script-args", []], // Args for the above
@@ -311,10 +311,12 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
         let availableRam =
             ns.getServerMaxRam(currentServer) -
             ns.getServerUsedRam(currentServer);
-        let reservedRam =
-            options["reserved-ram-ideal"] / availableRam < 0.05
-                ? options["reserved-ram-ideal"]
-                : options["reserved-ram"];
+        // Helpers' temp scripts peak above 32 GB (go.js's cheat script 35 GB, its combined turn lookup 62 GB): with 32 GB
+        // left (the old 64 GB only applied below 5% of free RAM, i.e. above ~1.3 TB) charging starved them, and they
+        // waited for RAM for minutes after installs (BN12.83: go.js stalled with 31 GB free of 1 TB). Charge strength
+        // grows with log(threads), so leaving 1/8 of home costs little.
+        const reservedRam = Math.max(options["reserved-ram"],
+            Math.min(options["reserved-ram-ideal"], ns.getServerMaxRam(currentServer) / 8));
         const threads = Math.floor((availableRam - reservedRam) / 2.0);
         if (threads <= 0) {
             log(
