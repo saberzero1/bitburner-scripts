@@ -682,7 +682,8 @@ export async function runCommand_Custom(
         try {
             return await runCommandAttempt_Custom(ns, fnRun, command, fileName, args, verbose, maxRetries, retryDelayMs, silent, script);
         } catch (err) {
-            if (Date.now() > deadline || !/home only has .* free/.test(String(err?.message ?? err))) throw err;
+            // (maxRetries 1: the caller has a fallback and wants the error now, e.g. go.js's optional temp scripts)
+            if (Date.now() > deadline || maxRetries <= 1 || !/home only has .* free/.test(String(err?.message ?? err))) throw err;
             log(ns, `INFO: Not enough free RAM on home to run ${fileName} yet; waiting ${formatDuration(waitMs)} before trying again.`);
             await ns.sleep(waitMs);
         }

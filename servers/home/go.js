@@ -96,6 +96,12 @@ const GO_BONUS_POWER = { Netburners: 1.3, "Slum Snakes": 1.2, "The Black Hand": 
  * changes on engine ticks (200 ms). So this temp script reads the play time, computes that roll, and calls the cheat
  * in the same tick only when it succeeds (otherwise it waits for the next tick): cheats never fail, so they can't
  * get us ejected either. Gives up (null) after ~15s without a successful tick. Constant source; values via ns.args. */
+/** TIMED_CHEAT for playTwoMoves only, a few checks at most (opportunistic double moves; see fastTurn). Args: x1 y1 x2 y2 checks */
+const OPPORTUNISTIC_CHEAT =
+    `await (async () => { const a = ns.args; ` +
+    `const roll = (t) => { const v = (t / 1000) % 30000; return ((171 * v) % 30269 / 30269 + (172 * v) % 30307 / 30307 + (170 * v) % 30323 / 30323) % 1; }; ` +
+    `for (let i = 0; i < a[4]; i++) { if (roll(ns.getPlayer().totalPlaytime) <= ns.go.cheat.getCheatSuccessChance()) ` +
+    `return await ns.go.cheat.playTwoMoves(a[0], a[1], a[2], a[3]); await ns.sleep(20); } return null; })()`;
 const TIMED_CHEAT =
     `await (async () => { const a = ns.args; ` +
     `const roll = (t) => { const v = (t / 1000) % 30000; return ((171 * v) % 30269 / 30269 + (172 * v) % 30307 / 30307 + (170 * v) % 30323 / 30323) % 1; }; ` +
@@ -116,6 +122,7 @@ export async function main(ns) {
     let maxCheatsPerGame = 1;
     let opportunisticCheats = true;
     let opportunisticHeuristics = false;
+    const opportunisticCheatRam = 11.1; // OPPORTUNISTIC_CHEAT's temp script (calculateRam)
     let capture = null; // {first: {x, y} | null} while choosing an opportunistic double move (see movePiece)
     let boardSize = 13;
     let randomOpponents = false;
@@ -330,9 +337,17 @@ export async function main(ns) {
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
     async function go_cheat_playTwoMoves(ns, x1, y1, x2, y2, maxChecks) {
-        // maxChecks: give up after this many 20 ms checks for a passing tick (default ~15 s)
-        return await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt",
-            ["playTwoMoves", x1, y1, x2, y2, ...(maxChecks ? [`lim${maxChecks}`] : [])]);
+        if (!maxChecks) return await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt", ["playTwoMoves", x1, y1, x2, y2]);
+        // Opportunistic (maxChecks 20 ms checks, ~1-2 ticks): optional, so a lighter playTwoMoves-only script, run only when
+        // home has room, with no retries (the 35 GB all-cheats script waited 10 minutes for RAM after installs, stalling go)
+        const free = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+        if (free < opportunisticCheatRam + 16) return null;
+        try {
+            return await getNsDataThroughFile(ns, OPPORTUNISTIC_CHEAT,
+                { fName: "/Temp/go-opp-cheat.txt", maxRetries: 1, silent: true, args: [x1, y1, x2, y2, maxChecks] });
+        } catch {
+            return null;
+        }
     }
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
