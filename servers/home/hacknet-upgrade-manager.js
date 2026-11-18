@@ -284,8 +284,29 @@ function upgradeHacknetRam(ns, maxSpend, options) {
     // A new server whenever it costs no more than that upgrade: its own first RAM upgrades are the cheapest per GB of all,
     // and waiting until every server is at max RAM stalled the fleet at 4 servers while new ones cost ~$1M (BN12.85)
     const canBuy = ns.hacknet.numNodes() < ns.hacknet.maxNumNodes();
-    const newServer = canBuy && (!best || ns.hacknet.getPurchaseNodeCost() <= best.cost);
+    let newServer = canBuy && (!best || ns.hacknet.getPurchaseNodeCost() <= best.cost);
     if (newServer) best = null;
+    // While stanek.js charges, cores too, whichever purchase is cheapest: a helper charge call weighs threads x
+    // (1 + (cores - 1) / 16) against the peak, so 1-core servers added only ~0.8 charge per call between all 15 after The
+    // Red Pill (24 cores: ~2, cutting the 1000-charge phase from ~18 to ~11 minutes); before The Red Pill a cored helper
+    // raises the charisma peak. Cores add nothing to XP farming, so not otherwise.
+    let core = null;
+    if (ns.ps("home").some((p) => p.filename === "stanek.js"))
+        for (let i = 0; i < ns.hacknet.numNodes(); i++) {
+            const c = ns.hacknet.getCoreUpgradeCost(i, 1);
+            if (Number.isFinite(c) && (!core || c < core.cost)) core = { i, cost: c };
+        }
+    const other = best ? best.cost : newServer ? ns.hacknet.getPurchaseNodeCost() : Infinity;
+    if (core && core.cost < other) { best = null; newServer = false; }
+    else core = null;
+    if (core) {
+        const reserve = options["reserve"] != null ? options["reserve"] : Number(ns.read("reserve.txt") || 0);
+        if (core.cost > maxSpend) return false;
+        if (core.cost > ns.getPlayer().money - reserve) return 0;
+        const ok = ns.hacknet.upgradeCore(core.i, 1);
+        setStatus(ns, ok ? `Purchased hacknet-server-${core.i} core ${ns.hacknet.getNodeStats(core.i).cores} for ${formatMoney(core.cost)} (Stanek is charging)` : `Could not purchase a core`);
+        return ok ? core.cost : 0;
+    }
     if (!best && !newServer) {
         setStatus(ns, `Every hacknet server is at max RAM and the server limit is reached.`);
         return false;
