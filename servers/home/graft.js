@@ -32,6 +32,7 @@ const argsSchema = [
     ["charisma-margin", 1.3], // Charisma mode grafts up to this times the labyrinth's requirement (moves are slow near it)
     ["eta-slack", 1.5], // Hacking mode: skip grafts longer than this times the projected time to reach the target by experience
     ["no-starter", false], // Don't graft the starter augmentations first (Neuroreceptor, Enhanced Social Interaction)
+    ["starter-neuroreceptor", false], // Graft Neuroreceptor Management Implant first (removes the unfocused penalty; off: graft.js keeps focus)
     ["starter-esii", false], // Also graft Enhanced Social Interaction as a starter after Cruel's install (off: the charisma Stanek layout replaces it)
 ];
 export function autocomplete(data) {
@@ -61,7 +62,11 @@ const GRAFT_RESERVE_FILE = "/Temp/graft-reserve.txt"; // {t, amount}: cash the s
 // 47-minute graft holds installs as a starter and costs x0.98 entropy on everything (World Daemon hacking included).
 // graft.js's charisma mode (cancellable by reward installs) stays the fallback. --starter-esii brings it back.
 const STARTERS = [
-    ["Neuroreceptor Management Implant", () => true],
+    // Neuroreceptor is off by default too (2026-11-18): graft.js keeps focus during grafts anyway (pausing infiltrator.js), so
+    // grafting speed is the same; it only let infiltrator keep the UI, while its entropy (x0.98 on every multiplier for the
+    // BitNode, ~2% World Daemon hacking) and its 11-minute graft at the start (holding the first install) now cost more.
+    // --starter-neuroreceptor brings it back.
+    ["Neuroreceptor Management Implant", (installed, options) => options["starter-neuroreceptor"]],
     ["Enhanced Social Interaction Implant", (installed, options) => options["starter-esii"] && installed.includes("The B00ts of Perseus")],
 ];
 
@@ -141,7 +146,8 @@ export async function main(ns) {
         // reserves the casino's $8b for stocks, which left graft.js ~$2b and Enhanced Social Interaction ungrafted.
         const pendingStarters = options["no-starter"] || info.redPill ? [] :
             STARTERS.filter(([name]) => !info.owned.includes(name) && info.augs.some((a) => a.name === name) &&
-                (name !== "Enhanced Social Interaction Implant" || options["starter-esii"])); // (no reserve for a disabled starter)
+                (name !== "Enhanced Social Interaction Implant" || options["starter-esii"]) &&
+                (name !== "Neuroreceptor Management Implant" || options["starter-neuroreceptor"])); // (no reserve for a disabled starter)
         starterReserve = pendingStarters.reduce((t, [name]) => t + info.augs.find((a) => a.name === name).cost, 0);
         ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve }), "w");
         // (and none while augmentations wait to be installed, e.g. a labyrinth reward: the graft would hold that install)
