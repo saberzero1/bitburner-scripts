@@ -43,7 +43,7 @@ const LABS = [["The W1ngs of Icarus", 300], ["The B00ts of Perseus", 600], ["The
 const nextLabCharisma = (owned) => LABS.find(([reward]) => !owned.includes(reward))?.[1];
 const ENTROPY = Math.log(0.98);
 const IDLE_MS = 2 * 60_000;
-const STATUS_FILE = "/Temp/graft-status.txt"; // {t, mode}: read by autopilot.js
+const STATUS_FILE = "/Temp/graft-status.txt"; // {t, mode, focus, aug, chaMult}: read by autopilot.js and darknet.js
 const GRAFT_RESERVE_FILE = "/Temp/graft-reserve.txt"; // {t, amount}: cash the starter grafts need (autopilot, stockmaster)
 // Starter grafts, in order, with when each may start (from the augmentations owned): Neuroreceptor Management Implant
 // ($1.65b, ~11 min) removes the unfocused-work penalty for the whole BitNode (grafts no longer need focus, so
@@ -70,10 +70,19 @@ export async function main(ns) {
     let lastMode;
     let needFocus = options.focus; // false once Neuroreceptor Management Implant is owned (no focus penalty then)
     let starterReserve = 0; // last starter-graft cash requirement (kept fresh while another graft runs)
+    const chaMults = {}; // augmentation -> charisma multiplier (published while grafting it, for darknet.js's worker mode)
     while (true) {
         const work = await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()");
         if (work?.type === "GRAFTING") {
-            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: lastMode ?? "grafting", focus: needFocus }), "w");
+            if (chaMults[work.augmentation] === undefined)
+                try {
+                    chaMults[work.augmentation] = (await getNsDataThroughFile(ns, `ns.singularity.getAugmentationStats(ns.args[0])`,
+                        "/Temp/graft-aug-stats.txt", [work.augmentation]))?.charisma ?? 1;
+                } catch {
+                    chaMults[work.augmentation] = 1;
+                }
+            ns.write(STATUS_FILE, JSON.stringify({ t: Date.now(), mode: lastMode ?? "grafting", focus: needFocus,
+                aug: work.augmentation, chaMult: chaMults[work.augmentation] }), "w");
             ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve }), "w");
             if (needFocus) {
                 // Unfocused grafting runs at 0.8x (Player.focusPenalty). infiltrator.js drives the UI and takes focus;

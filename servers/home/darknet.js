@@ -2805,7 +2805,16 @@ async function chooseWorkerMode(ns, options, state) {
     // cha) ms, phishingAttack a flat 50 per 10000 x 400/(400 + cha) ms (plus money); they cross at ~830 charisma.
     const required = state.labCharismaRequired ?? (await nextLabCharisma(ns, state));
     const cha = state.playerCharisma ?? Infinity;
-    const needCharisma = required > 0 && cha < 1.3 * required;
+    // A charisma graft in progress (graft.js's status) multiplies charisma when it lands (x0.98 entropy): if that alone
+    // reaches the 1.3x margin, earn charisma only up to the requirement itself (the labyrinth can be solved from there),
+    // then money (BN12.83: workers farmed charisma toward 1,950 while Enhanced Social Interaction, x1.6, was grafting)
+    let graftChaMult = 1;
+    try {
+        const st = JSON.parse(ns.read("/Temp/graft-status.txt") || "null");
+        if (st && Date.now() - st.t < 5 * 60_000 && st.chaMult > 1) graftChaMult = st.chaMult * 0.98;
+    } catch {}
+    const target = graftChaMult > 1 && cha * graftChaMult >= 1.3 * required ? required : 1.3 * required;
+    const needCharisma = required > 0 && cha < target;
     if (options["worker"] === "cha" || (options["worker"] === "auto" && needCharisma && state.workerStock && cha >= 830))
         return { workerMode: "cha", workerStock: state.workerStock ?? "" };
     return { workerMode: "money", workerStock: "" };
