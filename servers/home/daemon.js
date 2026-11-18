@@ -3306,6 +3306,7 @@ export async function main(ns) {
         return getAllServers()
             .filter(
                 (server) =>
+                    !server.name.startsWith("hacknet-server-") && // (hosts only: lookups on them throw since 3.0)
                     (server.hasRoot() || server.canCrack()) &&
                     server.canHack() &&
                     server.shouldHack(),
@@ -4213,7 +4214,8 @@ export async function main(ns) {
     /** @param {number} homeRam Current ram on the home server (if low, priorities change slightly)
      * @returns {Promise<Server[]>} Sorted in the order we should prioritize spending ram on targeting them (for hacking) */
     async function getAllServersByTargetOrder(homeRam) {
-        _serverListByTargetOrder ??= getAllServers().slice(); // Take a fresh copy if not already cached
+        // (never hacknet servers: they're hosts only, and since 3.0 security/money lookups throw on them)
+        _serverListByTargetOrder ??= getAllServers().filter((s) => !s.name.startsWith("hacknet-server-")); // Take a fresh copy if not already cached
         // The check for whether a server is being targetted is async, so we must collect this info upfront before using in a sort function
         const dictIsTargeting = {};
         for (const server of _serverListByTargetOrder)
