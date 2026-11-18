@@ -24,6 +24,7 @@ const argsSchema = [
     ["max-charges", 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
     ["charge-cap", ""], // Per-fragment charge targets below --max-charges, "id:charges,..." (autopilot: "18:120" for the charisma
     // fragment beside the hacking pair after The Red Pill: it only needs to lift darknet money, not 1000 charges)
+    ["repeak", false], // Don't exit at --max-charges: charge again whenever a call twice the current peak becomes possible (autopilot: before The Red Pill)
     ["hacknet-helpers", false], // Also charge from every hacknet server at once (autopilot: after The Red Pill, with --max-charges 1000)
     ["on-startup-script", null], // Spawn this script when stanek is launched
     ["on-startup-script-args", []], // Args for the above
@@ -177,7 +178,27 @@ export async function main(ns) {
             checkOnChargeScript();
             const fragmentsToCharge = await getFragmentsToCharge(ns);
             if (fragmentsToCharge === undefined) continue;
-            if (fragmentsToCharge.length == 0) break; // All fragments at max desired charge
+            if (fragmentsToCharge.length == 0) {
+                // All fragments at max desired charge. With --repeak (autopilot, before The Red Pill) keep watching: the
+                // peak is the biggest single call so far, and charging early in an install, while the hacknet is still
+                // being rebought, left the charisma fragment at a peak of 456 for the whole install (BN12.87; 10,496 once
+                // the hacknet was maxed in BN12.86): charisma 1,888 for Uber's 2,500 and a charisma graft. When a call
+                // twice the current peak is possible, charge again (it raises the peak; the charge count restarts from it).
+                if (!options["repeak"]) break;
+                const frags = (await getActiveFragments(ns)).filter((f) => f.id < 100);
+                const peak = Math.min(...frags.map((f) => f.highestCharge));
+                let possible = 0;
+                try {
+                    possible = await getNsDataThroughFile(ns, `(() => { let best = 0; for (const h of ["home", ...ns.scan("home").filter((x) => x.startsWith("hacknet-server-"))]) {
+                        const s = ns.getServer(h); best = Math.max(best, (s.maxRam - s.ramUsed) / 2 * (1 + (s.cpuCores - 1) / 16)); } return best; })()`,
+                        "/Temp/stanek-possible-peak.txt");
+                } catch {}
+                if (frags.length && possible > 2 * peak) {
+                    log(ns, `INFO: A charge call of ~${formatNumberShort(possible)} is now possible (peak ${formatNumberShort(peak)}): charging again to raise the peak.`);
+                    lastLoopSuccessful = await tryChargeAllFragments(ns, frags);
+                } else await ns.sleep(60_000);
+                continue;
+            }
             lastLoopSuccessful = await tryChargeAllFragments(
                 ns,
                 fragmentsToCharge,

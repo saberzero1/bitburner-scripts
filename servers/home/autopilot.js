@@ -1239,6 +1239,9 @@ export async function main(ns) {
             // (the charisma fragment beside the hacking pair only needs to lift darknet money: 120 charges)
             if (installedAugmentations.includes(augTRP)) stanekArgs.push("--max-charges", options["wd-stanek-charges"], "--charge-cap", "18:120");
             if (!options["disable-hacknet-xp"]) stanekArgs.push("--hacknet-helpers"); // (before The Red Pill too: see the charisma layout)
+            // Before The Red Pill, keep stanek.js watching to raise the charisma peak as the hacknet grows (home isn't needed for
+            // XP then; after The Red Pill home makes the peak and daemon.js needs it back once charging is done)
+            if (!installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"]) stanekArgs.push("--repeak");
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
