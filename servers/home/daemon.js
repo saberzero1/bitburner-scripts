@@ -3685,12 +3685,17 @@ export async function main(ns) {
             }
 
             let now = Date.now();
-            let scheduleTime = now + queueDelay;
-            let msToCycleEnd =
-                queueDelay + (loopingMode ? expTime * 4.0 : expTime);
-            nextXpCycleEnd[server.name] = now + msToCycleEnd; // Store how many MS before when this server's next cycle is expected to end
             const allowLoop =
                 advancedMode /*&& singleServer*/ && allTargetsPrepped; // Allow looping mode only once all targets are prepped
+            // Basic mode (weaken/grow, no hack threads to synchronise) needs no batch-safety margin: with --queue-delay 2000
+            // each cycle waited 2 s for an operation that takes a fraction of a second at high hacking levels, so XP farming
+            // ran ~5% of the time (BN12.84's World Daemon climb: "897 GB of 19.1 TB (4.7%)"). And its jobs don't loop, so
+            // they must not be timed as 4 operations because --looping-mode is on. (250 ms floor: one launch per target per
+            // cycle; see the freeze-causes notes before going lower.)
+            const delay = advancedMode ? queueDelay : Math.min(queueDelay, 250);
+            let scheduleTime = now + delay;
+            let msToCycleEnd = delay + (loopingMode && allowLoop ? expTime * 4.0 : expTime);
+            nextXpCycleEnd[server.name] = now + msToCycleEnd; // Store how many MS before when this server's next cycle is expected to end
             //log(ns, `allowLoop: ${allowLoop} advancedMode: ${advancedMode} singleServer: ${singleServer} allTargetsPrepped: ${allTargetsPrepped}`);
             // Schedule the FarmXP threads first, ensuring that they are not split (if they our split, our hack threads above 'effectiveHackThreads' lose their free ride)
             let success = true;

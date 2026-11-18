@@ -39,6 +39,7 @@ const argsSchema = [
         ],
     ], // or... automatically install as soon as we can afford one of these augmentations
     ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
+    ["disable-hacknet-xp", false], // After The Red Pill, don't let daemon.js farm hacking XP on hacknet servers (it costs their hash rate)
     ["disable-wd-install-check", false], // After The Red Pill, install even if that reaches the World Daemon later (rebuilding experience, Stanek and the Go bonus)
     ["darknet-install-hold-minutes", 90], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never; twice as long once it is found). Searches took 26-60+ min (2026-11-17); a cut-short search is lost
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
@@ -1202,6 +1203,9 @@ export async function main(ns) {
         }
         // If stanek is running, tell daemon to reserve all home RAM for it.
         if (stanekRunning) daemonArgs.push("--reserved-ram", 1e100);
+        // After The Red Pill hashes have no use left (only hacking level gates the BitNode), while the hacknet servers hold
+        // most of our RAM (BN12.85: 14 x 4 TB idle beside ~19 TB elsewhere): let daemon farm hacking XP on them too.
+        if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"]) daemonArgs.push("--use-hacknet-servers");
 
         // Launch (or re-launch) daemon if it is not already running with all our desired args.
         // Hack: Ignore numeric arguments in the comparison, since we e.g. tweak --recovery-thread-padding over time
