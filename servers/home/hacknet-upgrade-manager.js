@@ -290,14 +290,20 @@ function upgradeHacknetRam(ns, maxSpend, options) {
     // (1 + (cores - 1) / 16) against the peak, so 1-core servers added only ~0.8 charge per call between all 15 after The
     // Red Pill (24 cores: ~2, cutting the 1000-charge phase from ~18 to ~11 minutes); before The Red Pill a cored helper
     // raises the charisma peak. Cores add nothing to XP farming, so not otherwise.
+    // Compared by value, not price: a helper's weight is RAM x (1 + (cores - 1) / 16), so a RAM doubling adds +100% and a
+    // core 1/16 of the core bonus (~3% at 19 cores). "Cheapest first" bought 19 cores per server with 1 TB of RAM each
+    // after BN12.86's Red Pill install. A new server is valued like a RAM upgrade (it adds a fresh server's weight).
     let core = null;
     if (ns.ps("home").some((p) => p.filename === "stanek.js"))
         for (let i = 0; i < ns.hacknet.numNodes(); i++) {
             const c = ns.hacknet.getCoreUpgradeCost(i, 1);
-            if (Number.isFinite(c) && (!core || c < core.cost)) core = { i, cost: c };
+            if (!Number.isFinite(c)) continue;
+            const bonus = 1 + (ns.hacknet.getNodeStats(i).cores - 1) / 16;
+            const value = (1 / 16) / bonus / c; // relative weight gain per $
+            if (!core || value > core.value) core = { i, cost: c, value };
         }
     const other = best ? best.cost : newServer ? ns.hacknet.getPurchaseNodeCost() : Infinity;
-    if (core && core.cost < other) { best = null; newServer = false; }
+    if (core && core.value > 1 / other) { best = null; newServer = false; } // (RAM / a new server: +100% for its cost)
     else core = null;
     if (core) {
         const reserve = options["reserve"] != null ? options["reserve"] : Number(ns.read("reserve.txt") || 0);
