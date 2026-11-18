@@ -1777,7 +1777,9 @@ export async function main(ns) {
     async function getServersDict(ns, command) {
         return await getNsDataThroughFile(
             ns,
-            `Object.fromEntries(ns.args.map(server => [server, ns.${command}(server)]))`,
+            // (per server: since 3.0 some lookups throw on hacknet servers, e.g. getServerRequiredHackingLevel, which killed
+            // daemon.js at startup with --use-hacknet-servers; 0 = like a server with no money, which they are)
+            `Object.fromEntries(ns.args.map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, 0]; } }))`,
             `/Temp/${command}-all.txt`,
             allHostNames,
         );
