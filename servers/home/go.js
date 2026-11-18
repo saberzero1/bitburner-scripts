@@ -54,6 +54,7 @@ const argsSchema = [
     ["early-cheats", 2], // With fast-search: cheat (play two moves) on our first N moves of a game. tools/go-fast/match.mjs vs
     // Illuminati 5x5: 0 cheats 50% won, 1: 63%, 2: ~88% (80/80 on boards without offline nodes), 3: 89%; cheating only when
     // behind did no better than cheating early
+    ["opportunistic-cheats", true], // Also play two moves (playTwoMoves) whenever the tick we play on anyway passes the cheat roll
     ["early-cheats-illuminati", 3], // Early cheats against Illuminati, the only opponent below ~97% (2026-11-16, match.mjs with the
     // reply check, 300 games each: 2 cheats won 271 and 275, 3 won 283 twice, 4 won 292 but took longer; node power/h was flat).
     // Wins matter beyond node power: the win streak multiplies it, and streaks convert to faction favour.
@@ -96,7 +97,8 @@ const GO_BONUS_POWER = { Netburners: 1.3, "Slum Snakes": 1.2, "The Black Hand": 
 const TIMED_CHEAT =
     `await (async () => { const a = ns.args; ` +
     `const roll = (t) => { const v = (t / 1000) % 30000; return ((171 * v) % 30269 / 30269 + (172 * v) % 30307 / 30307 + (170 * v) % 30323 / 30323) % 1; }; ` +
-    `for (let i = 0; i < 750; i++) { ` +
+    `const last = String(a[a.length - 1]); const lim = last.startsWith("lim") ? Number(last.slice(3)) : 750; ` +
+    `for (let i = 0; i < lim; i++) { ` +
     `if (roll(ns.getPlayer().totalPlaytime) <= ns.go.cheat.getCheatSuccessChance()) return a[0] === "playTwoMoves" ? await ns.go.cheat.playTwoMoves(a[1], a[2], a[3], a[4]) ` +
     `: a[0] === "removeRouter" ? await ns.go.cheat.removeRouter(a[1], a[2]) : a[0] === "destroyNode" ? await ns.go.cheat.destroyNode(a[1], a[2]) ` +
     `: await ns.go.cheat.repairOfflineNode(a[1], a[2]); ` +
@@ -110,6 +112,8 @@ export async function main(ns) {
     let searchOptions = { on: false, verify: false, verifyPlayouts: 6, playouts: 4, maxSize: 7 };
     let searchStats = { verified: 0, searched: 0, overridden: 0 };
     let maxCheatsPerGame = 1;
+    let opportunisticCheats = true;
+    let capture = null; // {first: {x, y} | null} while choosing an opportunistic double move (see movePiece)
     let boardSize = 13;
     let randomOpponents = false;
     let fixedOpponent = null;
@@ -217,6 +221,7 @@ export async function main(ns) {
         cheats = !runOptions["disable-cheats"] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions["cheat-chance-threshold"];
         maxCheatsPerGame = runOptions["max-cheats-per-game"];
+        opportunisticCheats = runOptions["opportunistic-cheats"];
         focusWorldDaemon = runOptions["focus-world-daemon"];
         searchOptions = {
             fast: runOptions["fast-search"], fastSkip: String(runOptions["fast-search-skip"]).split(",").map((s) => s.trim()),
@@ -320,8 +325,10 @@ export async function main(ns) {
     }
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
-    async function go_cheat_playTwoMoves(ns, x1, y1, x2, y2) {
-        return await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt", ["playTwoMoves", x1, y1, x2, y2]);
+    async function go_cheat_playTwoMoves(ns, x1, y1, x2, y2, maxChecks) {
+        // maxChecks: give up after this many 20 ms checks for a passing tick (default ~15 s)
+        return await getNsDataThroughFile(ns, TIMED_CHEAT, "/Temp/go-timed-cheat.txt",
+            ["playTwoMoves", x1, y1, x2, y2, ...(maxChecks ? [`lim${maxChecks}`] : [])]);
     }
     /** @param {NS} ns @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
      * @returns {Promise<{type: "move" | "pass" | "gameOver";x: number;y: number;}>} */
@@ -349,7 +356,12 @@ export async function main(ns) {
         const opts = { playouts: searchOptions.fastPlayouts, yieldFn };
         const [rcFrom, rcTo] = searchOptions.replyCheck;
         const earlyCheats = ns.go.getOpponent() === "Illuminati" ? searchOptions.earlyCheatsIlluminati : searchOptions.earlyCheats;
-        const willCheat = cheats && cheatsThisGame < earlyCheats && cheatsThisGame < maxCheatsPerGame;
+        const earlyCheat = cheats && cheatsThisGame < earlyCheats && cheatsThisGame < maxCheatsPerGame;
+        // Opportunistic: after the early cheats, play two moves whenever the tick we'd play on anyway passes the roll
+        // (>= the SF14.3 floor of 25%): no waiting, and a cheat on a passing tick can't fail. match.mjs (Illuminati 5x5,
+        // 300 games): 288 won vs 281, 2.6 vs 2.8 s/game, node power/h +17% (571k vs 488k)
+        const oppCheat = cheats && !earlyCheat && opportunisticCheats;
+        const willCheat = earlyCheat || oppCheat;
         const checkReplies = rcFrom && turn >= rcFrom && turn <= rcTo && !willCheat;
         const first = await fastSearch(board, komi, legalOf(board), { ...opts, topK: checkReplies ? 3 : 0 });
         if (checkReplies && first.top.length > 1) {
@@ -369,7 +381,7 @@ export async function main(ns) {
             const second = await fastSearch(rows, komi, legalOf(rows, first.move), opts);
             if (second.move) {
                 cheatsThisGame++;
-                const results = await go_cheat_playTwoMoves(ns, first.move.x, first.move.y, second.move.x, second.move.y);
+                const results = await go_cheat_playTwoMoves(ns, first.move.x, first.move.y, second.move.x, second.move.y, oppCheat ? 12 : undefined);
                 if (results) {
                     gameLog.push({ board, move: first.move, second: second.move, winRate: second.winRate });
                     ns.print(`Fast search: cheat ${first.move.x},${first.move.y} + ${second.move.x},${second.move.y} (win ${(second.winRate * 100).toFixed(0)}%)`);
@@ -464,6 +476,9 @@ export async function main(ns) {
                     continue;
                 }
             }
+            // Opportunistic double moves for the heuristics (as fastTurn does): the cascade's first move is held, placed
+            // on our view of the board, and the next tactic's move becomes the second stone (see movePiece/capture)
+            capture = cheats && opportunisticCheats && turn >= 3 ? { first: null } : null;
             if (turn < 3) results = await movePiece(ns, getOpeningMove(ns));
 
             if (turn >= 3) {
@@ -555,8 +570,7 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                     case 1: //The Black Hand
                         if (
@@ -638,8 +652,7 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                     case 2: //Mr. Mustacio - Slum Snakes
                         if (
@@ -721,8 +734,7 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                     case 3: //Daedalus
                         if (
@@ -804,8 +816,7 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                     case 4: //Tetrads
                         if (
@@ -887,8 +898,7 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                     case 5: //Illum
                         if (
@@ -963,8 +973,7 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                     case 6: //??????
                         if (
@@ -1046,11 +1055,11 @@ export async function main(ns) {
                             break;
                         if ((results = await movePiece(ns, getRandomStrat())))
                             break;
-                        ns.print("Turn Passed");
-                        results = await ns.go.passTurn();
+                        results = await passOrFirst(ns);
                         break;
                 } //End of style switch
             } // end of turn >= 3
+            capture = null;
             lastResults = results;
             checkNewGame(ns, results);
         }
@@ -2632,6 +2641,34 @@ export async function main(ns) {
         if (attack.coords === undefined) return false;
         const [x, y] = attack.coords;
         if (x === undefined) return false;
+        if (capture) {
+            // First move: hold it and place it on our view of the board (board, validMove, testBoard; chains and liberties
+            // stay as they were), so the next tactic in the cascade chooses the second stone as if it were played
+            if (!capture.first) {
+                capture.first = { x, y };
+                board[x] = board[x].slice(0, y) + "X" + board[x].slice(y + 1);
+                if (validMove[x]) validMove[x][y] = false;
+                if (testBoard[x + 1]) testBoard[x + 1] = testBoard[x + 1].slice(0, y + 1) + "X" + testBoard[x + 1].slice(y + 2);
+                return false;
+            }
+            if (x === capture.first.x && y === capture.first.y) return false;
+            const first = capture.first;
+            capture = null;
+            let results = null;
+            try {
+                // only a tick that passes the roll within ~240 ms: no waiting, and it can't fail
+                results = await go_cheat_playTwoMoves(ns, first.x, first.y, x, y, 12);
+            } catch {}
+            if (results) {
+                cheatsThisGame++;
+                ns.printf("Opportunistic cheat: %s,%s + %s,%s", first.x, first.y, x, y);
+                START = performance.now();
+                return results;
+            }
+            results = await go_makeMove(ns, first.x, first.y);
+            START = performance.now();
+            return results;
+        }
         let mid = performance.now();
         ns.printf("%s", attack.msg);
         // Check the heuristic move with a few playouts on the game's own rules and AI; if one is lost, search instead
@@ -2755,7 +2792,17 @@ export async function main(ns) {
         }
     }
     /** Try the configured cheats in order (--cheat-types). */
+    /** End of a cascade with no move found: play the held first move of an opportunistic double move, else pass. */
+    async function passOrFirst(ns) {
+        const first = capture?.first;
+        capture = null;
+        if (first) return await go_makeMove(ns, first.x, first.y);
+        ns.print("Turn Passed");
+        return await ns.go.passTurn();
+    }
+
     async function moveCheat(ns) {
+        if (capture) return false; // (opportunistic double moves replace the cheat tactics while capturing)
         for (const type of cheatTypes) {
             let results = false;
             if (type === "twoMoves") results = await moveSnakeEyes(ns, getSnakeEyes(cheatMinCapture));

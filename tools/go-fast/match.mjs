@@ -129,6 +129,10 @@ for (let g = 0; g < Number(games); g++) {
     // below rescueBelow, up to rescueMax cheats per game (live Illuminati losses collapse on moves ~5-9 after early cheats)
     if (r.move && !cheat && opts.rescueBelow !== undefined && r.winRate < opts.rescueBelow && cheats < (opts.rescueMax ?? 3) && turn > 1)
       cheat = true;
+    // opportunistic: cheat whenever the tick we play on anyway passes the roll (probability = the success chance), at no
+    // extra time: go.js can read the roll for the current tick, so nothing waits for a passing tick
+    let free = false;
+    if (r.move && !cheat && opts.opportunistic && Math.random() < cheatChance(cheats)) cheat = free = true;
     if (cheat) {
       // playTwoMoves: two stones in a row (search picks the second with black to move again)
       E.makeMove(s, r.move.x, r.move.y, "Black");
@@ -137,7 +141,7 @@ for (let g = 0; g < Number(games); g++) {
       if (r2.move) E.makeMove(s, r2.move.x, r2.move.y, "Black");
       else s.previousPlayer = "Black";
       gameLog.push({ board: boardBefore, move: r.move, second: r2.move, winRate: r2.winRate });
-      time += 0.2 / cheatChance(cheats);
+      if (!free) time += 0.2 / cheatChance(cheats);
       cheats++;
       twoMoves++;
     } else {

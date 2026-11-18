@@ -2281,7 +2281,11 @@ function planSegmentAnchors(ns, state, phaseInfo, limit) {
     const bySegment = new Map();
     for (const h of new Set([...state.discoveredServers.keys(), ...state.stasisServers])) {
         const depth = state.serverDepths.get(h);
-        if (depth === undefined || depth < AIR_GAP_DEPTH || h === DARKWEB_HOSTNAME) continue;
+        const labNeighbor = !!labNeighbors?.has(h);
+        // Segment 0 is reached from home, so it needs no anchor, except next to a labyrinth there: the Normal labyrinth sits
+        // at depth 7, and without an anchor its solver's host drifted away and the attempt started over (BN12.83: two
+        // failed attempts with the one anchor slot unused)
+        if (depth === undefined || (depth < AIR_GAP_DEPTH && !labNeighbor) || h === DARKWEB_HOSTNAME) continue;
         if (state.labyrinthServers.has(h)) continue;
         if (!state.stasisServers.has(h) && !isServerAuthenticated(state, h)) continue;
         let ram = 0;
@@ -2291,12 +2295,15 @@ function planSegmentAnchors(ns, state, phaseInfo, limit) {
         if (ram < STASIS_RAM_NEEDED && !state.stasisServers.has(h)) continue;
         const seg = Math.floor(depth / AIR_GAP_DEPTH);
         if (!bySegment.has(seg)) bySegment.set(seg, []);
-        bySegment.get(seg).push({ h, depth, ram, lab: !!labNeighbors?.has(h) });
+        // (the neighbour already running a solver first: anchoring it keeps that attempt's position)
+        bySegment.get(seg).push({ h, depth, ram, lab: labNeighbor, solver: labNeighbor && isRunningLabSolver(ns, h) });
     }
     const plan = [];
-    for (const seg of [...bySegment.keys()].sort((a, b) => b - a)) {
+    // The labyrinth's segment first (with one slot early on, its neighbour's anchor matters most), then deepest first
+    const hasLab = (seg) => bySegment.get(seg).some((x) => x.lab);
+    for (const seg of [...bySegment.keys()].sort((a, b) => hasLab(b) - hasLab(a) || b - a)) {
         if (plan.length >= limit) break;
-        const servers = bySegment.get(seg).sort((a, b) => b.lab - a.lab || b.depth - a.depth || b.ram - a.ram);
+        const servers = bySegment.get(seg).sort((a, b) => b.lab - a.lab || b.solver - a.solver || b.depth - a.depth || b.ram - a.ram);
         const best = servers[0];
         const current = servers.find((s) => state.stasisServers.has(s.h) && s.lab === best.lab && s.depth >= best.depth - 1);
         if (current) {
