@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 55;
+const PROBE_VERSION = 56;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1544,56 +1544,39 @@ async function execStasisBootstrap(ns, hostname, enable) {
             }
             ns.print(`Stasis ${enable ? "set" : "removed"} on ${hostname}`);
         }
-    } else if (maxRam >= STASIS_SCRIPT_RAM + PROBE_RAM_COST) {
-        // Not enough free RAM with probe running, but enough if we kill probe first.
-        // Write bootstrap that: sets stasis, then re-launches probe.
-        const probeScript = "Remote/darknet-probe.js";
-        const script = [
-            `export async function main(ns){`,
-            `try{await ns.dnet.setStasisLink(${stasisArg});}catch(e){ns.print('ERROR: '+e);}`,
-            `try{await ns.sleep(100);`,
-            `ns.exec('${probeScript}',ns.getHostname(),1,${PROBE_VERSION});}catch(e){}`,
-            `};`,
-        ].join("");
-        ns.write(scriptName, script, "w");
-
-        // Kill ourselves, free RAM, launch bootstrap
-        // But wait — we can't kill ourselves. We write the script,
-        // free blocked RAM, and exec it. If it fits in remaining RAM, great.
-        // If not, we need to accept we can't do stasis on this tight server.
-        const blockedRam = await runGetBlockedRam(ns, host);
-        if (freeRam + blockedRam >= STASIS_SCRIPT_RAM) {
-            // Free blocked RAM first to make room
-            await freeBlockedRam(ns);
-            const updatedFree = maxRam - (await nsGetServerUsedRam(ns, host));
-            if (updatedFree >= STASIS_SCRIPT_RAM) {
-                const pid = ns.exec(scriptName, host, 1);
-                if (pid > 0) {
-                    for (let w = 0; w < 60; w++) {
-                        await ns.sleep(50);
-                        const running = await nsPs(ns, host);
-                        if (!running.some((p) => p.pid === pid)) break;
-                    }
-                    ns.print(
-                        `Stasis ${enable ? "set" : "removed"} on ${hostname} (after freeing RAM)`,
-                    );
-                }
-            } else {
-                ns.print(
-                    `WARN: ${hostname} has ${updatedFree.toFixed(1)}GB free after clearing blocked, need ${STASIS_SCRIPT_RAM}GB for stasis`,
-                );
-            }
-        } else {
-            ns.print(
-                `WARN: ${hostname} too tight for stasis (${freeRam.toFixed(1)}GB free + ${blockedRam.toFixed(1)}GB blocked < ${STASIS_SCRIPT_RAM}GB needed)`,
-            );
-        }
     } else {
-        ns.print(
-            `WARN: ${hostname} maxRam ${maxRam}GB too small for stasis (need ${STASIS_SCRIPT_RAM + PROBE_RAM_COST}GB)`,
-        );
+        // Not enough RAM next to the probe (a 16 GB server: ~9 GB free beside the probe), so labyrinth neighbours could
+        // never be anchored (BN12.83's Normal labyrinth failed five attempts as the solver's host drifted away). Hand over:
+        // a small helper kills this probe (and spare-RAM workers), runs a bootstrap that links and restarts the probe, or
+        // restarts the probe at once if the bootstrap still doesn't fit (other scripts, e.g. a lab solver, are kept).
+        const BOOT_RAM = STASIS_SCRIPT_RAM + 1.3; // + exec, to restart the probe
+        const procs = (await nsPs(ns, host)) || [];
+        const kept = procs.filter((p) => p.pid !== ns.pid && !/darknet-worker-/.test(p.filename));
+        let keptRam = 0;
+        for (const p of kept) keptRam += (ns.getScriptRam(p.filename, host) || 0) * p.threads;
+        if (maxRam - keptRam - (await runGetBlockedRam(ns, host)) < BOOT_RAM) {
+            ns.print(`WARN: ${hostname} too small for stasis (${maxRam} GB, ${keptRam.toFixed(1)} GB kept; the bootstrap needs ${BOOT_RAM} GB)`);
+            return;
+        }
+        const boot = "/Temp/dnet-stasis-boot.js";
+        const helper = "/Temp/dnet-stasis-handoff.js";
+        ns.write(boot, `export async function main(ns){try{await ns.dnet.setStasisLink(ns.args[0]==="true");}catch(e){ns.print("ERROR: "+e);}` +
+            `ns.exec("Remote/darknet-probe.js",ns.getHostname(),1,Number(ns.args[1]));}`, "w");
+        ns.write(helper, [
+            `export async function main(ns){const [probe, boot, arg, ver] = ns.args; const h = ns.getHostname();`,
+            `ns.kill(Number(probe)); for (const p of ns.ps(h)) if (/darknet-worker-/.test(p.filename)) ns.kill(p.pid);`,
+            `if (ns.getServerMaxRam(h) - ns.getServerUsedRam(h) + ns.getScriptRam(ns.getScriptName()) >= ${BOOT_RAM})`,
+            ` ns.spawn(String(boot), {threads: 1, spawnDelay: 100}, arg, ver);`,
+            `else ns.spawn("Remote/darknet-probe.js", {threads: 1, spawnDelay: 100}, ver);}`,
+        ].join(""), "w");
+        const pid = ns.exec(helper, host, 1, ns.pid, boot, stasisArg, PROBE_VERSION);
+        if (pid > 0) {
+            ns.print(`Stasis ${enable ? "set" : "removed"} on ${hostname}: handing over to a bootstrap (the probe restarts afterwards)`);
+            await ns.sleep(60_000); // the helper kills us
+        } else ns.print(`WARN: could not start the stasis handoff on ${hostname}`);
     }
 }
+
 
 async function runGetStasisLimit(ns) {
     try {
