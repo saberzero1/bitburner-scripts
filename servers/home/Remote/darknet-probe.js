@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 57;
+const PROBE_VERSION = 58;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -133,7 +133,10 @@ export async function main(ns) {
             await requestOwnMigration(ns, OPTIONS_FILE, HOST);
             await serveMigrationRequests(ns, OPTIONS_FILE, HOST);
             await attemptMigrationCharging(ns, OPTIONS_FILE, HOST);
-            await checkAndUnleashStormSeed(ns, HOST);
+            // (Never unleash STORM_SEED.exe: a webstorm restarts every darknet server that isn't stasis-linked, killing
+            // every probe and solver, and deletes 60% of them. BN12.85: one right after the Endless install, with no
+            // anchors held, threw the darknet back to depth 2 for 30+ minutes. Leaving the seed in place also keeps the
+            // game from spawning another: it only adds one while none exists. checkAndUnleashStormSeed is kept unused.)
             await deployHackScript(ns, OPTIONS_FILE);
 
             // Re-deploy probes to stasis-linked servers (reachable at any distance)
