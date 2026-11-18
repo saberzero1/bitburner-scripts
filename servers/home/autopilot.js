@@ -1197,6 +1197,10 @@ export async function main(ns) {
             // relaunches daemon.js with its current args once stanek.js has exited.
             // Likewise stanek.js's default on-startup-script launched its own plain daemon.js, killing ours.
             const stanekArgs = ["--no-completion-script", "--no-startup-script"];
+            // After The Red Pill: charge from the hacknet servers too, to 1000 charges (stanek.js --hacknet-helpers; hashes have
+            // no use then, and daemon.js only gets the hacknet servers once Stanek is done, below)
+            if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"])
+                stanekArgs.push("--hacknet-helpers", "--max-charges", 1000);
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
@@ -1205,7 +1209,7 @@ export async function main(ns) {
         if (stanekRunning) daemonArgs.push("--reserved-ram", 1e100);
         // After The Red Pill hashes have no use left (only hacking level gates the BitNode), while the hacknet servers hold
         // most of our RAM (BN12.85: 14 x 4 TB idle beside ~19 TB elsewhere): let daemon farm hacking XP on them too.
-        if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"]) daemonArgs.push("--use-hacknet-servers");
+        if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"] && !stanekRunning) daemonArgs.push("--use-hacknet-servers");
 
         // Launch (or re-launch) daemon if it is not already running with all our desired args.
         // Hack: Ignore numeric arguments in the comparison, since we e.g. tweak --recovery-thread-padding over time

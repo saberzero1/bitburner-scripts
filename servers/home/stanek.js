@@ -22,6 +22,7 @@ const argsSchema = [
     ["reserved-ram", 32], // Don't use this RAM
     ["reserved-ram-ideal", 128], // Leave up to this much RAM free: 1/8 of home's RAM, capped at this (and at least reserved-ram)
     ["max-charges", 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
+    ["hacknet-helpers", false], // Also charge from every hacknet server at once (autopilot: after The Red Pill, with --max-charges 1000)
     ["on-startup-script", null], // Spawn this script when stanek is launched
     ["on-startup-script-args", []], // Args for the above
     // Off by default: the default startup/completion script was a plain daemon.js (with stale args), which killed
@@ -45,7 +46,8 @@ let options,
     idealReservedRam,
     chargeAttempts,
     sf4Level,
-    shouldContinueForAug;
+    shouldContinueForAug,
+    helperHosts = []; // hacknet servers charging alongside home (--hacknet-helpers)
 
 /** Maximizes charge on stanek fragments based on current home RAM.
  * NOTE: You should have no other scripts running on home while you do this to get the best peak charge possible
@@ -105,6 +107,8 @@ export async function main(ns) {
                 "warning",
             );
     }
+    if (options["hacknet-helpers"])
+        helperHosts = await getNsDataThroughFile(ns, `ns.scan("home").filter((h) => h.startsWith("hacknet-server-"))`, "/Temp/stanek-helpers.txt");
     chargeAttempts = {}; // We keep track of how many times we've charged each segment, to work around a placement bug where fragments can overlap, and then don't register charge
 
     const chargeScriptBody =
@@ -332,6 +336,22 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
             fragment.x,
             fragment.y,
         );
+        // Helper charges at the same time: a fragment's bonus is ln(highestCharge + 1) x ((numCharge + 1) / 5)^0.07,
+        // where highestCharge is the biggest single call (threads x the host's core bonus, 1 + (cores - 1) / 16) and each
+        // call adds its size / highestCharge to numCharge. Home's call stays the biggest, but each 4 TB, 24-core hacknet
+        // server adds ~0.42 charge per call (2048 x 2.44 vs home's ~8192 x 1.44): 14 of them make ~6.9 per call, so
+        // 1000 charges take ~5 minutes instead of ~33 (both hacking fragments: hacking skill and exp x~1.22 vs 120 charges).
+        const helperPids = [];
+        if (pid && options["hacknet-helpers"])
+            for (const h of helperHosts) {
+                try {
+                    const t = Math.floor((ns.getServerMaxRam(h) - ns.getServerUsedRam(h)) / 2.0);
+                    if (t < 1) continue;
+                    if (!ns.fileExists(chargeScript, h)) ns.scp(chargeScript, h, "home");
+                    const hp = ns.exec(chargeScript, h, { threads: t, temporary: true }, fragment.x, fragment.y);
+                    if (hp) helperPids.push(hp);
+                } catch {}
+            }
         if (!pid) {
             log(
                 ns,
@@ -341,6 +361,7 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
             continue;
         }
         await waitForProcessToComplete(ns, pid);
+        for (const hp of helperPids) await waitForProcessToComplete(ns, hp);
         chargeAttempts[fragment.id] = 1 + (chargeAttempts[fragment.id] || 0);
         charged++;
     }
