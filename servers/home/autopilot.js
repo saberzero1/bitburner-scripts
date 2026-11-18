@@ -39,7 +39,7 @@ const argsSchema = [
         ],
     ], // or... automatically install as soon as we can afford one of these augmentations
     ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
-    ["disable-wd-install-check", false], // After The Red Pill, install even if the pending augs bring less hacking multiplier than the Go bonus lost
+    ["disable-wd-install-check", false], // After The Red Pill, install even if that reaches the World Daemon later (rebuilding experience, Stanek and the Go bonus)
     ["darknet-install-hold-minutes", 90], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never; twice as long once it is found). Searches took 26-60+ min (2026-11-17); a cut-short search is lost
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ["time-before-boosting-best-hack-server", 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
@@ -152,6 +152,7 @@ export async function main(ns) {
         hackingStanekChecked = false; // after The Red Pill: whether we've checked/switched to the hacking-only layout
     let daemonStartTime = 0; // The time we personally launched daemon.
     let installCountdown = 0; // Start of a countdown before we install augmentations.
+    const WD_CLIMB_FILE = "/data/wd-climb.txt"; // {reset, target, samples: [msSinceInstall, exp, level, mult, goBonus]} (recordWdClimb)
     let installCountdownResets = 0; // Number of times we've reset the countdown because our affordable augs has increased
     let bnCompletionSuppressed = false; // Flag if we've detected that we've won the BN, but are suppressing a restart
     let sleevesMaxedOut = false; // Flag used only when the player is replaying BN 10 with all sleeves but has suppressed auto-destroying the BN, to allow continued auto-installs
@@ -437,6 +438,7 @@ export async function main(ns) {
         await maybeUpgradeSleeveMemory(ns, player);
         await checkOnRunningScripts(ns, player);
         await maybeDoCasino(ns, player);
+        await recordWdClimb(ns, player);
         await maybeInstallAugmentations(ns, player);
         return shouldWeKeepRunning(ns); // Return false to shut down autopilot.js if we installed augs, or don't have enough home RAM
     }
@@ -1781,6 +1783,67 @@ export async function main(ns) {
      *           affordable_augs: string[], affordable_count: number, affordable_count_nf: number, affordable_count_ex_nf: number,
      *           total_rep_cost: number, total_aug_cost: number, unowned_count: number }} facmanOutput
      */
+    /** After The Red Pill, record the hacking climb since the last install (per minute, /data/wd-climb.txt): experience,
+     * level, hacking multiplier (it includes the Go bonus and Stanek) and the World Daemon's Go bonus. The install check
+     * replays it: after an install, experience, Stanek and the Go bonus rebuild as they did since this one. */
+    let lastWdSample = 0;
+    async function recordWdClimb(ns, player) {
+        if (!installedAugmentations.includes(augTRP) || Date.now() - lastWdSample < 60_000) return;
+        lastWdSample = Date.now();
+        try {
+            const [exp, level, mult, go, target] = await getNsDataThroughFile(ns,
+                `(() => { const p = ns.getPlayer(); return [p.exp.hacking, p.skills.hacking, p.mults.hacking,
+                    (ns.go.analysis.getStats()["????????????"]?.bonusPercent ?? 0) / 100, ns.getServerRequiredHackingLevel("w0r1d_d43m0n")]; })()`,
+                "/Temp/wd-climb-sample.txt");
+            let climb = null;
+            try {
+                climb = JSON.parse(ns.read(WD_CLIMB_FILE) || "null");
+            } catch {}
+            if (!climb || climb.reset !== resetInfo.lastAugReset) climb = { reset: resetInfo.lastAugReset, samples: [] };
+            climb.target = target;
+            climb.samples.push([Date.now() - resetInfo.lastAugReset, exp, level, mult, go]);
+            ns.write(WD_CLIMB_FILE, JSON.stringify(climb), "w");
+        } catch {}
+    }
+
+    /** Time to the World Daemon's hacking requirement without installing, and after installing augs worth `gain` (hacking
+     * multiplier). Level = mult x c x (32 ln(exp + 534.6) - 200) (c: the BitNode's level multiplier, from the latest sample).
+     * Staying: the multiplier stays, experience grows at its rate over the last ~10 minutes. Installing: the climb since
+     * this install replays (experience, and the multiplier's rebuilding part: Stanek and the Go bonus), with the permanent
+     * part (augs, grafts) scaled by gain. Conservative for installing: grafts that landed during the recorded climb count
+     * as rebuilding. null without enough samples. */
+    function estimateWdInstall(gain) {
+        let climb = null;
+        try {
+            climb = JSON.parse(ns.read(WD_CLIMB_FILE) || "null");
+        } catch {}
+        // (the replay needs the climb from the start: not when recording began late, e.g. autopilot updated mid-phase)
+        if (!climb || climb.reset !== resetInfo.lastAugReset || climb.samples.length < 10 || climb.samples[0][0] > 5 * 60_000) return null;
+        const S = climb.samples, T = climb.target, last = S[S.length - 1];
+        const f = (exp) => 32 * Math.log(exp + 534.6) - 200;
+        const [tNow, expNow, levelNow, multNow] = last;
+        if (levelNow >= T) return { stay: 0, install: Infinity };
+        const c = levelNow / (multNow * f(expNow));
+        const ref = S.find((x) => tNow - x[0] >= 10 * 60_000 && tNow - x[0] <= 20 * 60_000) ?? S[Math.max(0, S.length - 11)];
+        const rate = (expNow - ref[1]) / Math.max(1, tNow - ref[0]); // exp per ms
+        // ...and the multiplier at its relative rate over that window (the Go bonus and grafts keep raising it; experience
+        // alone barely moves the level this late: held flat, staying looked ~80 hours away and every install won)
+        const multGrowth = Math.max(0, (multNow / ref[3] - 1) / Math.max(1, tNow - ref[0])); // per ms, linear
+        const timeFrom = (exp, mult) => { // ms until the level reaches T, in 1-minute steps (up to 2 days)
+            for (let t = 0; t <= 48 * 3600_000; t += 60_000)
+                if (mult * (1 + multGrowth * t) * c * f(exp + rate * t) >= T) return t;
+            return Infinity;
+        };
+        const stay = timeFrom(expNow, multNow);
+        // The multiplier's rebuilding part relative to now: mult(t) / mult(now), capped at 1 (Stanek's charge and the Go bonus
+        // were lower then). After an install: mult(t) x gain, with experience as recorded.
+        for (const [t, exp, , mult] of S) {
+            const multAfter = Math.min(mult, multNow) * gain;
+            if (multAfter * c * f(exp) >= T) return { stay, install: t + 60_000 }; // (+1 min: the install itself)
+        }
+        return { stay, install: tNow + 60_000 + timeFrom(expNow, multNow * gain) };
+    }
+
     const lastFactionRep = {}; // faction -> rep at the previous install check
     async function shouldDelayInstall(ns, player, facmanOutput) {
         // Don't install if we're currently grafting an augmentation, except a charisma graft when a labyrinth reward is
@@ -1811,17 +1874,26 @@ export async function main(ns) {
         if (installedAugmentations.includes(augTRP) && !options["disable-wd-install-check"]) {
             const pending = [...new Set([...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs])];
             try {
-                const [gain, goBonus] = await getNsDataThroughFile(ns,
-                    `[ns.args.reduce((m, a) => m * (ns.singularity.getAugmentationStats(a).hacking ?? 1), 1),
-                      (ns.go.analysis.getStats()["????????????"]?.bonusPercent ?? 0) / 100]`,
+                const gain = await getNsDataThroughFile(ns,
+                    `ns.args.reduce((m, a) => m * (ns.singularity.getAugmentationStats(a).hacking ?? 1), 1)`,
                     "/Temp/wd-install-check.txt", pending);
-                if (gain < (1 + goBonus) * 1.1) {
-                    setStatus(ns, `Not installing: the pending augs multiply hacking by x${gain.toFixed(2)}, less than the World Daemon's ` +
-                        `Go bonus (x${(1 + goBonus).toFixed(2)}, +10% for lost experience) that an install would reset (--disable-wd-install-check).`);
+                const est = estimateWdInstall(gain);
+                if (est && !(est.install * 1.1 < est.stay)) {
+                    setStatus(ns, `Not installing: the pending augs (hacking x${gain.toFixed(2)}) would reach the World Daemon's ` +
+                        `requirement in ~${formatDuration(est.install)} after rebuilding experience, Stanek and the Go bonus, ` +
+                        `vs ~${formatDuration(est.stay)} without installing (--disable-wd-install-check).`);
+                    return true;
+                }
+                if (est) log(ns, `INFO: Installing for hacking x${gain.toFixed(2)}: the World Daemon in ~${formatDuration(est.install)} ` +
+                    `(rebuild included) vs ~${formatDuration(est.stay)} without installing.`, true);
+                else if (gain < 1.5) {
+                    // (no climb recorded since the last install yet: hold for small gains, as before)
+                    setStatus(ns, `Not installing: the pending augs multiply hacking by only x${gain.toFixed(2)}, and there is ` +
+                        `no recorded climb yet to estimate an install's rebuild time (--disable-wd-install-check).`);
                     return true;
                 }
             } catch (err) {
-                log(ns, `WARNING: Could not compare pending augs with the Go bonus: ${getErrorInfo(err)}`);
+                log(ns, `WARNING: Could not compare pending augs with the World Daemon climb: ${getErrorInfo(err)}`);
             }
         }
         // Every install regenerates the darknet. Quick installs of a few cheap augs (SoA, social) every 6-14 minutes kept
