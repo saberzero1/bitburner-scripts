@@ -1693,11 +1693,17 @@ export async function main(ns) {
             // If we're currently in a state where we should not be resetting, skip reset logic
             return (reservedPurchase = 0);
 
+        // A labyrinth reward (or another --install-for-augs aug) pending: install after 30 s, not --install-countdown (5 min,
+        // "in case more augs come online"): the next labyrinth waits for this install, and money for more augs has usually
+        // built up while something held it (BN12.83: the H4mmer install came 9 minutes after the graft holding it ended)
+        const priorityInstall = options["install-for-augs"].some((a) => augsToInstall.includes(a));
+        const countdownMs = priorityInstall ? Math.min(30_000, options["install-countdown"]) : options["install-countdown"];
+        if (priorityInstall && installCountdown > Date.now() + countdownMs) installCountdown = Date.now() + countdownMs;
         // Ensure the money needed for the above augs doesn't get ripped out from under us by reserving it
         if (reservedPurchase < totalCost) {
             // A countdown is displayed to give the user a heads up, and give us time to potentially earn money for more augmentations
             if (reservedPurchase == 0)
-                installCountdown = Date.now() + options["install-countdown"];
+                installCountdown = Date.now() + countdownMs;
             else {
                 // If we were already reserving for a purchase and the number went up, log a notice of the timer being reset.
                 let purchaseChangeLog = `INFO: The augmentation purchase we can afford has increased from ${formatMoney(reservedPurchase)} to ${formatMoney(totalCost)}.`;
@@ -1730,7 +1736,7 @@ export async function main(ns) {
         // We must wait until the configured cooldown elapses before we install augs.
         if (installCountdown > Date.now()) {
             resetStatus +=
-                `\n  Waiting for ${formatDuration(options["install-countdown"])} (--install-countdown) ` +
+                `\n  Waiting for ${formatDuration(countdownMs)} (--install-countdown) ` +
                 `to elapse before we install, in case we're close to being able to purchase more augmentations...`;
             setStatus(ns, resetStatus);
             ns.toast(
