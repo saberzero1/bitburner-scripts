@@ -39,6 +39,7 @@ const argsSchema = [
         ],
     ], // or... automatically install as soon as we can afford one of these augmentations
     ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
+    ["wd-stanek-charges", 1000], // After The Red Pill, charge Stanek's fragments to this many charges (stanek.js --max-charges, default 120)
     ["disable-hacknet-xp", false], // After The Red Pill, don't let daemon.js farm hacking XP on hacknet servers (it costs their hash rate)
     ["disable-wd-install-check", false], // After The Red Pill, install even if that reaches the World Daemon later (rebuilding experience, Stanek and the Go bonus)
     ["darknet-install-hold-minutes", 90], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never; twice as long once it is found). Searches took 26-60+ min (2026-11-17); a cut-short search is lost
@@ -1197,10 +1198,13 @@ export async function main(ns) {
             // relaunches daemon.js with its current args once stanek.js has exited.
             // Likewise stanek.js's default on-startup-script launched its own plain daemon.js, killing ours.
             const stanekArgs = ["--no-completion-script", "--no-startup-script"];
-            // After The Red Pill: charge from the hacknet servers too, to 1000 charges (stanek.js --hacknet-helpers; hashes have
-            // no use then, and daemon.js only gets the hacknet servers once Stanek is done, below)
-            if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"])
-                stanekArgs.push("--hacknet-helpers", "--max-charges", 1000);
+            // After The Red Pill: charge to 1000 charges instead of 120 (both hacking fragments: hacking skill and exp x~1.24,
+            // for ~30 more minutes of home charging; no money needed), from the hacknet servers too as they're rebought
+            // (stanek.js --hacknet-helpers; hashes have no use then, and daemon.js only gets them once Stanek is done, below)
+            if (installedAugmentations.includes(augTRP)) {
+                stanekArgs.push("--max-charges", options["wd-stanek-charges"]);
+                if (!options["disable-hacknet-xp"]) stanekArgs.push("--hacknet-helpers");
+            }
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
@@ -1210,6 +1214,9 @@ export async function main(ns) {
         // After The Red Pill hashes have no use left (only hacking level gates the BitNode), while the hacknet servers hold
         // most of our RAM (BN12.85: 14 x 4 TB idle beside ~19 TB elsewhere): let daemon farm hacking XP on them too.
         if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"] && !stanekRunning) daemonArgs.push("--use-hacknet-servers");
+        // ...and buy hacknet RAM rather than hash production (hacknet-upgrade-manager.js --ram-first): ~$1M/GB, ~260x cheaper than
+        // home RAM, for Stanek's helper charges and XP farming. Grafts keep priority through graft.js's reserve.
+        if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"]) daemonArgs.push("--hacknet-ram-first");
 
         // Launch (or re-launch) daemon if it is not already running with all our desired args.
         // Hack: Ignore numeric arguments in the comparison, since we e.g. tweak --recovery-thread-padding over time

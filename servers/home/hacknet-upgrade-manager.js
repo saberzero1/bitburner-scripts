@@ -17,6 +17,9 @@ const argsSchema = [
     ["max-spend", Number.MAX_VALUE], // The maximum amount of money to spend on upgrades
     ["toast", false], // Set to true to toast purchases
     ["reserve", null], // Reserve this much cash (defaults to contents of reserve.txt if not specified)
+    ["ram-first", false], // Buy RAM, not hash production: the cheapest RAM upgrade per GB, then new servers once all are at max RAM
+    // (autopilot via daemon.js after The Red Pill: hashes are useless then, while hacknet RAM is ~$1M/GB, ~260x cheaper than
+    // home's, and runs Stanek charges (24 cores) and XP farming; levels and cache only raise hash production)
 ];
 
 export function autocomplete(data, _) {
@@ -100,6 +103,7 @@ export function upgradeHacknet(
     maxPayoffTimeSeconds = 3600 /* 3600 sec == 1 hour */,
     options,
 ) {
+    if (options?.["ram-first"]) return upgradeHacknetRam(ns, maxSpend, options);
     const currentHacknetMult = ns.getPlayer().mults.hacknet_node_money;
     // Get the lowest cache level, we do not consider upgrading the cache level of servers above this until all have the same cache level
     const minCacheLevel = [...Array(ns.hacknet.numNodes()).keys()].reduce(
@@ -265,4 +269,35 @@ export function upgradeHacknet(
             : `Insufficient funds to purchase the next best upgrade: ${strPurchase}`,
     );
     return success ? cost : 0;
+}
+
+/** --ram-first: the RAM upgrade with the lowest cost per added GB; once every server is at max RAM, a new server (cores,
+ * levels and cache add only hash production). Returns the money spent, 0 when it can't afford it yet, false when done. */
+function upgradeHacknetRam(ns, maxSpend, options) {
+    let best = null;
+    for (let i = 0; i < ns.hacknet.numNodes(); i++) {
+        const cost = ns.hacknet.getRamUpgradeCost(i, 1);
+        if (!Number.isFinite(cost)) continue; // at max RAM
+        const perGb = cost / ns.hacknet.getNodeStats(i).ram; // a RAM upgrade doubles it
+        if (!best || perGb < best.perGb) best = { i, cost, perGb };
+    }
+    const newServer = !best && ns.hacknet.numNodes() < ns.hacknet.maxNumNodes();
+    if (!best && !newServer) {
+        setStatus(ns, `Every hacknet server is at max RAM and the server limit is reached.`);
+        return false;
+    }
+    const cost = best ? best.cost : ns.hacknet.getPurchaseNodeCost();
+    const what = best ? `hacknet-server-${best.i} RAM ${ns.hacknet.getNodeStats(best.i).ram * 2} GB` : `a new hacknet server`;
+    if (cost > maxSpend) {
+        setStatus(ns, `The next RAM purchase (${what}, ${formatMoney(cost)}) exceeds the spending limit (${formatMoney(maxSpend)})`);
+        return false;
+    }
+    const reserve = options["reserve"] != null ? options["reserve"] : Number(ns.read("reserve.txt") || 0);
+    if (cost > ns.getPlayer().money - reserve) {
+        setStatus(ns, `The next RAM purchase (${what}, ${formatMoney(cost)}) exceeds our available funds` + (reserve ? ` (after reserving ${formatMoney(reserve)}).` : "."));
+        return 0;
+    }
+    const ok = best ? ns.hacknet.upgradeRam(best.i, 1) : ns.hacknet.purchaseNode() !== -1;
+    setStatus(ns, ok ? `Purchased ${what} for ${formatMoney(cost)}` : `Could not purchase ${what}`);
+    return ok ? cost : 0;
 }

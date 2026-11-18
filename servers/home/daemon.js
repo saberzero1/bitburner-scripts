@@ -45,6 +45,7 @@ const argsSchema = [
     ["n", false], // Can toggle on using hacknet nodes for extra hacking ram (at the expense of hash production)
     ["use-hacknet-nodes", false], // Same as above (kept for backwards compatibility, but these are now called hacknet-servers)
     ["use-hacknet-servers", false], // Same as above, but the game recently renamed these
+    ["hacknet-ram-first", false], // Run hacknet-upgrade-manager.js with --ram-first (autopilot: after The Red Pill)
 
     ["spend-hashes-for-money-when-under", 10e6], // (Default 10m) Convert 4 hashes to money whenever we're below this amount
     ["disable-spend-hashes", false], // An easy way to set the above to a very large negative number, thus never spending hashes for Money
@@ -518,7 +519,7 @@ export async function main(ns) {
             {
                 name: "hacknet-upgrade-manager.js",
                 shouldRun: () => shouldUpgradeHacknet(),
-                args: ["-c", "--max-payoff-time", "1h", "--interval", "0"],
+                args: () => ["-c", "--max-payoff-time", "1h", "--interval", "0", ...(options["hacknet-ram-first"] ? ["--ram-first"] : [])],
                 shouldTail: false,
             }, // One-time kickstart of hash income by buying everything with up to 1h payoff time immediately
             {
@@ -622,7 +623,8 @@ export async function main(ns) {
                     "--max-payoff-time",
                     "4h",
                     "--max-spend",
-                    getPlayerMoney(ns) * 0.1,
+                    getPlayerMoney(ns) * (options["hacknet-ram-first"] ? 0.25 : 0.1),
+                    ...(options["hacknet-ram-first"] ? ["--ram-first"] : []),
                 ],
             },
             {
@@ -634,7 +636,8 @@ export async function main(ns) {
                     "--max-payoff-time",
                     "8h",
                     "--max-spend",
-                    getPlayerMoney(ns) * 0.01,
+                    getPlayerMoney(ns) * (options["hacknet-ram-first"] ? 0.25 : 0.01),
+                    ...(options["hacknet-ram-first"] ? ["--ram-first"] : []),
                 ],
             },
             // Buy upgrades regardless of payoff if they cost less than 0.1% of our money
@@ -647,7 +650,8 @@ export async function main(ns) {
                     "--max-payoff-time",
                     "1E100h",
                     "--max-spend",
-                    getPlayerMoney(ns) * 0.001,
+                    getPlayerMoney(ns) * (options["hacknet-ram-first"] ? 0.25 : 0.001),
+                    ...(options["hacknet-ram-first"] ? ["--ram-first"] : []),
                 ],
             },
             {

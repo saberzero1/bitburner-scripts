@@ -47,7 +47,8 @@ let options,
     chargeAttempts,
     sf4Level,
     shouldContinueForAug,
-    helperHosts = []; // hacknet servers charging alongside home (--hacknet-helpers)
+    helperHosts = [], // hacknet servers charging alongside home (--hacknet-helpers)
+    helpersScannedAt = 0;
 
 /** Maximizes charge on stanek fragments based on current home RAM.
  * NOTE: You should have no other scripts running on home while you do this to get the best peak charge possible
@@ -107,8 +108,6 @@ export async function main(ns) {
                 "warning",
             );
     }
-    if (options["hacknet-helpers"])
-        helperHosts = await getNsDataThroughFile(ns, `ns.scan("home").filter((h) => h.startsWith("hacknet-server-"))`, "/Temp/stanek-helpers.txt");
     chargeAttempts = {}; // We keep track of how many times we've charged each segment, to work around a placement bug where fragments can overlap, and then don't register charge
 
     const chargeScriptBody =
@@ -342,6 +341,13 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
         // server adds ~0.42 charge per call (2048 x 2.44 vs home's ~8192 x 1.44): 14 of them make ~6.9 per call, so
         // 1000 charges take ~5 minutes instead of ~33 (both hacking fragments: hacking skill and exp x~1.22 vs 120 charges).
         const helperPids = [];
+        // (rescanned every minute: after The Red Pill install the hacknet is rebought while we charge)
+        if (options["hacknet-helpers"] && Date.now() - helpersScannedAt > 60_000) {
+            helpersScannedAt = Date.now();
+            try {
+                helperHosts = await getNsDataThroughFile(ns, `ns.scan("home").filter((h) => h.startsWith("hacknet-server-"))`, "/Temp/stanek-helpers.txt");
+            } catch {}
+        }
         if (pid && options["hacknet-helpers"])
             for (const h of helperHosts) {
                 try {

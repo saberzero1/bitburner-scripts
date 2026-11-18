@@ -236,6 +236,9 @@ export async function main(ns) {
             if (choice && choice.wait > 0) {
                 log(ns, `INFO: Waiting ~${formatDuration(choice.wait)} to afford ${choice.name} (${formatMoney(choice.cost)}), ` +
                     `better per minute than any affordable graft.`);
+                // Reserve it (autopilot adds this file to reserve.txt): after The Red Pill, hacknet RAM buying (--ram-first)
+                // and others would otherwise spend the money a graft worth x1.1-1.2 hacking is waiting for
+                ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve + choice.cost }), "w");
                 await ns.sleep(Math.min(Math.max(choice.wait, 10_000), 60_000));
                 continue;
             }
