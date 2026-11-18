@@ -55,8 +55,9 @@ const argsSchema = [
     // Illuminati 5x5: 0 cheats 50% won, 1: 63%, 2: ~88% (80/80 on boards without offline nodes), 3: 89%; cheating only when
     // behind did no better than cheating early
     ["opportunistic-cheats", true], // Also play two moves (playTwoMoves) whenever the tick we play on anyway passes the cheat roll
-    ["opportunistic-heuristics", false], // ...also in heuristic games (World Daemon etc.): second stone = the cascade's next move on
-    // the board with the first one placed. Off until tools/go-sim confirms it (19x19 World Daemon sims are slow)
+    ["opportunistic-heuristics", true], // ...also in heuristic games (World Daemon etc.): second stone = the cascade's next move on
+    // the board with the first one placed. On from BN12.85, judged live against /data/go-wd.txt (before: 74% won, ~55-72 s
+    // per World Daemon game); 19x19 jest sims never finished (10.5 h for 2x8 games)
     ["early-cheats-illuminati", 3], // Early cheats against Illuminati, the only opponent below ~97% (2026-11-16, match.mjs with the
     // reply check, 300 games each: 2 cheats won 271 and 275, 3 won 283 twice, 4 won 292 but took longer; node power/h was flat).
     // Wins matter beyond node power: the win streak multiplies it, and streaks convert to faction favour.
@@ -121,7 +122,7 @@ export async function main(ns) {
     let searchStats = { verified: 0, searched: 0, overridden: 0 };
     let maxCheatsPerGame = 1;
     let opportunisticCheats = true;
-    let opportunisticHeuristics = false;
+    let opportunisticHeuristics = true;
     const opportunisticCheatRam = 11.1; // OPPORTUNISTIC_CHEAT's temp script (calculateRam)
     let capture = null; // {first: {x, y} | null} while choosing an opportunistic double move (see movePiece)
     let boardSize = 13;
