@@ -67,14 +67,19 @@ def search(size, budget=60000, seed=1):
         for x, y in p[4]: grid[y][x] = ch
     return {"width": W, "height": H, "k": [k0, k1] if b else [k0], "grid": [''.join(r) for r in grid],
             "fragments": [{"id": p[0], "x": p[1], "y": p[2], "rotation": p[3]} for p in frags]}
+def _job(j): return search(*j)
 if __name__ == "__main__":
     sizes = [(5,5),(6,5),(6,6),(7,6),(7,7),(8,7),(8,8),(9,8),(9,9),(10,9),(10,10),(11,10),(11,11),(12,11),(12,12),(13,12),(13,13)]
     # BUDGET / SEEDS env: more trials and several seeds per size, keeping the best (sum of boosters, then the weaker side)
     import os
     budget, seeds = int(os.environ.get("BUDGET", 60000)), int(os.environ.get("SEEDS", 1))
     jobs = [(sz, budget, sd) for sz in sizes for sd in range(1, seeds + 1)]
-    with mp.Pool(min(len(jobs), max(1, mp.cpu_count() - 2))) as pool:
-        allres = pool.starmap(search, jobs)
+    # (each result is appended to <out>.partial as it finishes, so a long search keeps what it found if it's stopped)
+    allres = []
+    with mp.Pool(min(len(jobs), max(1, mp.cpu_count() - 2))) as pool, open(sys.argv[2] + ".partial", "a") as part:
+        for r in pool.imap_unordered(_job, jobs):
+            allres.append(r); part.write(json.dumps(r) + "\n"); part.flush()
+            print("found", r['width'], 'x', r['height'], 'k', r['k'], flush=True)
     best = {}
     for r in allres:
         key, cur = (r['width'], r['height']), best.get((r['width'], r['height']))
