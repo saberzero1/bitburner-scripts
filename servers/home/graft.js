@@ -29,6 +29,7 @@ const argsSchema = [
     ["charisma-margin", 1.3], // Charisma mode grafts up to this times the labyrinth's requirement (moves are slow near it)
     ["eta-slack", 1.5], // Hacking mode: skip grafts longer than this times the projected time to reach the target by experience
     ["no-starter", false], // Don't graft the starter augmentations first (Neuroreceptor, Enhanced Social Interaction)
+    ["starter-esii", false], // Also graft Enhanced Social Interaction as a starter after Cruel's install (off: the charisma Stanek layout replaces it)
 ];
 export function autocomplete(data) {
     data.flags(argsSchema);
@@ -52,9 +53,13 @@ const GRAFT_RESERVE_FILE = "/Temp/graft-reserve.txt"; // {t, amount}: cash the s
 // and would cancel it).
 // The check uses installed augmentations: with queued ones counted, ESII started the moment Cruel was solved (B00ts
 // queued) and held that reward's install for its whole 47 minutes (BN12.83).
+// ESII is off by default since the charisma Stanek layout (2026-11-18): it gives ~x2 charisma by itself (BN12.86: Merciless
+// was charisma-gated for 20 minutes until the layout charged, then solved before ESII even finished), while ESII's
+// 47-minute graft holds installs as a starter and costs x0.98 entropy on everything (World Daemon hacking included).
+// graft.js's charisma mode (cancellable by reward installs) stays the fallback. --starter-esii brings it back.
 const STARTERS = [
     ["Neuroreceptor Management Implant", () => true],
-    ["Enhanced Social Interaction Implant", (installed) => installed.includes("The B00ts of Perseus")],
+    ["Enhanced Social Interaction Implant", (installed, options) => options["starter-esii"] && installed.includes("The B00ts of Perseus")],
 ];
 
 /** @param {NS} ns */
@@ -132,12 +137,13 @@ export async function main(ns) {
         // published (GRAFT_RESERVE_FILE) so autopilot adds it to reserve.txt and stockmaster keeps it as cash: autopilot
         // reserves the casino's $8b for stocks, which left graft.js ~$2b and Enhanced Social Interaction ungrafted.
         const pendingStarters = options["no-starter"] || info.redPill ? [] :
-            STARTERS.filter(([name]) => !info.owned.includes(name) && info.augs.some((a) => a.name === name));
+            STARTERS.filter(([name]) => !info.owned.includes(name) && info.augs.some((a) => a.name === name) &&
+                (name !== "Enhanced Social Interaction Implant" || options["starter-esii"])); // (no reserve for a disabled starter)
         starterReserve = pendingStarters.reduce((t, [name]) => t + info.augs.find((a) => a.name === name).cost, 0);
         ns.write(GRAFT_RESERVE_FILE, JSON.stringify({ t: Date.now(), amount: starterReserve }), "w");
         // (and none while augmentations wait to be installed, e.g. a labyrinth reward: the graft would hold that install)
         const queued = info.owned.length > info.installed.length;
-        const starter = !queued && pendingStarters.find(([, ready]) => ready(info.installed));
+        const starter = !queued && pendingStarters.find(([, ready]) => ready(info.installed, options));
         const starterAug = starter && info.augs.find((a) => a.name === starter[0]);
         if (starterAug && starterAug.cost <= info.money) {
             // (status "starter": autopilot holds installs for it like any graft. As "charisma", a labyrinth reward's install
