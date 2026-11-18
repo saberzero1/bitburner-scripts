@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 56;
+const PROBE_VERSION = 57;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -479,6 +479,8 @@ async function tryAccessServer(ns, hostname, details, passwords) {
 
 // Maze grid size per labyrinth (labyrinth.ts labData sizes, stitched from 4 odd-sized mazes): the solver aims for
 // the far corner, where the exit is (minus a small random offset). Unknown labyrinths: aim far south-east.
+const LAB_SOLVER_FILE = "Remote/lab-solver.js"; // copied with the probe (deployProbe)
+const LAB_OFFSETS = new Set(["ub3r_l4byr1nth", "et3rn4l_l4byr1nth", "end13ss_l4byr1nth", "f1n4l_l4byr1nth", "b0nus_l4byr1nth"]);
 const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
@@ -614,24 +616,22 @@ async function solveLabyrinth(ns, hostname) {
         `}`,
     ].join("\n");
 
-    ns.write(scriptFile, solverScript, "w");
+    // The shared solver (best-first, pruned, one maze map for every solver on this labyrinth: Remote/lab-solver.js) when
+    // it's on this host; the inline one above otherwise (hosts deployed before it existed)
+    const shared = ns.fileExists(LAB_SOLVER_FILE, host);
+    if (!shared) ns.write(scriptFile, solverScript, "w");
     ns.write(resultFile, "<pending>", "w");
 
     // As many threads as fit: each step takes 1 / (1 + 0.2 * (threads - 1)) as long. The spare-RAM worker is paused
     // for it (manageWorker keeps it off while a solver runs here); one left running slowed the solver greatly.
     for (const p of ((await nsPs(ns, host)) || []).filter((p) => /darknet-worker-/.test(p.filename))) await nsKill(ns, p.pid);
     const freeRam = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host);
-    const threads = Math.max(1, Math.floor((freeRam - 4) / 2));
+    const threadRam = shared ? ns.getScriptRam(LAB_SOLVER_FILE, host) || 2.5 : 2;
+    const threads = Math.max(1, Math.floor((freeRam - 4) / threadRam));
     const [gridW, gridH] = LAB_GRID[hostname] ?? [1e4, 1e4];
-    const pid = ns.exec(
-        scriptFile,
-        host,
-        { threads, ramOverride: 2 },
-        hostname,
-        resultFile,
-        gridW - 2,
-        gridH - 2,
-    );
+    const pid = shared
+        ? ns.exec(LAB_SOLVER_FILE, host, { threads }, hostname, resultFile, gridW, gridH, LAB_OFFSETS.has(hostname) ? 1 : 0)
+        : ns.exec(scriptFile, host, { threads, ramOverride: 2 }, hostname, resultFile, gridW - 2, gridH - 2);
     if (!pid) {
         ns.print(
             `WARN: Failed to exec labyrinth solver for ${hostname} on ${host}; running inline solver`,
@@ -923,6 +923,13 @@ async function deployProbe(
                     password,
                 );
             }
+        } catch {}
+
+        // Step 6b: ...and the shared labyrinth solver, so the new probe can run it (best-effort)
+        try {
+            if (ns.fileExists(LAB_SOLVER_FILE, ns.getHostname()) &&
+                !(await nsScpDirect(ns, LAB_SOLVER_FILE, hostname, ns.getHostname())) && password !== undefined)
+                await nsScpWithSession(ns, LAB_SOLVER_FILE, hostname, password);
         } catch {}
 
         // Step 7: Execute probe on target

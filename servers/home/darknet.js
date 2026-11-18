@@ -86,7 +86,10 @@ const RAMFREE_HELPER_SCRIPT = "/Temp/darknet-ramfree.js";
 const RAMFREE_HELPER_CONTENT = `/** @param {NS} ns */ export async function main(ns) { const need = Number(ns.args[0]) || 1e9, h = ns.getHostname(); while (ns.dnet.getBlockedRam() > 0 && ns.getServerMaxRam(h) - ns.getServerUsedRam(h) < need) { const r = await ns.dnet.memoryReallocation(); if (!r || !r.success) break; await ns.sleep(50); } ns.write('/Temp/ramfree-done.txt', 'done', 'w'); }`;
 const RAMFREE_RESULT_FILE = "/Temp/ramfree-done.txt";
 const RAMFREE_HELPER_RAM = 2.75; // 1.6 base + 1.0 memoryReallocation + getServerMaxRam/UsedRam + getHostname (checked in game)
-const LAB_SOLVER_SCRIPT = "/Temp/darknet-lab-solver.js";
+const LAB_SOLVER_SCRIPT = "Remote/lab-solver.js"; // best-first, pruned, shared map (see the file); probes use it too
+const LAB_MAP_PORT = 27; // lab-solver.js's shared maze map (cleared at startup: the maze is regenerated every install)
+const MAX_LAB_SOLVERS = 3; // solvers per labyrinth, on different neighbours (tools/lab-sim: 1 -> 180 moves, 3 -> 166)
+const LAB_OFFSETS = new Set(["ub3r_l4byr1nth", "et3rn4l_l4byr1nth", "end13ss_l4byr1nth", "f1n4l_l4byr1nth", "b0nus_l4byr1nth"]);
 const LAB_SOLVER_RESULT_PORT = 18; // Netscript port for labyrinth solver results
 const LAB_NEIGHBOR_REPORT_PORT = 17; // Netscript port for probe-reported labyrinth neighbors
 const STASIS_SWAP_REQUEST_PORT = 21; // Legacy: probe stasis swap requests (drained, no longer used)
@@ -106,49 +109,7 @@ const STASIS_PWD_PORT = 19; // Netscript port for probe-reported stasis server p
 // every move (each call costs as long as a move) and tried directions in a fixed order: 970 steps on average. Reading
 // the walls from each move's own response and trying directions toward the far corner first: 264 (p90 354).
 // It also runs with as many threads as its host allows: each step takes 1 / (1 + 0.2 * (threads - 1)) as long.
-const LAB_SOLVER_CONTENT = [
-    `/** @param {NS} ns */ export async function main(ns) {`,
-    `  const [hostname, port, aimX, aimY] = ns.args;`,
-    `  const D = { north: [0,-1], south: [0,1], east: [1,0], west: [-1,0] };`,
-    `  const rev = { north: "south", south: "north", west: "east", east: "west" };`,
-    `  const send = (o) => (ns.port ? ns.port.write : ns.writePort)(port, JSON.stringify(Object.assign({ host: hostname }, o)));`,
-    `  const parse = (data) => { const r = String(data ?? "").split("\\n"); return r.length >= 3 && r[1].length >= 3 ? { north: r[0][1] === " ", south: r[2][1] === " ", west: r[1][0] === " ", east: r[1][2] === " " } : null; };`,
-    `  let rep = null;`,
-    `  for (let i = 0; i < 20 && !rep; i++) { try { rep = await ns.dnet.labreport(); } catch {} if (!rep || !rep.success) { rep = null; await ns.sleep(1000); } }`,
-    `  if (!rep) { send({ error: "no labreport" }); return; }`,
-    `  let pos = [rep.coords[0], rep.coords[1]];`,
-    `  let open = { north: rep.north, south: rep.south, east: rep.east, west: rep.west };`,
-    `  const visited = new Set([pos.join(",")]);`,
-    `  let misses = 0; // responses that are neither a move nor a wall`,
-    `  const stack = [];`,
-    `  const score = (d) => (aimX - pos[0]) * D[d][0] + (aimY - pos[1]) * D[d][1];`,
-    `  for (let i = 0; i < 50000; i++) {`,
-    `    const order = Object.keys(D).sort((a, b) => score(b) - score(a));`,
-    `    let dir = order.find((d) => open[d] && !visited.has((pos[0] + 2 * D[d][0]) + "," + (pos[1] + 2 * D[d][1])));`,
-    `    let back = false;`,
-    `    if (!dir) { if (stack.length === 0) { send({ error: "stuck" }); return; } dir = rev[stack[stack.length - 1]]; back = true; }`,
-    `    const r = await ns.dnet.authenticate(hostname, "go " + dir);`,
-    `    if (r.success) { send({ password: r.data ?? r.message }); return; }`,
-    `    const msg = r.message || "";`,
-    `    const m = msg.match(/moved to (\\d+),(\\d+)/);`,
-    `    if (m || /cannot go that way/i.test(msg)) misses = 0;`,
-    `    if (m) {`,
-    `      if (back) stack.pop(); else stack.push(dir);`,
-    `      pos = [parseInt(m[1], 10), parseInt(m[2], 10)];`,
-    `      visited.add(pos.join(","));`,
-    `      const seen = parse(r.data);`,
-    `      if (seen) open = seen;`,
-    `      else { const lr = await ns.dnet.labreport(); open = { north: lr.north, south: lr.south, east: lr.east, west: lr.west }; }`,
-    `    } else if (/cannot go that way/i.test(msg)) {`,
-    `      if (back) { send({ error: "backtrack blocked" }); return; }`,
-    `      open[dir] = false;`,
-    `    } else if (/charism|moxie|charming/i.test(msg)) { send({ error: "charisma" }); return; }`,
-    `    else if (++misses > 100) { send({ error: "unreachable" }); return; } // the labyrinth moved away`,
-    `    else await ns.sleep(200); // timeout (network instability): retry`,
-    `  }`,
-    `  send({ error: "max iterations" });`,
-    `}`,
-].join("\n");
+// (The labyrinth solver lives in Remote/lab-solver.js.)
 // Maze grid size per labyrinth (labyrinth.ts labData sizes, stitched from 4 odd-sized mazes): the solver aims for the
 // far corner, where the exit is (minus a small random offset). Unknown labyrinths: aim far south-east.
 // Labyrinth depths (game labyrinth.ts labData); the current labyrinth hangs below row depth-1
@@ -158,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 56; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 57; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -175,6 +136,7 @@ async function discardStateFromEarlierInstalls(ns) {
     // No epoch yet (first run of this version): adopt the current install rather than wipe state that may be valid
     if (!epoch) return ns.write(EPOCH_FILE, String(lastAugReset), "w");
     const removed = PER_INSTALL_FILES.filter((f) => ns.fileExists(f, "home") && ns.rm(f, "home"));
+    portClear(ns, LAB_MAP_PORT); // the previous install's maze (lab-solver.js also drops a map whose walls don't match)
     ns.write(EPOCH_FILE, String(lastAugReset), "w");
     if (removed.length) log(ns, `INFO: Discarded darknet state from before the last install: ${removed.join(", ")}`, true, "info");
 }
@@ -883,9 +845,7 @@ async function orchestrateDarknet(ns, state, options) {
                 const solverInfo = state.activeLabSolvers.get(msg.host);
                 state.activeLabSolvers.delete(msg.host);
                 if (solverInfo) {
-                    try {
-                        ns.rm(LAB_SOLVER_SCRIPT, solverInfo.solverHost);
-                    } catch {}
+                    // (Remote/lab-solver.js stays: other solvers may run it)
                 }
             } else if (msg.error) {
                 log(
@@ -911,9 +871,7 @@ async function orchestrateDarknet(ns, state, options) {
                         `Labyrinth solver for ${labHost} on ${info.solverHost} is no longer running`,
                     );
                 state.activeLabSolvers.delete(labHost);
-                try {
-                    ns.rm(LAB_SOLVER_SCRIPT, info.solverHost);
-                } catch {}
+                // (Remote/lab-solver.js stays: other solvers may run it)
             } else if (labSolverShouldRestart(ns, state, labHost, info)) {
                 try {
                     ns.kill(info.pid);
@@ -931,9 +889,7 @@ async function orchestrateDarknet(ns, state, options) {
                     ns.kill(info.pid);
                 } catch {}
                 state.activeLabSolvers.delete(labHost);
-                try {
-                    ns.rm(LAB_SOLVER_SCRIPT, info.solverHost);
-                } catch {}
+                // (Remote/lab-solver.js stays: other solvers may run it)
             }
         } catch {
             state.activeLabSolvers.delete(labHost);
@@ -1363,6 +1319,7 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
                         ns,
                         `Labyrinth solver already running on ${existing.solverHost} for ${hostname} (PID ${existing.pid})`,
                     );
+                deployExtraLabSolvers(ns, state, hostname, existing.solverHost);
                 return true; // solver in flight
             }
         } catch {}
@@ -1446,7 +1403,6 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
                 ns.dnet.connectToSession(solverHost, solverPwd);
             } catch {}
         }
-        ns.write(LAB_SOLVER_SCRIPT, LAB_SOLVER_CONTENT, "w");
         ns.scp(LAB_SOLVER_SCRIPT, solverHost, "home");
         const threadRam = ns.getScriptRam(LAB_SOLVER_SCRIPT, "home") || 2;
         // Each move takes 1 / (1 + 0.2 * (threads - 1)) as long: pause the host's money/charisma worker for the RAM
@@ -1464,9 +1420,10 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
             solverHost,
             threads,
             hostname,
-            LAB_SOLVER_RESULT_PORT,
-            gridW - 2,
-            gridH - 2,
+            `port:${LAB_SOLVER_RESULT_PORT}`,
+            gridW,
+            gridH,
+            LAB_OFFSETS.has(hostname) ? 1 : 0,
         );
         if (pid <= 0) {
             log(
@@ -1494,6 +1451,50 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
             `WARN: Labyrinth solver deploy failed for ${hostname}: ${getErrorInfo(err)}`,
         );
         return false;
+    }
+}
+
+/** More solvers on other reachable neighbours of the labyrinth (up to MAX_LAB_SOLVERS in all): they share one maze map
+ * (lab-solver.js, port 27) and head for different openings. Extras that ended are forgotten; the primary's result
+ * (port 18) ends the attempt, and every solver stops by itself once the labyrinth is solved. */
+function deployExtraLabSolvers(ns, state, hostname, primaryHost) {
+    state.extraLabSolvers ??= new Map();
+    const extras = state.extraLabSolvers.get(hostname) ?? new Map();
+    for (const [h, info] of extras) {
+        let running = false;
+        try {
+            running = ns.ps(h).some((p) => p.pid === info.pid);
+        } catch {}
+        if (!running || !(state.labyrinthNeighbors.get(hostname)?.has(h) ?? false)) {
+            if (running) try { ns.kill(info.pid); } catch {}
+            extras.delete(h);
+        }
+    }
+    state.extraLabSolvers.set(hostname, extras);
+    if (extras.size + 1 >= MAX_LAB_SOLVERS) return;
+    const [gridW, gridH] = LAB_GRID[hostname] ?? [1e4, 1e4];
+    for (const h of state.labyrinthNeighbors.get(hostname) ?? []) {
+        if (extras.size + 1 >= MAX_LAB_SOLVERS) break;
+        if (h === primaryHost || extras.has(h) || h === "darkweb") continue;
+        try {
+            const reachable = state.stasisServers.has(h) || !!ns.dnet.getServerDetails(h)?.isConnectedToCurrentServer;
+            if (!reachable || ns.ps(h).some((p) => /lab-solver/.test(p.filename))) continue;
+            const free = ns.getServerMaxRam(h) - ns.getServerUsedRam(h) + workerRamOn(ns, h);
+            if (free < 6) continue; // (keep the probe's own work going on small hosts)
+            const pwd = state.getPassword(h);
+            if (pwd !== undefined) try { ns.dnet.connectToSession(h, pwd); } catch {}
+            ns.scp(LAB_SOLVER_SCRIPT, h, "home");
+            for (const p of ns.ps(h).filter((p) => /darknet-worker-/.test(p.filename))) try { ns.kill(p.pid); } catch {}
+            const threadRam = ns.getScriptRam(LAB_SOLVER_SCRIPT, "home") || 2.5;
+            const threads = Math.max(1, Math.floor((ns.getServerMaxRam(h) - ns.getServerUsedRam(h) - 0.5) / threadRam));
+            // (results go to a throwaway file: only the primary reports; a success by an extra still opens the lab,
+            // and the primary then succeeds at once: authenticate on a solved labyrinth returns its password)
+            const pid = ns.exec(LAB_SOLVER_SCRIPT, h, threads, hostname, "/Temp/lab-extra-result.txt", gridW, gridH, LAB_OFFSETS.has(hostname) ? 1 : 0);
+            if (pid > 0) {
+                extras.set(h, { pid, threads });
+                log(ns, `Deployed an extra labyrinth solver on ${h} for ${hostname} (PID ${pid}, ${threads} threads, ${extras.size + 1} solving)`);
+            }
+        } catch {}
     }
 }
 
@@ -1724,6 +1725,7 @@ async function deployProbe(ns, state, hostname, options) {
         // Always scp the probe script — scp works at any distance with a session.
         // Even if we can't exec from home, the probe network can pick it up later.
         ns.scp(probeScript, hostname, "home");
+        ns.scp(LAB_SOLVER_SCRIPT, hostname, "home"); // probes run it for labyrinths next to them
         if (!ns.fileExists(probeScript, hostname)) {
             log(
                 ns,
