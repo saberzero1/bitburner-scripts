@@ -7,7 +7,8 @@
  *    kill probes, and a probe on a connected neighbour redeploys them;
  *  - migration charging (SIM_POLICY): "none"; "depth" (the probes' rule: a cracked probe neighbour 1-3 rows before
  *    the frontier gap); "difficulty" (the neighbour whose landing window, which the game centres on the server's
- *    difficulty, puts the most open slots past the frontier gap);
+ *    difficulty, puts the most open slots past the frontier gap); "labdepth" (the neighbour whose landing window best
+ *    covers the rows just before the labyrinth: high-difficulty servers sitting shallow jump several gaps at once);
  *  - anchors (SIM_ANCHORS slots; default as in the game: 1 + W1ngs + H4mmer + St4ff owned): "none", "lab" (only next
  *    to the labyrinth), "frontier" (the deepest probe hosts), "segment" (darknet.js since 2026-11-16: one per segment past
  *    the first, its deepest probe host, plus the labyrinth neighbour), "push" (boundary pushing: the labyrinth neighbour,
@@ -74,6 +75,13 @@ function crossChance(server: DarknetServer, gap: number): number {
   const positions = getAllOpenPositions(server.difficulty - 2, server.difficulty + 4);
   if (!positions.length) return 0;
   return positions.filter(([x]) => x > gap).length / positions.length;
+}
+
+/** Share of a full migration's landing slots in rows labDepth-3 .. labDepth-1 (next to the labyrinth). */
+function labNearChance(server: DarknetServer, labDepth: number): number {
+  const positions = getAllOpenPositions(server.difficulty - 2, server.difficulty + 4);
+  if (!positions.length) return 0;
+  return positions.filter(([x]) => x >= labDepth - 3 && x <= labDepth - 1).length / positions.length;
 }
 
 const freeRam = (s: DarknetServer) => s.maxRam - s.blockedRam - PROBE_RESERVE_GB;
@@ -269,6 +277,13 @@ async function runTrial(trial: number) {
         let score = 0;
         if (POLICY === "depth") score = s.depth >= gap - 3 ? 1 : 0;
         else if (POLICY === "difficulty") score = crossChance(s, gap) >= THRESHOLD ? crossChance(s, gap) : 0;
+        else if (POLICY === "labdepth") {
+          // the share of its landing window in the rows just before the labyrinth (a probe there neighbours it), then
+          // the difficulty rule as a tiebreak/fallback
+          const near = labNearChance(s, labDepth);
+          const cross = crossChance(s, gap);
+          score = near > 0 ? 1 + near : cross >= THRESHOLD ? cross : 0;
+        }
         if (score > 0 && (!best || score > best.score)) best = { target: n, score };
       }
       if (best) charges.set(h, { target: best.target, threads, nextCall: t });

@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 62;
+const PROBE_VERSION = 63;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -451,7 +451,11 @@ async function tryAccessServer(ns, hostname, details, passwords) {
         if (result.success) return knownPassword ?? "";
     }
 
-    const hintCandidate = await tryHintBasedAuth(ns, hostname, details);
+    // The hint pre-pass (a heartbleed at 1.5x the auth time, then hint and digit-slice guesses) only for models without
+    // their own solver: every solver reads the hint itself, and the pass cost 1.5 auth times on every server (even
+    // ZeroLogon, whose empty password came after it) plus up to ~10 wasted guesses on OctantVoxel/PrimeTime (audit,
+    // 2026-11-19)
+    const hintCandidate = getSolver(details.modelId) ? null : await tryHintBasedAuth(ns, hostname, details);
     if (hintCandidate !== null) {
         ns.print(`SUCCESS: Cracked ${hostname}`);
         return hintCandidate;
@@ -465,6 +469,12 @@ async function tryAccessServer(ns, hostname, details, passwords) {
     }
 
     const solver = getSolver(details.modelId);
+    // Feedback solvers read each guess's result back with heartbleed, which always fails while our charisma is below
+    // the server's requirement: they only burned guesses then (audit, 2026-11-19). Leave it for a later retry.
+    if (solver && FEEDBACK_MODELS.has(details.modelId) && details.requiredCharismaSkill > 0) {
+        const cha = loadProbeOptions(ns, "/data/darknet-options.txt").playerCharisma;
+        if (cha > 0 && cha < details.requiredCharismaSkill) return null;
+    }
     if (solver) {
         const solverInfo = { ...details, currentHost: ns.getHostname() };
         const password = await solver(ns, hostname, solverInfo);
@@ -1343,6 +1353,7 @@ function loadProbeOptions(ns, filePath) {
             frontierGap: Number(parsed.frontierGap) || 0,
             migrationRequests: Array.isArray(parsed.migrationRequests) ? parsed.migrationRequests : [],
             probeVersion: Number(parsed.probeVersion) || 0,
+            playerCharisma: Number(parsed.playerCharisma) || 0,
         };
     } catch {
         return defaults;
@@ -2089,6 +2100,13 @@ const commonPasswordDictionary = [
     "matrix",
 ];
 
+// Log lines read back after a feedback guess: 5 could miss the attempt's own entry when noise is fast (high difficulty)
+// and auth is slow; reading more costs nothing (audit, 2026-11-19)
+const FEEDBACK_LOG_LINES = 12;
+// Models whose solvers need heartbleed feedback (see the charisma gate in tryAccessServer)
+const FEEDBACK_MODELS = new Set(["NIL", "PHP 5.4", "DeepGreen", "BellaCuore", "AccountsManager_4.2", "Factori-Os",
+    "OpenWebAccessPoint", "KingOfTheHill", "RateMyPix.Auth", "2G_cellular", "BigMo%od"]);
+
 const SOLVER_MAP = {
     ZeroLogon: solveZeroLogon,
     "DeskMemo_3.1": solveEchoVuln,
@@ -2144,8 +2162,9 @@ async function solveEchoVuln(ns, hostname, serverInfo) {
     return result.success ? candidate : null;
 }
 
-async function solveFreshInstall(ns, hostname) {
-    return await tryDictionary(ns, hostname, defaultSettingsDictionary);
+async function solveFreshInstall(ns, hostname, serverInfo) {
+    // (with serverInfo, length and format leave ~1 candidate instead of up to 4)
+    return await tryDictionary(ns, hostname, defaultSettingsDictionary, serverInfo);
 }
 
 async function solveCloudBlare(ns, hostname, serverInfo) {
@@ -2171,8 +2190,8 @@ async function solveCloudBlare(ns, hostname, serverInfo) {
     return null;
 }
 
-async function solveDogNames(ns, hostname) {
-    return await tryDictionary(ns, hostname, dogNameDictionary);
+async function solveDogNames(ns, hostname, serverInfo) {
+    return await tryDictionary(ns, hostname, dogNameDictionary, serverInfo);
 }
 
 async function solveYesnt(ns, hostname, serverInfo) {
@@ -2187,7 +2206,7 @@ async function solveYesnt(ns, hostname, serverInfo) {
     async function authWithFeedback(guess) {
         const resp = await runAuth(ns, hostname, guess);
         if (resp.success) return { success: true, flags: null };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
+        const bleed = await runHeartbleedMulti(ns, hostname, FEEDBACK_LOG_LINES);
         if (bleed?.logs) {
             const flags = getYesntFeedbackFromLogs(bleed.logs, guess);
             if (flags) return { success: false, flags };
@@ -2198,14 +2217,16 @@ async function solveYesnt(ns, hostname, serverInfo) {
     for (const ch of charset) {
         // Set all unlocked positions to the current character
         const guess = result.map((c, i) => (locked[i] ? c : ch)).join("");
-        const fb = await authWithFeedback(guess);
-        if (fb?.success) return guess;
-        if (await isAlreadyCracked(ns, hostname)) return null;
-        if (!fb) {
-            feedbackMisses++;
-            if (feedbackMisses > 4) return null;
-            continue;
+        // (a missed feedback read retries the same guess: moving on to the next character left this one's positions
+        // unlocked for good and the solve failed (audit, 2026-11-19))
+        let fb = null;
+        for (let tryN = 0; tryN < 3 && !fb; tryN++) {
+            fb = await authWithFeedback(guess);
+            if (fb?.success) return guess;
+            if (await isAlreadyCracked(ns, hostname)) return null;
+            if (!fb && ++feedbackMisses > 8) return null;
         }
+        if (!fb) return null;
         const flags = fb.flags;
         if (!flags) continue;
         for (let i = 0; i < length; i++) {
@@ -2378,12 +2399,23 @@ async function solveRomanNumeral(ns, hostname, serverInfo) {
         if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
         let low = Math.min(min, max);
         let high = Math.max(min, max);
+        // The engine's hint (getRomanNumeralConfig, difficulty >= 8): max = password + floor(random x 10 x difficulty + 10),
+        // so password in [max - 10d - 9, max - 10]; a non-zero min = floor(password x (0.6..0.8)), so password in
+        // (min / 0.8, (min + 1) / 0.6); and password < 100 (difficulty + 1). Saves ~1-3 rounds (audit, 2026-11-19).
+        const d = Number(serverInfo?.difficulty);
+        if (Number.isFinite(d)) {
+            const hiMax = Math.max(min, max), loMin = Math.min(min, max);
+            low = Math.max(low, hiMax - 10 * d - 9);
+            high = Math.min(high, hiMax - 10, 100 * (d + 1) - 1);
+            if (loMin > 0) { low = Math.max(low, Math.floor(loMin / 0.8)); high = Math.min(high, Math.ceil((loMin + 1) / 0.6)); }
+            if (low > high) { low = Math.min(min, max); high = Math.max(min, max); } // (inconsistent hint: keep the plain range)
+        }
         let feedbackMisses = 0;
 
         async function authWithFeedback(guess) {
             const resp = await runAuth(ns, hostname, guess);
             if (resp.success) return { success: true, direction: null };
-            const bleed = await runHeartbleedMulti(ns, hostname, 5);
+            const bleed = await runHeartbleedMulti(ns, hostname, FEEDBACK_LOG_LINES);
             if (bleed?.logs) {
                 const direction = getRomanNumeralFeedbackFromLogs(
                     bleed.logs,
@@ -2434,12 +2466,18 @@ async function solveGuessNumber(ns, hostname, serverInfo) {
         low = 0;
         high = maxVal;
     }
+    // The engine draws floor(random x 10 x (difficulty + 3) / 3) (ServerGenerator getGuessNumberConfig) and we know its
+    // digit count: e.g. difficulty 30, 3 digits -> 100..109, ~4 rounds instead of ~10 (audit, 2026-11-19)
+    const engineLow = length > 1 ? Math.pow(10, length - 1) : 0;
+    const engineHigh = Number.isFinite(serverInfo?.difficulty) ? Math.ceil((10 * (serverInfo.difficulty + 3)) / 3) - 1 : maxVal;
+    const clamp = () => { low = Math.max(low, engineLow); high = Math.min(high, engineHigh, maxVal); };
+    clamp();
     let feedbackMisses = 0;
 
     async function authWithFeedback(guess) {
         const resp = await runAuth(ns, hostname, guess);
         if (resp.success) return { success: true, direction: null };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
+        const bleed = await runHeartbleedMulti(ns, hostname, FEEDBACK_LOG_LINES);
         if (bleed?.logs) {
             const fb = getGuessNumberFeedbackFromLogs(bleed.logs, guess);
             if (fb) return { success: false, ...fb };
@@ -2467,6 +2505,7 @@ async function solveGuessNumber(ns, hostname, serverInfo) {
                 } else if (direction.includes("lower")) {
                     high = Math.min(high, guess - 1);
                 }
+                clamp();
                 continue;
             }
         }
@@ -2763,7 +2802,7 @@ async function solveSpiceLevel(ns, hostname, serverInfo) {
     async function authWithFeedback(guess) {
         const resp = await runAuth(ns, hostname, guess);
         if (resp.success) return { success: true, count: length };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
+        const bleed = await runHeartbleedMulti(ns, hostname, FEEDBACK_LOG_LINES);
         if (bleed?.logs) {
             const count = getSpiceLevelFeedbackFromLogs(bleed.logs, guess);
             if (Number.isFinite(count)) return { success: false, count };
@@ -2858,7 +2897,7 @@ async function solveTimingAttack(ns, hostname, serverInfo) {
     async function authWithFeedback(guess) {
         const resp = await runAuth(ns, hostname, guess);
         if (resp.success) return { success: true, mismatchIndex: length };
-        const bleed = await runHeartbleedMulti(ns, hostname, 5);
+        const bleed = await runHeartbleedMulti(ns, hostname, FEEDBACK_LOG_LINES);
         if (bleed?.logs) {
             const mismatchIndex = getTimingAttackFeedbackFromLogs(
                 bleed.logs,
@@ -2873,14 +2912,15 @@ async function solveTimingAttack(ns, hostname, serverInfo) {
         let found = false;
         for (const ch of charset) {
             const guess = (prefix + ch).padEnd(length, charset[0]);
-            const fb = await authWithFeedback(guess);
-            if (fb?.success) return guess;
-            if (await isAlreadyCracked(ns, hostname)) return null;
-            if (!fb) {
-                feedbackMisses++;
-                if (feedbackMisses > 4) return null;
-                continue;
+            // (a missed feedback read retries the same guess instead of skipping this character: see solveYesnt)
+            let fb = null;
+            for (let tryN = 0; tryN < 3 && !fb; tryN++) {
+                fb = await authWithFeedback(guess);
+                if (fb?.success) return guess;
+                if (await isAlreadyCracked(ns, hostname)) return null;
+                if (!fb && ++feedbackMisses > 8) return null;
             }
+            if (!fb) return null;
             const idx = fb.mismatchIndex;
             if (Number.isFinite(idx) && idx > i) {
                 // Everything before the mismatch is right, including any padding characters that happened to match
