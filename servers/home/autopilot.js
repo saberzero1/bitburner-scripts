@@ -750,6 +750,11 @@ export async function main(ns) {
         // Clean out our temp folder and flags so we don't have any stale data when the next BN starts.
         let pid = launchScriptHelper(ns, "cleanup.js");
         if (pid) await waitForProcessToComplete(ns, pid);
+        // Free home first: daemon.js's XP farming fills home (BN12.88: 18 GB free of 32.8 TB), so the 33.6 GB
+        // destroyW0r1dD43m0n temp script waited in 1-minute retries for RAM after the requirement was met
+        await killScript(ns, "daemon.js");
+        await getNsDataThroughFile(ns, `ns.ps("home").filter((p) => /Remote\/(grow|weak|hack|manualhack)-target|Remote\/share/.test(p.filename))` +
+            `.reduce((n, p) => n + (ns.kill(p.pid) ? 1 : 0), 0)`, "/Temp/kill-farm.txt");
 
         // In all likelihood, daemon.js has already nuked this like it does all servers, but in case it hasn't:
         pid = launchScriptHelper(ns, "/Tasks/crack-host.js", ["w0r1d_d43m0n"]);
