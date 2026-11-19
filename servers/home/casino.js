@@ -164,15 +164,29 @@ export async function main(ns) {
     await waitForProcessToComplete(ns, ns.run(getFilePath("cleanup.js")));
 
     if (verbose) log(ns, "Started. Hold on! Calculating sequence...");
-    click(coinflip);
+    // We killed every other script (including autopilot), so whatever happens, relaunch the completion script
+    const runCompletionScript = () => {
+        const completionScript = options["on-completion-script"];
+        if (!completionScript) return;
+        const completionArgs = unEscapeArrayArgs(options["on-completion-script-args"].map(String));
+        if (ns.run(completionScript, 1, ...completionArgs))
+            log(ns, `INFO: Launching ${completionScript}...`);
+        else log(ns, `WARNING: Failed to launch ${completionScript}...`, false, "warning");
+    };
 
-    // Step 6: Find the game buttons and input
-    const tails = find(doc, "//button[contains(text(), 'Tail!')]");
-    const heads = find(doc, "//button[contains(text(), 'Head!')]");
-    const input = find(doc, "//input[@type='number']");
-    if (!input) {
-        log(ns, "ERROR: Could not find the bet amount input!", true, "error");
-        return;
+    // Step 6: Find the game buttons and input. The coin flip page needs a moment to render after the click: looking
+    // once, right away, missed the input and ended the run with everything killed (2026-11-19, BN12.93).
+    let tails = null, heads = null, input = null;
+    for (let i = 0; i < 25 && !(tails && heads && input); i++) {
+        if (i % 5 == 0) click(find(doc, "//button[contains(text(), 'coin flip')]") ?? coinflip);
+        await ns.sleep(200);
+        tails = find(doc, "//button[contains(text(), 'Tail!')]");
+        heads = find(doc, "//button[contains(text(), 'Head!')]");
+        input = find(doc, "//input[@type='number']");
+    }
+    if (!(tails && heads && input)) {
+        log(ns, "ERROR: Could not find the coin flip game's buttons and bet amount input!", true, "error");
+        return runCompletionScript();
     }
 
     // Step 7: Record a sequence of 1024 coin flip outcomes (bet $0 so we don't lose anything)
@@ -208,7 +222,7 @@ export async function main(ns) {
                 true,
                 "error",
             );
-            return;
+            return runCompletionScript();
         }
         await ns.sleep(0);
     }
@@ -238,15 +252,6 @@ export async function main(ns) {
     } catch {}
     await ns.sleep(4);
 
-    // We killed every other script (including autopilot), so whatever happens, relaunch the completion script
-    const runCompletionScript = () => {
-        const completionScript = options["on-completion-script"];
-        if (!completionScript) return;
-        const completionArgs = unEscapeArrayArgs(options["on-completion-script-args"].map(String));
-        if (ns.run(completionScript, 1, ...completionArgs))
-            log(ns, `INFO: Launching ${completionScript}...`);
-        else log(ns, `WARNING: Failed to launch ${completionScript}...`, false, "warning");
-    };
     // Sanity check: every 2000 flips, casino earnings must have gone up. If not, the replayed sequence is out of step
     // (e.g. a manual click or a second instance) and we'd be betting at even odds forever.
     let earningsAtLastCheck = ns.getMoneySources().sinceInstall.casino;
