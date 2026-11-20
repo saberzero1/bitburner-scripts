@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 64;
+const PROBE_VERSION = 65;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -137,6 +137,7 @@ export async function main(ns) {
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
             await manageWorker(ns, OPTIONS_FILE, HOST);
             await manageStasis(ns, OPTIONS_FILE, HOST, passwords);
+            await reportDepth(ns, HOST);
             await requestOwnMigration(ns, OPTIONS_FILE, HOST);
             await serveMigrationRequests(ns, OPTIONS_FILE, HOST);
             await attemptMigrationCharging(ns, OPTIONS_FILE, HOST);
@@ -1687,6 +1688,21 @@ const MIGRATION_THREAD_RAM = 5.65; // 1.6 base + 4.0 induceServerMigration + 0.0
 // requested server charges it with all its spare RAM, pausing its worker.
 const MIGRATION_REQUEST_PORT = 26;
 const MIGRATION_REQUEST_INTERVAL = 60_000;
+const DEPTH_REPORT_INTERVAL = 60_000;
+let lastDepthReport = 0;
+
+/** Tell darknet.js where this probe is each minute (METRICS_PORT). darknet.js only knew depths of servers whose
+ * passwords it holds, so the frontier looked stuck in segment 0 until the final labyrinth appeared at depth 35. */
+async function reportDepth(ns, host) {
+    if (host === "home" || host === "darkweb" || Date.now() - lastDepthReport < DEPTH_REPORT_INTERVAL) return;
+    lastDepthReport = Date.now();
+    try {
+        const me = await getAuthDetails(ns, host);
+        if (!me || typeof me.depth !== "number") return;
+        portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "pdepth", host, depth: me.depth, difficulty: me.difficulty ?? null }));
+    } catch {}
+}
+
 const MIGRATION_SERVE_HEADROOM_GB = 3; // a 16 GB host with a 7 GB probe can then afford one thread
 let lastMigrationRequest = 0;
 

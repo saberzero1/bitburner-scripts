@@ -119,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 64; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 65; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1923,8 +1923,22 @@ function pushProbeFiles(ns, state) {
 
 function recordMetrics(ns, state) {
     const lines = [];
-    while (portPeek(ns, METRICS_PORT) !== "NULL PORT DATA") lines.push(String(portRead(ns, METRICS_PORT)));
     const now = Date.now();
+    // Probe depth reports (probe v65+): kept as a map, not logged one by one. A probe reaching a deeper segment than any
+    // before in this install is logged as a "cross" event, which times each air gap crossing.
+    state.reportedDepths ??= new Map();
+    while (portPeek(ns, METRICS_PORT) !== "NULL PORT DATA") {
+        const line = String(portRead(ns, METRICS_PORT));
+        let rec = null;
+        try { rec = JSON.parse(line); } catch {}
+        if (rec?.type !== "pdepth") { lines.push(line); continue; }
+        state.reportedDepths.set(rec.host, { depth: rec.depth, t: rec.t });
+        const seg = Math.floor(rec.depth / AIR_GAP_DEPTH);
+        if (seg > (state.maxReportedSegment ?? 0)) {
+            state.maxReportedSegment = seg;
+            lines.push(JSON.stringify({ t: rec.t, type: "cross", seg, host: rec.host, depth: rec.depth, difficulty: rec.difficulty }));
+        }
+    }
     const prev = state.prevDepths ?? new Map();
     for (const [h, depth] of state.serverDepths) {
         if (state.labyrinthServers.has(h)) continue;
@@ -1949,7 +1963,16 @@ function recordMetrics(ns, state) {
             segs[seg] = (segs[seg] ?? 0) + 1;
             deepest = Math.max(deepest, d);
         }
-        lines.push(JSON.stringify({ t: now, type: "frontier", deepest, segs, anchors: state.stasisServers.size }));
+        // The same from the probes' own reports in the last 2.5 minutes (all probes, passwords known or not)
+        const rsegs = {};
+        let rdeepest = -1;
+        for (const [h, r] of state.reportedDepths) {
+            if (now - r.t > 150_000) { state.reportedDepths.delete(h); continue; }
+            const seg = Math.floor(r.depth / AIR_GAP_DEPTH);
+            rsegs[seg] = (rsegs[seg] ?? 0) + 1;
+            rdeepest = Math.max(rdeepest, r.depth);
+        }
+        lines.push(JSON.stringify({ t: now, type: "frontier", deepest, segs, anchors: state.stasisServers.size, rdeepest, rsegs }));
     }
     if (!lines.length) return;
     ns.write(METRICS_FILE, lines.join("\n") + "\n", "a");
