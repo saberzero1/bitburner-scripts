@@ -119,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 65; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 66; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1932,8 +1932,14 @@ function recordMetrics(ns, state) {
         let rec = null;
         try { rec = JSON.parse(line); } catch {}
         if (rec?.type !== "pdepth") { lines.push(line); continue; }
+        const prevDepth = state.reportedDepths.get(rec.host)?.depth ?? state.lastReportedDepth?.get(rec.host);
         state.reportedDepths.set(rec.host, { depth: rec.depth, t: rec.t });
+        (state.lastReportedDepth ??= new Map()).set(rec.host, rec.depth);
         const seg = Math.floor(rec.depth / AIR_GAP_DEPTH);
+        // Every segment change of a probe host, so migrated servers can be followed (migend alone can't tell whether
+        // the target moved, let alone past the gap)
+        if (prevDepth !== undefined && Math.floor(prevDepth / AIR_GAP_DEPTH) !== seg)
+            lines.push(JSON.stringify({ t: rec.t, type: "pmove", host: rec.host, from: prevDepth, to: rec.depth, difficulty: rec.difficulty }));
         if (seg > (state.maxReportedSegment ?? 0)) {
             state.maxReportedSegment = seg;
             lines.push(JSON.stringify({ t: rec.t, type: "cross", seg, host: rec.host, depth: rec.depth, difficulty: rec.difficulty }));

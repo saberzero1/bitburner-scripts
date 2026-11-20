@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 65;
+const PROBE_VERSION = 66;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -36,6 +36,7 @@ export async function main(ns) {
             // They were opened only after the whole neighbour loop, and RAM freeing left too little RAM for it, so a
             // freshly cracked server could sit on its cache for a long time (2026-11-17).
             await selfUpgrade(ns, OPTIONS_FILE, HOST, SCRIPT_NAME);
+            await reportDepth(ns, HOST); // (first: the rest of a loop can take minutes)
             await handleCacheFiles(ns, HOST);
             // Then free blocked RAM — maximizes available RAM for all subsequent operations
             await freeBlockedRam(ns);
@@ -137,7 +138,6 @@ export async function main(ns) {
             await runOptionalActions(ns, OPTIONS_FILE, HOST);
             await manageWorker(ns, OPTIONS_FILE, HOST);
             await manageStasis(ns, OPTIONS_FILE, HOST, passwords);
-            await reportDepth(ns, HOST);
             await requestOwnMigration(ns, OPTIONS_FILE, HOST);
             await serveMigrationRequests(ns, OPTIONS_FILE, HOST);
             await attemptMigrationCharging(ns, OPTIONS_FILE, HOST);
