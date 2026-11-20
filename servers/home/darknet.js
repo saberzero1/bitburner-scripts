@@ -2196,9 +2196,7 @@ async function manageAnchors(ns, state, options) {
 
     // Deepest air-gap segment we hold any authenticated server in, the gap being crossed, and the (largest) anchored
     // labyrinth neighbour
-    let frontierSegment = 0;
-    for (const [h, depth] of state.serverDepths)
-        if (state.probeHosts?.has(h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
+    const frontierSegment = getFrontierSegment(state);
     const labNeighbors = phaseInfo.lab ? state.labyrinthNeighbors.get(phaseInfo.lab) : undefined;
     let labAnchor = null;
     const maxRamOf = (h) => {
@@ -2885,12 +2883,23 @@ async function chooseWorkerMode(ns, options, state) {
     return { workerMode: "money", workerStock: "" };
 }
 
+/** Deepest air-gap segment holding one of our probes: from the probe hosts whose passwords we know, and from the probes'
+ * own depth reports (probe v65+). The first alone stayed at segment 0 while probes were already 2-3 gaps deeper, so
+ * the published gap stayed at depth 8 and probes past it never asked to be migrated across the next one. */
+function getFrontierSegment(state) {
+    let segment = 0;
+    for (const [h, depth] of state.serverDepths)
+        if (state.probeHosts?.has(h)) segment = Math.max(segment, Math.floor(depth / AIR_GAP_DEPTH));
+    const now = Date.now();
+    for (const r of state.reportedDepths?.values() ?? [])
+        if (now - r.t <= 150_000) segment = Math.max(segment, Math.floor(r.depth / AIR_GAP_DEPTH));
+    return segment;
+}
+
 /** The air gap row probes should carry servers across: the one after the deepest segment where we hold a server,
  * unless the unsolved labyrinth is already within reach. 0 = none. */
 function getFrontierGap(ns, state) {
-    let frontierSegment = 0;
-    for (const [h, depth] of state.serverDepths)
-        if (state.probeHosts?.has(h)) frontierSegment = Math.max(frontierSegment, Math.floor(depth / AIR_GAP_DEPTH));
+    const frontierSegment = getFrontierSegment(state);
     const gap = (frontierSegment + 1) * AIR_GAP_DEPTH;
     const unsolvedLab = [...state.labyrinthServers].find((h) => !isLabSolved(ns, state, h));
     const labDepth = unsolvedLab ? state.serverDepths.get(unsolvedLab) : undefined;
