@@ -1,10 +1,21 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 66;
+const PROBE_VERSION = 67;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
     ns.port ? ns.port.write(port, data) : ns.writePort(port, data);
+// Per-probe timers. Every probe on every server shares this module's top-level variables: the engine caches compiled
+// modules by source text (moduleCache in NetscriptJSEvaluator.ts), so a top-level `let lastX = 0` throttled all probes
+// together: one depth report, one migration request, one charging check and one anchor attempt per interval across
+// the whole darknet (found 2026-11-21: 14 probes, ~1 depth report a minute). Keyed by name and pid.
+const _probeTimers = new Map();
+function isDue(ns, name, interval) {
+    const key = `${name}:${ns.pid}`, now = Date.now();
+    if (now - (_probeTimers.get(key) ?? 0) < interval) return false;
+    _probeTimers.set(key, now);
+    return true;
+}
 const portPeek = (ns, port) => (ns.port ? ns.port.peek(port) : ns.peek(port));
 
 export async function main(ns) {
@@ -1484,7 +1495,6 @@ async function deployHackScript(ns, optionsFile) {
 }
 
 const AIR_GAP_DEPTH = 8;
-let lastStasisCheck = 0;
 
 // Anchors (stasis links) are decided centrally by darknet.js, which publishes the servers it wants linked on
 // ANCHOR_COMMAND_PORT. setStasisLink only works on the server it runs on, so a probe links its own server when
@@ -1501,8 +1511,7 @@ async function manageStasis(ns, optionsFile, hostname, passwords) {
         if (raw !== "NULL PORT DATA") command = JSON.parse(String(raw));
     } catch {}
     if (!Array.isArray(command?.link) || !command.link.includes(hostname)) return;
-    if (Date.now() - lastStasisCheck < ANCHOR_ATTEMPT_INTERVAL_MS) return;
-    lastStasisCheck = Date.now();
+    if (!isDue(ns, "stasis", ANCHOR_ATTEMPT_INTERVAL_MS)) return;
     try {
         const linked = new Set((await runGetStasisList(ns)) || []);
         if (linked.has(hostname)) return;
@@ -1658,7 +1667,6 @@ async function runMemoryReallocation(ns, hostname) {
 // Migration moves a server across an air gap when sufficiently charged.
 
 const MIGRATION_RECHECK_INTERVAL = 180000; // Re-evaluate migration every 3 minutes
-let lastMigrationCheck = 0;
 
 // Air gaps (every AIR_GAP_DEPTH-th row) hold no servers, so the network splits into segments. A fully charged
 // induceServerMigration moves a neighbouring server to a random free spot 2 rows up to 4 rows deeper: from the last
@@ -1689,13 +1697,11 @@ const MIGRATION_THREAD_RAM = 5.65; // 1.6 base + 4.0 induceServerMigration + 0.0
 const MIGRATION_REQUEST_PORT = 26;
 const MIGRATION_REQUEST_INTERVAL = 60_000;
 const DEPTH_REPORT_INTERVAL = 60_000;
-let lastDepthReport = 0;
 
 /** Tell darknet.js where this probe is each minute (METRICS_PORT). darknet.js only knew depths of servers whose
  * passwords it holds, so the frontier looked stuck in segment 0 until the final labyrinth appeared at depth 35. */
 async function reportDepth(ns, host) {
-    if (host === "home" || host === "darkweb" || Date.now() - lastDepthReport < DEPTH_REPORT_INTERVAL) return;
-    lastDepthReport = Date.now();
+    if (host === "home" || host === "darkweb" || !isDue(ns, "depth", DEPTH_REPORT_INTERVAL)) return;
     try {
         const me = await getAuthDetails(ns, host);
         if (!me || typeof me.depth !== "number") return;
@@ -1704,12 +1710,10 @@ async function reportDepth(ns, host) {
 }
 
 const MIGRATION_SERVE_HEADROOM_GB = 3; // a 16 GB host with a 7 GB probe can then afford one thread
-let lastMigrationRequest = 0;
 
 /** Ask darknet.js to have our neighbours migrate us, if our difficulty makes landing past the gap likely. */
 async function requestOwnMigration(ns, optionsFile, host) {
-    if (host === "home" || host === "darkweb" || Date.now() - lastMigrationRequest < MIGRATION_REQUEST_INTERVAL) return;
-    lastMigrationRequest = Date.now();
+    if (host === "home" || host === "darkweb" || !isDue(ns, "migreq", MIGRATION_REQUEST_INTERVAL)) return;
     const options = loadProbeOptions(ns, optionsFile);
     const gap = options.frontierGap;
     if (!options.enableMigration || !gap || options.labNeighbors.includes(host)) return;
@@ -1763,8 +1767,7 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
     const options = loadProbeOptions(ns, optionsFile);
     const gap = options.frontierGap;
     if (!options.enableMigration || !gap) return;
-    if (Date.now() - lastMigrationCheck < MIGRATION_RECHECK_INTERVAL) return;
-    lastMigrationCheck = Date.now();
+    if (!isDue(ns, "migcheck", MIGRATION_RECHECK_INTERVAL)) return;
     const host = ns.getHostname();
     if (host === "home") return;
     try {
@@ -4108,7 +4111,7 @@ function authConcurrency(ns) {
 }
 
 // How long the latest wave of authentications took (one auth time): authBatchWithLogFeedback sizes batches with it.
-let lastAuthWaveMs = 0;
+const lastAuthWaveMs = new Map(); // pid -> ms (per probe: see _probeTimers)
 
 async function runAuthMany(ns, hostname, passwords, stopOnSuccess = true) {
     const results = new Array(passwords.length).fill(null);
@@ -4122,7 +4125,7 @@ async function runAuthMany(ns, hostname, passwords, stopOnSuccess = true) {
         if (k <= 1) {
             const i = queue.shift();
             results[i] = await runAuth(ns, hostname, passwords[i]);
-            lastAuthWaveMs = Date.now() - waveStart;
+            lastAuthWaveMs.set(ns.pid, Date.now() - waveStart);
             if (stopOnSuccess && results[i]?.success) return results;
             continue;
         }
@@ -4144,7 +4147,7 @@ async function runAuthMany(ns, hostname, passwords, stopOnSuccess = true) {
         }
         queue.splice(0, wave.length);
         const out = await awaitDnetCommands(ns, files);
-        lastAuthWaveMs = Date.now() - waveStart;
+        lastAuthWaveMs.set(ns.pid, Date.now() - waveStart);
         const retry = [];
         let hit = false;
         wave.forEach((i, j) => {
@@ -4350,7 +4353,7 @@ async function authBatchWithLogFeedback(ns, hostname, guesses, parseLogs, server
             while (i < pending.length && batch.length < FEEDBACK_BATCH_MAX) {
                 const wave = pending.slice(i, i + Math.min(authConcurrency(ns), FEEDBACK_BATCH_MAX - batch.length));
                 if (batch.length && interval > 0) {
-                    const noise = (Date.now() - start + 2.5 * lastAuthWaveMs) / (1000 * interval);
+                    const noise = (Date.now() - start + 2.5 * (lastAuthWaveMs.get(ns.pid) ?? 0)) / (1000 * interval);
                     if (batch.length + wave.length + noise > 180) break;
                 }
                 const res = await runAuthMany(ns, hostname, wave);
@@ -4650,10 +4653,8 @@ function revivePayload(value) {
  * (darknet.js copies it to every server whose password it knows), hand over to it: a helper kills this probe and starts
  * the new one. Upgrades used to come only from a neighbour running the new version, so a version bump stranded the probes
  * past an air gap on the old one, invisible to darknet.js and never anchored (BN12.87). Never restarts onto an old file. */
-let lastUpgradeCheck = 0;
 async function selfUpgrade(ns, optionsFile, host, scriptName) {
-    if (Date.now() - lastUpgradeCheck < 30_000) return;
-    lastUpgradeCheck = Date.now();
+    if (!isDue(ns, "upgrade", 30_000)) return;
     try {
         const v = loadProbeOptions(ns, optionsFile).probeVersion;
         if (!v || v <= PROBE_VERSION) return;
