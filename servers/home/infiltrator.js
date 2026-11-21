@@ -1929,14 +1929,14 @@ function optimalStartFloors(maxLevel, runSeconds) {
     return best;
 }
 
-/** How long to wait after a run before the next one starts (the loop's own sleep-between time counts toward it). */
+let nextRunAt = 0; // when the next run should start (set after each completed run)
+/** How long to wait after a run before the next one starts. */
 function getOptimalDelay(maxLevel) {
     const runSeconds = maxLevel * (secondsPerFloor ?? 1);
     const target = optimalStartFloors(maxLevel, runSeconds);
     const floors = getCurrentFloors();
     if (floors <= target) return 0;
-    const delay = Math.log(target / floors) / DECAY_RATE - (options["sleep-Between-Infiltration-Time"] || 0);
-    return Math.max(0, delay);
+    return Math.max(0, Math.log(target / floors) / DECAY_RATE);
 }
 
 // =============================================================================
@@ -2168,9 +2168,12 @@ export async function main(ns) {
                     `${goal.target.name} (${formatNumberShort(infilRate * 3600, 3)}/h). Leaving it to faction work for ${PAUSE_MS / 60000} minutes.`);
                 continue;
             }
-            if (options["sleep-Between-Infiltration-Time"]) {
+            // After a run, the market demand target sets the pause (at least 3 s); otherwise the configured sleep. Faction work
+            // in the pause earns ~3% of infiltration's rep in BN12, so a fixed 20 s pause on top cost more than it gave.
+            const pause = nextRunAt ? Math.max(3000, nextRunAt - Date.now()) : options["sleep-Between-Infiltration-Time"];
+            if (pause) {
                 portClear(ns, 30); // Release lock so faction worker can run during downtime
-                await sleepFocused(ns, options["sleep-Between-Infiltration-Time"]);
+                await sleepFocused(ns, pause);
                 portWrite(ns, 30, ns.pid); // Re-acquire lock before next infiltration
             }
 
@@ -2248,16 +2251,8 @@ export async function main(ns) {
                 secondsPerFloor = secondsPerFloor ? 0.7 * secondsPerFloor + 0.3 * floorSeconds : floorSeconds;
                 recordInfiltration(goal.target.maxClearanceLevel);
                 const delay = getOptimalDelay(goal.target.maxClearanceLevel);
-                if (delay > 0) {
-                    log(
-                        ns,
-                        `Market demand low \u2014 waiting ${(delay / 1000).toFixed(1)}s for recovery`,
-                        verbose,
-                    );
-                    portClear(ns, 30); // Release lock during market demand wait
-                    await sleepFocused(ns, delay);
-                    portWrite(ns, 30, ns.pid); // Re-acquire lock
-                }
+                nextRunAt = Date.now() + delay;
+                if (delay > 0) log(ns, `Market demand low \u2014 next run in ${(delay / 1000).toFixed(1)}s`, verbose);
             }
 
             await click(ns, btnSaveGame);
