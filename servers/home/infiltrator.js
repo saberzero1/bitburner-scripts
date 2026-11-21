@@ -1904,22 +1904,38 @@ function getActualReward(apiReward) {
     return apiReward * getMarketDemandMultiplier();
 }
 
+/** Market demand floors at which starting the next run maximises rep per second, for runs of `maxLevel` floors taking
+ * `runSeconds`. The game takes the demand at a run's start and adds its floors at that same timestamp, decaying with a
+ * 50 s time constant. Simulated steady state, grid-searched. The old rule (wait until floors after the next run fall to
+ * the 2/3-demand point) started runs at ~0.95 demand: 20-28% less rep per second than starting at ~0.77 (2026-11-21). */
+const optimalFloorsCache = new Map();
+function optimalStartFloors(maxLevel, runSeconds) {
+    const key = `${maxLevel}:${Math.round(runSeconds)}`;
+    if (optimalFloorsCache.has(key)) return optimalFloorsCache.get(key);
+    const decayRun = Math.exp(DECAY_RATE * runSeconds * 1000);
+    let best = 0, bestRate = -1;
+    for (let target = 0.25; target <= 40; target += 0.25) {
+        let floors = 0, time = 0, rep = 0;
+        for (let i = 0; i < 120; i++) {
+            if (floors > target) { time += Math.log(target / floors) / DECAY_RATE / 1000; floors = target; }
+            if (i >= 40) rep += Math.max(0, 1 - MARKET_DEMAND_FACTOR * floors * floors);
+            floors = (floors + maxLevel) * decayRun;
+            time += runSeconds;
+            if (i === 39) time = 0;
+        }
+        if (rep / time > bestRate) { bestRate = rep / time; best = target; }
+    }
+    optimalFloorsCache.set(key, best);
+    return best;
+}
+
+/** How long to wait after a run before the next one starts (the loop's own sleep-between time counts toward it). */
 function getOptimalDelay(maxLevel) {
-    const currentFloors = getCurrentFloors();
-    const floorsAfterNext = currentFloors + maxLevel;
-    const multiplierAfter = Math.max(
-        0,
-        1 - MARKET_DEMAND_FACTOR * floorsAfterNext * floorsAfterNext,
-    );
-
-    if (multiplierAfter > 0.5) return 0;
-
-    const threshold = 0.67;
-    const targetFloors = Math.sqrt((1 - threshold) / MARKET_DEMAND_FACTOR);
-
-    if (floorsAfterNext <= targetFloors) return 0;
-
-    const delay = Math.log(targetFloors / floorsAfterNext) / DECAY_RATE;
+    const runSeconds = maxLevel * (secondsPerFloor ?? 1);
+    const target = optimalStartFloors(maxLevel, runSeconds);
+    const floors = getCurrentFloors();
+    if (floors <= target) return 0;
+    const delay = Math.log(target / floors) / DECAY_RATE - (options["sleep-Between-Infiltration-Time"] || 0);
     return Math.max(0, delay);
 }
 
