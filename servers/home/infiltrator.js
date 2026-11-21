@@ -38,6 +38,10 @@ const argsSchema = [
     ["no-tail", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them
     ["stop", false], // Stop running infiltration automation
     ["status", false], // Check if automation is active
+    // How factions are ranked: "hacking" = World Daemon value of their augs per rep (the darknet route gets The Red Pill
+    // from the final labyrinth, so no aug count is needed; hacking level ~ hacking mult x ln(exp)), "count" = augs per
+    // rep (for reaching Daedalus' aug count requirement)
+    ["aug-value", "hacking"],
 ];
 
 /**
@@ -2663,6 +2667,16 @@ async function getLocationsOnce(ns, display = false) {
  * @param {string[]} ignoreFaction
  * @param {string} boostFaction
  * @param {string} forceTarget */
+/** An aug's worth for faction ranking (see --aug-value). Hacking level = mult x 32 ln(exp + c), and late in the World
+ * Daemon phase ln(exp) ~ 15.6, so +1% hacking mult is +1% level while +1% exp (or hacking speed, ~exp rate) is ~+0.064%.
+ * Volhaven and Tian Di Hui's remaining combat augs soaked up ~165k rep a run while CyberSec's Cranial Signal Processors
+ * (+5%, +7% hacking) sat unbought (2026-11-21). A small base keeps count as a tie-breaker. */
+function augValue(name) {
+    if (options?.["aug-value"] === "count") return 1;
+    const st = augmentationData[name]?.stats ?? {};
+    return 0.005 + Math.log(st.hacking ?? 1) + 0.064 * (Math.log(st.hacking_exp ?? 1) + Math.log(st.hacking_speed ?? 1));
+}
+
 async function computeNextGoal(ns, ignoreFaction, boostFaction, forceTarget) {
     const unownedAugs = Object.values(augmentationData).filter(
         (aug) => !aug.owned || aug.name === strNF,
@@ -2725,7 +2739,7 @@ async function computeNextGoal(ns, ignoreFaction, boostFaction, forceTarget) {
         let cumulative = 0;
         let prevThreshold = -1;
         for (const t of data.augThresholds) {
-            cumulative++;
+            cumulative += augValue(t.name);
             if (t.repNeed !== prevThreshold) {
                 // At this threshold we'd unlock `cumulative` augs total
                 const score = cumulative / Math.max(t.repNeed, 1);
