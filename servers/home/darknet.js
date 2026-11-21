@@ -1931,6 +1931,15 @@ function recordMetrics(ns, state) {
         const line = String(portRead(ns, METRICS_PORT));
         let rec = null;
         try { rec = JSON.parse(line); } catch {}
+        // Charging checks: one per probe per check since probe v67 (~500 per install), which pushed whole runs out of the
+        // trimmed file. Counted into the minute's frontier snapshot instead.
+        if (rec?.type === "migcheck") {
+            const agg = (state.migcheckAgg ??= { n: 0, started: 0, why: {} });
+            agg.n++;
+            if (rec.best) agg.started++;
+            for (const [k, v] of Object.entries(rec.why ?? {})) if (v) agg.why[k] = (agg.why[k] ?? 0) + v;
+            continue;
+        }
         if (rec?.type !== "pdepth") { lines.push(line); continue; }
         const prevDepth = state.reportedDepths.get(rec.host)?.depth ?? state.lastReportedDepth?.get(rec.host);
         state.reportedDepths.set(rec.host, { depth: rec.depth, t: rec.t });
@@ -1978,7 +1987,9 @@ function recordMetrics(ns, state) {
             rsegs[seg] = (rsegs[seg] ?? 0) + 1;
             rdeepest = Math.max(rdeepest, r.depth);
         }
-        lines.push(JSON.stringify({ t: now, type: "frontier", deepest, segs, anchors: state.stasisServers.size, rdeepest, rsegs }));
+        lines.push(JSON.stringify({ t: now, type: "frontier", deepest, segs, anchors: state.stasisServers.size, rdeepest, rsegs,
+            migchecks: state.migcheckAgg ?? null }));
+        state.migcheckAgg = null;
     }
     if (!lines.length) return;
     ns.write(METRICS_FILE, lines.join("\n") + "\n", "a");
