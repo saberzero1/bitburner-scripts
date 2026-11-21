@@ -14,6 +14,8 @@ import {
     tail,
     getStocksValue,
     measureRepGainRate,
+    portPeek,
+    portClear,
 } from "./helpers.js";
 
 let options;
@@ -23,7 +25,7 @@ const argsSchema = [
     ["o", false], // Immediately grind company factions for rep after getting their invite, rather than first getting all company invites we can
     ["desired-stats", []], // Factions will be removed from our 'early-faction-order' once all augs with these stats have been bought out
     ["desired-augs", []], // The augmentations will keep a faction in our 'early-faction-order' regardless of whether they have any --desired-stats
-    ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window any time we initiate focused player work.
+    ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open one whenever we initiate focused player work.
     ["no-focus", false], // Disable doing work that requires focusing (crime), and forces study/faction/company work to be non-focused (even if it means incurring a penalty)
     ["no-studying", false], // Disable studying.
     ["pay-for-studies-threshold", 200000], // Only be willing to pay for our studies if we have this much money
@@ -1264,10 +1266,15 @@ async function trainCombatStats(ns, reqStats) {
             physicalStats[0],
         );
         const currentWork = await getCurrentWorkInfo(ns);
+        // Gym class types are "str"/"def"/"dex"/"agi" (GymType), and getCurrentWork() has no focus field
         const isGym =
-            currentWork.classType &&
-            currentWork.classType.toLowerCase().includes("gym");
-        if (!isGym || currentWork.focus !== focusArg) {
+            currentWork.type === "CLASS" &&
+            currentWork.classType === targetStat.slice(0, 3);
+        if (await isValidInterruption(ns, currentWork)) return false;
+        const isFocused = isGym
+            ? await getNsDataThroughFile(ns, "ns.singularity.isFocused()")
+            : null;
+        if (!isGym || isFocused !== focusArg) {
             await getNsDataThroughFile(
                 ns,
                 "ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])",
@@ -1481,6 +1488,7 @@ async function study(ns, focus, course, university = null) {
             return;
         }
     }
+    if (await isValidInterruption(ns)) return false;
     if (
         await getNsDataThroughFile(
             ns,
@@ -1671,6 +1679,61 @@ async function measureFactionRepGainRate(ns, factionName) {
     );
 }
 
+/** If Formulas.exe is available, compute the rep gained per game cycle for each work type this faction supports.
+ * @param {NS} ns
+ * @returns {Promise<Record<string, number>|null>} map of work type to rep per cycle, or null if formulas are unavailable */
+async function getFormulasFactionRepRates(ns, factionName) {
+    return await getNsDataThroughFile(
+        ns,
+        `(() => { try { if (!ns.fileExists("Formulas.exe", "home")) return null; ` +
+            `const p = ns.getPlayer(), fav = ns.singularity.getFactionFavor(ns.args[0]); ` +
+            `return Object.fromEntries(ns.singularity.getFactionWorkTypes(ns.args[0])` +
+            `.map(t => [t, ns.formulas.work.factionGains(p, t, fav).reputation])); } catch { return null; } })()`,
+        "/Temp/faction-work-rep-rates.txt",
+        [factionName],
+    );
+}
+
+/** A less noisy measurement of faction rep gain rate than measureFactionRepGainRate, used to pick the best work type.
+ * Waits for a first rep change (so the timer starts aligned to a game update), then times the next few changes.
+ * @param {NS} ns */
+async function measureFactionRepGainRateAccurately(
+    ns,
+    factionName,
+    changes = 3,
+) {
+    const sample = async () => await getFactionReputation(ns, factionName);
+    let last = await sample();
+    // Sync up with the game's update loop by waiting for the first change
+    const syncDeadline = Date.now() + 2000;
+    let synced = false;
+    while (Date.now() < syncDeadline) {
+        await ns.sleep(20);
+        const current = await sample();
+        if (current !== last) {
+            last = current;
+            synced = true;
+            break;
+        }
+    }
+    if (!synced) return 0; // Rep isn't changing - this work gives no rep (or we aren't working)
+    const initial = last;
+    const start = Date.now();
+    let count = 0,
+        lastChangeTime = start;
+    while (count < changes && Date.now() - start < 2000 * changes) {
+        await ns.sleep(20);
+        const current = await sample();
+        if (current !== last) {
+            last = current;
+            lastChangeTime = Date.now();
+            count++;
+        }
+    }
+    const elapsed = (lastChangeTime - start) / 1000;
+    return count > 0 && elapsed > 0 ? (last - initial) / elapsed : 0;
+}
+
 async function measureCompanyRepGainRate(ns, companyName) {
     return await measureRepGainRate(
         ns,
@@ -1770,11 +1833,24 @@ let lastInterruptionNotice = "";
 async function isValidInterruption(ns, currentWork = null) {
     let interruptionNotice = "";
     currentWork ??= await getCurrentWorkInfo(ns); // Retrieve current work (unless it was passed in)
-    // Never interrupt grafting
+    // Never interrupt grafting. This MUST come first: the infiltration branch below stops the current work, and used to
+    // run first, cancelling grafts whenever infiltrator.js was active (2026-11-16: a $75t QLink graft lost that way).
     if (currentWork.type == "GRAFTING") {
         interruptionNotice =
             "Grafting in progress. Pausing all activity to avoid interrupting...";
         wasGrafting = true;
+    }
+    // Never interrupt infiltration - infiltrator.js writes its PID to port 30 while active
+    else if (portPeek(ns, 30) !== "NULL PORT DATA") {
+        // Verify the PID is still running (guards against stale port data if infiltrator crashed)
+        const infiltratorPid = portPeek(ns, 30);
+        if (ns.isRunning(infiltratorPid)) {
+            interruptionNotice =
+                "Infiltrator.js is running. Pausing focus-work to avoid disrupting infiltration...";
+            if (currentWork.type) await stop(ns);
+        } else {
+            portClear(ns, 30); // Stale PID - infiltrator.js is no longer running, clean up
+        }
     }
     // If bladeburner is currently active, but we do not yet have The Blade's Simulacrum, we may choose to we pause working.
     else if (
@@ -2073,12 +2149,23 @@ async function startWorkForFaction(ns, factionName, work, focus) {
 async function detectBestFactionWork(ns, factionName) {
     let bestWork,
         bestRepRate = 0;
+    // Preferred: If we have Formulas.exe, compute the exact rep gain of each supported work type (no measurement noise)
+    const formulaRates = await getFormulasFactionRepRates(ns, factionName);
+    if (formulaRates) {
+        for (const [work, repRate] of Object.entries(formulaRates))
+            if (repRate > bestRepRate) {
+                bestRepRate = repRate;
+                bestWork = work;
+            }
+        if (bestWork !== undefined) return bestWork;
+        // Otherwise (e.g. no supported work types, or all zero), fall back to the measurement approach below
+    }
     for (const work of Object.values(ns.enums.FactionWorkType)) {
         if (!(await startWorkForFaction(ns, factionName, work, shouldFocus))) {
             //ns.print(`"${factionName}": "${work}"" work not supported.`);
             continue; // This type of faction work must not be supported
         }
-        const currentRepGainRate = await measureFactionRepGainRate(
+        const currentRepGainRate = await measureFactionRepGainRateAccurately(
             ns,
             factionName,
         );

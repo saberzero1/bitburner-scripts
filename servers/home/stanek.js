@@ -20,16 +20,21 @@ let awakeningRep = 1e6,
 
 const argsSchema = [
     ["reserved-ram", 32], // Don't use this RAM
-    ["reserved-ram-ideal", 64], // Leave this amount of RAM free if it represents less than 5% of available RAM
+    ["reserved-ram-ideal", 128], // Leave up to this much RAM free: 1/8 of home's RAM, capped at this (and at least reserved-ram)
     ["max-charges", 120], // Stop charging when all fragments have this many charges (diminishing returns - num charges is ^0.07 )
+    ["charge-cap", ""], // Per-fragment charge targets below --max-charges, "id:charges,..." (autopilot: "18:120" for the charisma
+    // fragment beside the hacking pair after The Red Pill: it only needs to lift darknet money, not 1000 charges)
+    ["repeak", false], // Don't exit at --max-charges: charge again whenever a call twice the current peak becomes possible (autopilot: before The Red Pill)
+    ["hacknet-helpers", false], // Also charge from every hacknet server at once (autopilot: after The Red Pill, with --max-charges 1000)
     ["on-startup-script", null], // Spawn this script when stanek is launched
     ["on-startup-script-args", []], // Args for the above
-    ["no-startup-script", false],
-    // When stanek completes, it will run daemon.js again (which will terminate the initial ram-starved daemon that is running)
+    // Off by default: the default startup/completion script was a plain daemon.js (with stale args), which killed
+    // autopilot's daemon. autopilot.js launches daemon.js itself.
+    ["no-startup-script", true],
     ["on-completion-script", null], // Spawn this script when max-charges is reached
     ["on-completion-script-args", []], // Optional args to pass to the script when launched
-    ["no-completion-script", false],
-    ["no-tail", false], // By default, keeps a tail window open, because it's pretty important to know when this script is running (can't use home for anything else)
+    ["no-completion-script", true],
+    ["no-tail", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to keep one open while charging (home is unusable meanwhile)
     ["reputation-threshold", 0.2], // By default, if we are this close to the rep needed for an unowned stanek upgrade (e.g. "Stanek's Gift - Serenity"), we will keep charging despite the 'max-charges' setting
 ];
 
@@ -44,7 +49,9 @@ let options,
     idealReservedRam,
     chargeAttempts,
     sf4Level,
-    shouldContinueForAug;
+    shouldContinueForAug,
+    helperHosts = [], // hacknet servers charging alongside home (--hacknet-helpers)
+    helpersScannedAt = 0;
 
 /** Maximizes charge on stanek fragments based on current home RAM.
  * NOTE: You should have no other scripts running on home while you do this to get the best peak charge possible
@@ -171,7 +178,27 @@ export async function main(ns) {
             checkOnChargeScript();
             const fragmentsToCharge = await getFragmentsToCharge(ns);
             if (fragmentsToCharge === undefined) continue;
-            if (fragmentsToCharge.length == 0) break; // All fragments at max desired charge
+            if (fragmentsToCharge.length == 0) {
+                // All fragments at max desired charge. With --repeak (autopilot, before The Red Pill) keep watching: the
+                // peak is the biggest single call so far, and charging early in an install, while the hacknet is still
+                // being rebought, left the charisma fragment at a peak of 456 for the whole install (BN12.87; 10,496 once
+                // the hacknet was maxed in BN12.86): charisma 1,888 for Uber's 2,500 and a charisma graft. When a call
+                // twice the current peak is possible, charge again (it raises the peak; the charge count restarts from it).
+                if (!options["repeak"]) break;
+                const frags = (await getActiveFragments(ns)).filter((f) => f.id < 100);
+                const peak = Math.min(...frags.map((f) => f.highestCharge));
+                let possible = 0;
+                try {
+                    possible = await getNsDataThroughFile(ns, `(() => { let best = 0; for (const h of ["home", ...ns.scan("home").filter((x) => x.startsWith("hacknet-server-"))]) {
+                        const s = ns.getServer(h); best = Math.max(best, (s.maxRam - s.ramUsed) / 2 * (1 + (s.cpuCores - 1) / 16)); } return best; })()`,
+                        "/Temp/stanek-possible-peak.txt");
+                } catch {}
+                if (frags.length && possible > 2 * peak) {
+                    log(ns, `INFO: A charge call of ~${formatNumberShort(possible)} is now possible (peak ${formatNumberShort(peak)}): charging again to raise the peak.`);
+                    lastLoopSuccessful = await tryChargeAllFragments(ns, frags);
+                } else await ns.sleep(60_000);
+                continue;
+            }
             lastLoopSuccessful = await tryChargeAllFragments(
                 ns,
                 fragmentsToCharge,
@@ -270,7 +297,7 @@ async function getFragmentsToCharge(ns) {
                 chargeAttempts[fragment.id] = 2; // Hack: We will never try to charge this fragment again. Abuse this dict value so we don't see htis log again.
             }
         } else if (fragment.id < 100)
-            minCharges = Math.min(minCharges, fragment.numCharge); // Track the least-charged fragment (ignoring fragments that take no charge)
+            minCharges = Math.min(minCharges, fragment.numCharge * maxCharges / capOf(fragment)); // Track the least-charged fragment (ignoring fragments that take no charge), relative to its cap
     }
     minCharges = Math.ceil(minCharges); // Fractional charges now occur. Round these up.
     if (
@@ -282,7 +309,8 @@ async function getFragmentsToCharge(ns) {
     // We will only charge non-booster fragments, and fragments that aren't stuck at 0 charge
     const fragmentsToCharge = fragments.filter(
         (f) =>
-            f.id < 100 && ((chargeAttempts[f.id] || 0) < 2 || f.numCharge > 0),
+            f.id < 100 && ((chargeAttempts[f.id] || 0) < 2 || f.numCharge > 0) &&
+            (shouldContinue || f.numCharge < capOf(f)), // (fragments at their --charge-cap wait for the rest)
     );
     // Log a status update
     log(
@@ -304,15 +332,18 @@ async function getFragmentsToCharge(ns) {
  * @param {NS} ns
  * @returns {Promise<bool>} whether all fragments were charged successfully **/
 async function tryChargeAllFragments(ns, fragmentsToCharge) {
+    let charged = 0;
     // Charge each fragment one at a time
     for (const fragment of fragmentsToCharge) {
         let availableRam =
             ns.getServerMaxRam(currentServer) -
             ns.getServerUsedRam(currentServer);
-        let reservedRam =
-            idealReservedRam / availableRam < 0.05
-                ? options["reserved-ram-ideal"]
-                : options["reserved-ram"];
+        // Helpers' temp scripts peak above 32 GB (go.js's cheat script 35 GB, its combined turn lookup 62 GB): with 32 GB
+        // left (the old 64 GB only applied below 5% of free RAM, i.e. above ~1.3 TB) charging starved them, and they
+        // waited for RAM for minutes after installs (BN12.83: go.js stalled with 31 GB free of 1 TB). Charge strength
+        // grows with log(threads), so leaving 1/8 of home costs little.
+        const reservedRam = Math.max(options["reserved-ram"],
+            Math.min(options["reserved-ram-ideal"], ns.getServerMaxRam(currentServer) / 8));
         const threads = Math.floor((availableRam - reservedRam) / 2.0);
         if (threads <= 0) {
             log(
@@ -328,6 +359,29 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
             fragment.x,
             fragment.y,
         );
+        // Helper charges at the same time: a fragment's bonus is ln(highestCharge + 1) x ((numCharge + 1) / 5)^0.07,
+        // where highestCharge is the biggest single call (threads x the host's core bonus, 1 + (cores - 1) / 16) and each
+        // call adds its size / highestCharge to numCharge. Home's call stays the biggest, but each 4 TB, 24-core hacknet
+        // server adds ~0.42 charge per call (2048 x 2.44 vs home's ~8192 x 1.44): 14 of them make ~6.9 per call, so
+        // 1000 charges take ~5 minutes instead of ~33 (both hacking fragments: hacking skill and exp x~1.22 vs 120 charges).
+        const helperPids = [];
+        // (rescanned every minute: after The Red Pill install the hacknet is rebought while we charge)
+        if (options["hacknet-helpers"] && Date.now() - helpersScannedAt > 60_000) {
+            helpersScannedAt = Date.now();
+            try {
+                helperHosts = await getNsDataThroughFile(ns, `ns.scan("home").filter((h) => h.startsWith("hacknet-server-"))`, "/Temp/stanek-helpers.txt");
+            } catch {}
+        }
+        if (pid && options["hacknet-helpers"])
+            for (const h of helperHosts) {
+                try {
+                    const t = Math.floor((ns.getServerMaxRam(h) - ns.getServerUsedRam(h)) / 2.0);
+                    if (t < 1) continue;
+                    if (!ns.fileExists(chargeScript, h)) ns.scp(chargeScript, h, "home");
+                    const hp = ns.exec(chargeScript, h, { threads: t, temporary: true }, fragment.x, fragment.y);
+                    if (hp) helperPids.push(hp);
+                } catch {}
+            }
         if (!pid) {
             log(
                 ns,
@@ -337,8 +391,13 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
             continue;
         }
         await waitForProcessToComplete(ns, pid);
+        for (const hp of helperPids) await waitForProcessToComplete(ns, hp);
         chargeAttempts[fragment.id] = 1 + (chargeAttempts[fragment.id] || 0);
+        charged++;
     }
+    // Only report success if something was actually charged. When RAM is short every fragment is skipped, and
+    // reporting success would make the main loop retry every 10ms (each round spawns temp scripts), freezing the game.
+    return charged > 0;
 }
 
 /** Get the current active stanek fragments
@@ -346,4 +405,11 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
  * @returns {Promise<ActiveFragment[]>} **/
 async function getActiveFragments(ns) {
     return await getNsDataThroughFile(ns, "ns.stanek.activeFragments()");
+}
+
+/** A fragment's charge target: --charge-cap "id:charges,..." where given, else --max-charges. */
+function capOf(fragment) {
+    const caps = Object.fromEntries(String(options["charge-cap"] || "").split(",").filter((x) => x.includes(":"))
+        .map((x) => x.split(":").map(Number)));
+    return Math.min(caps[fragment.id] ?? maxCharges, maxCharges);
 }

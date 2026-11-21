@@ -1,0 +1,6 @@
+A_default {}
+O2 {"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+O3 {"budget":{"mainOffice":0.52,"supportOffices":0.52}}
+O2lowWA {"budget":{"mainOffice":0.348,"supportOffices":0.348,"wilson":0.043,"advert":0.043}}
+P5 {"product-share":0.05}
+O2P5 {"budget":{"mainOffice":0.348,"supportOffices":0.348},"product-share":0.05}

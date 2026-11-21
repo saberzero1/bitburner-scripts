@@ -104,7 +104,7 @@ export function main(ns) {
                 ? ` <span class="serverStats">... ` +
                   `Money: ` +
                   (
-                      ((server.moneyMax ?? 0 > 0)
+                      (((server.moneyMax ?? 0) > 0)
                           ? `${formatMoney(server.moneyAvailable ?? 0, 4, 1).padStart(7)} / `
                           : "") +
                       `${formatMoney(server.moneyMax ?? 0, 4, 1).padStart(7)} `
@@ -115,7 +115,7 @@ export function main(ns) {
                   `RAM: ${formatRam(server.maxRam ?? 0)
                       .replace(" ", "")
                       .padStart(6)}` +
-                  ((server.maxRam ?? 0 > 0)
+                  (((server.maxRam ?? 0) > 0)
                       ? ` (${formatNumber((server.ramUsed * 100.0) / server.maxRam, 0, 1)}% used)`
                       : "") +
                   `</span>`

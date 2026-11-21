@@ -1,0 +1,12 @@
+A_default {}
+B_wa2 {"budget":{"wilson":0.174,"advert":0.174}}
+C_wa4 {"budget":{"wilson":0.348,"advert":0.348}}
+D_advert {"budget":{"advert":0.35}}
+E_wilson {"budget":{"wilson":0.35}}
+F_noemp {"budget":{"employeeStats":0}}
+G_office2 {"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+H_every1 {"spend-interval":1}
+I_frac50 {"spend-fraction":0.5}
+J_prod5 {"product-share":0.05}
+K_supp03 {"support-scale":0.3}
+L_supp2 {"support-scale":2}

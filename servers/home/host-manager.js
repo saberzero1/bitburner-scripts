@@ -291,6 +291,24 @@ async function tryToBuyBestServerPossible(ns) {
         if (costByRamExponent[exponentLevel + 1] > spendableMoney) break;
     let cost = costByRamExponent[exponentLevel];
     let maxRamPossibleToBuy = Math.pow(2, exponentLevel);
+    // At the server limit we upgrade the worst server instead, which only costs the difference in price
+    // (cost(new) - cost(old)), so size the upgrade by that rather than by the full purchase price.
+    const atServerLimit = purchasedServers.length >= maxPurchasedServers;
+    if (atServerLimit && purchasedServers.length > 0) {
+        const worstRam = Math.min(...purchasedServers.map((s) => ns.getServerMaxRam(s)));
+        const worstExp = Math.log2(worstRam);
+        let e = worstExp;
+        while (
+            e < maxPurchasableServerRamExponent &&
+            costByRamExponent[e + 1] - costByRamExponent[worstExp] <= spendableMoney
+        )
+            e++;
+        if (e > worstExp) {
+            exponentLevel = e;
+            cost = costByRamExponent[e];
+            maxRamPossibleToBuy = Math.pow(2, e);
+        }
+    }
 
     // Don't buy if it would put us below our reserve (shouldn't happen, since we calculated how much to buy based on reserve amount)
     if (spendableMoney < cost)
@@ -349,7 +367,8 @@ async function tryToBuyBestServerPossible(ns) {
     // Abort if our worst previously-purchased server is better than the one we're looking to buy (ensures we buy in sane increments of capacity)
     if (
         worstServerName != null &&
-        maxRamPossibleToBuy < worstServerRam &&
+        // Upgrading to the same size is impossible (and would fail every loop)
+        (maxRamPossibleToBuy < worstServerRam || (atServerLimit && maxRamPossibleToBuy <= worstServerRam)) &&
         !options["allow-worse-purchases"]
     )
         return setStatus(
@@ -359,6 +378,7 @@ async function tryToBuyBestServerPossible(ns) {
         );
     // Only buy new servers as good as or better than our best bought server (anything less is deemed a regression in value)
     if (
+        !atServerLimit && // upgrading the worst server is always an improvement
         bestServerRam != null &&
         maxRamPossibleToBuy < bestServerRam &&
         !options["allow-worse-purchases"]

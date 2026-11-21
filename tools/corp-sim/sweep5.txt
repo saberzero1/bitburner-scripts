@@ -1,0 +1,7 @@
+A_default {}
+T1_hyst {"tea-below":3,"party-below":5,"party-max":500000}
+T2_hyst_int {"tea-below":3,"party-below":5,"party-max":500000,"interns":true}
+T3_int {"interns":true}
+T4_hyst_int_O3 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.52,"supportOffices":0.52}}
+T5_hyst_O3 {"tea-below":3,"party-below":5,"party-max":500000,"budget":{"mainOffice":0.52,"supportOffices":0.52}}
+T6_hyst10 {"tea-below":5,"party-below":10,"party-max":500000}

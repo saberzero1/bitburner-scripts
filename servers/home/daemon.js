@@ -32,6 +32,9 @@ import {
 
 // These parameters are meant to let you tweak the script's behaviour from the command line (without altering source code)
 let options;
+// Helpers launched even when they leave home without room for temp scripts: they drive the BitNode's progress
+const ESSENTIAL_HELPERS = ["darknet.js", "work-for-factions.js", "sleeve.js", "stockmaster.js", "gangs.js", "go.js"];
+const postponedHelpers = new Set(); // logged once each
 const argsSchema = [
     // Behaviour-changing flags
     ["disable-stock-manipulation", false], // You must now opt *out* of stock-manipulation mode by enabling this flag.
@@ -42,6 +45,7 @@ const argsSchema = [
     ["n", false], // Can toggle on using hacknet nodes for extra hacking ram (at the expense of hash production)
     ["use-hacknet-nodes", false], // Same as above (kept for backwards compatibility, but these are now called hacknet-servers)
     ["use-hacknet-servers", false], // Same as above, but the game recently renamed these
+    ["hacknet-ram-first", false], // Run hacknet-upgrade-manager.js with --ram-first (autopilot: after The Red Pill)
 
     ["spend-hashes-for-money-when-under", 10e6], // (Default 10m) Convert 4 hashes to money whenever we're below this amount
     ["disable-spend-hashes", false], // An easy way to set the above to a very large negative number, thus never spending hashes for Money
@@ -69,9 +73,10 @@ const argsSchema = [
     ["cycle-timing-delay", 4000], // (ms) Length of a hack cycle. The smaller this is, the more batches (HWGW) we can schedule before the first cycle fires, but the greater the chance of a misfire
     ["queue-delay", 1000], // (ms) Delay before the first script begins, to give time for all scripts to be scheduled
     ["recovery-thread-padding", 1], // Multiply the number of grow/weaken threads needed by this amount to automatically recover more quickly from misfires.
-    ["max-batches", 40], // Maximum overlapping cycles to schedule in advance. Note that once scheduled, we must wait for all batches to complete before we can schedule mor
+    ["max-batches", 40], // Maximum overlapping cycles to schedule in advance per stream. (With --no-continuous-batching, we must wait for all batches to complete before we can schedule more)
     ["max-steal-percentage", 0.75], // Don't steal more than this in case something goes wrong with timing or scheduling, it's hard to recover frome
 
+    ["no-continuous-batching", false], // Restore the old behaviour of waiting for all of a target's batches to finish before scheduling more
     ["looping-mode", false], // Set to true to attempt to schedule perpetually-looping tasks.
 
     // Special-situation flags
@@ -79,7 +84,7 @@ const argsSchema = [
 
     // Debugging flags
     ["silent-misfires", false], // Instruct remote scripts not to alert when they misfire
-    ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ["h", false], // Do nothing but hack, no prepping (drains servers to 0 money, if you want to do that for some reason)
     ["hack-only", false], // Same as above
     ["v", false], // Detailed logs about batch scheduling / tuning
@@ -133,6 +138,8 @@ export async function main(ns) {
     let cycleTimingDelay = 0; // (Set in command line args)
     let queueDelay = 0; // (Set in command line args) The delay that it can take for a script to start, used to pessimistically schedule things in advance
     let maxBatches = 0; // (Set in command line args) The max number of batches this daemon will spool up to avoid running out of IRL ram
+    let continuousBatching = false; // (Set in command line args) Schedule a target's next stream of batches while the previous one is still in flight
+    let continuationScheduledFor = {}; // target name -> landing time of the first in-flight job when we last appended batches (one append per quiet window)
     let maxTargets = 0; // (Set in command line args) Initial value, will grow if there is an abundance of RAM
     let maxPreppingAtMaxTargets = 3; // The max servers we can prep when we're at our current max targets and have spare RAM
     // Allows some home ram to be reserved for ad-hoc terminal script running and when home is explicitly set as the "preferred server" for starting a helper
@@ -406,6 +413,13 @@ export async function main(ns) {
         cycleTimingDelay = options["cycle-timing-delay"];
         queueDelay = options["queue-delay"];
         maxBatches = options["max-batches"];
+        // Continuous batching relies on job timing being fixed at exec (additionalMsec), so it is not used with looping / hack-only / manual-hack modes
+        continuousBatching =
+            !options["no-continuous-batching"] &&
+            !loopingMode &&
+            !hackOnly &&
+            !options.i;
+        continuationScheduledFor = {};
         homeReservedRam = options["reserved-ram"];
         maxTargets = options["initial-max-targets"] ?? 0;
         if (stockFocus) {
@@ -480,7 +494,7 @@ export async function main(ns) {
         // Helper to decide whether we should launch one of the hacknet upgrade manager scripts.
         const shouldUpgradeHacknet = () =>
             bitNodeMults.HacknetNodeMoney > 0 && // Ensure hacknet is not disabled in this BN
-            reqRam(Math.min(64, homeReservedRam + 6.1)) && // These scripts consume 6.1 GB and keep running a long time, so we want to ensure we have more than the home reservered RAM amount available if home reserved RAM is a small number
+            reqRam(Math.min(64, homeReservedRam + 9.1)) && // These scripts consume ~9.1 GB (hacknet calls are 0.5 GB each since 3.0) and keep running a long time, so we want to ensure we have more than the home reservered RAM amount available if home reserved RAM is a small number
             getPlayerMoney(ns) > reservedMoney(ns); // Player money exceeds the reserve (otherwise it will sit there buying nothing)
 
         // ASYNCHRONOUS HELPERS
@@ -505,7 +519,7 @@ export async function main(ns) {
             {
                 name: "hacknet-upgrade-manager.js",
                 shouldRun: () => shouldUpgradeHacknet(),
-                args: ["-c", "--max-payoff-time", "1h", "--interval", "0"],
+                args: () => ["-c", "--max-payoff-time", "1h", "--interval", "0", ...(options["hacknet-ram-first"] ? ["--ram-first"] : [])],
                 shouldTail: false,
             }, // One-time kickstart of hash income by buying everything with up to 1h payoff time immediately
             {
@@ -543,6 +557,9 @@ export async function main(ns) {
                     reqRam(64) &&
                     ns.fileExists("DarkscapeNavigator.exe", "home"),
                 minRamReq: 30,
+                args: () => [
+                    ...(stockMode ? ["--enable-stock-manipulation"] : []),
+                ],
             },
             {
                 name: "corporation.js",
@@ -551,10 +568,10 @@ export async function main(ns) {
                 minRamReq: 25,
             },
             {
-                name: "corporation.js",
-                shouldRun: () =>
-                    reqRam(64) && (3 in dictSourceFiles || bitNodeN === 3),
-                minRamReq: 25,
+                name: "infiltrator.js",
+                shouldRun: () => reqRam(64), // DOM-based script with minimal RAM footprint; no SF requirements
+                // args: ["--auto"], // Auto-replay infiltrations for passive rep/money income
+                shouldTail: false,
             },
         ];
         // Add any additional scripts to be run provided by --run-script arguments
@@ -606,7 +623,8 @@ export async function main(ns) {
                     "--max-payoff-time",
                     "4h",
                     "--max-spend",
-                    getPlayerMoney(ns) * 0.1,
+                    getPlayerMoney(ns) * (options["hacknet-ram-first"] ? 0.25 : 0.1),
+                    ...(options["hacknet-ram-first"] ? ["--ram-first"] : []),
                 ],
             },
             {
@@ -618,7 +636,8 @@ export async function main(ns) {
                     "--max-payoff-time",
                     "8h",
                     "--max-spend",
-                    getPlayerMoney(ns) * 0.01,
+                    getPlayerMoney(ns) * (options["hacknet-ram-first"] ? 0.25 : 0.01),
+                    ...(options["hacknet-ram-first"] ? ["--ram-first"] : []),
                 ],
             },
             // Buy upgrades regardless of payoff if they cost less than 0.1% of our money
@@ -631,7 +650,8 @@ export async function main(ns) {
                     "--max-payoff-time",
                     "1E100h",
                     "--max-spend",
-                    getPlayerMoney(ns) * 0.001,
+                    getPlayerMoney(ns) * (options["hacknet-ram-first"] ? 0.25 : 0.001),
+                    ...(options["hacknet-ram-first"] ? ["--ram-first"] : []),
                 ],
             },
             {
@@ -745,6 +765,22 @@ export async function main(ns) {
             );
         }
 
+        // Launch the dashboard if it's not already running (e.g. after augmentation reset)
+        // Skip if casino.js is currently running — its DOM manipulation conflicts with dashboard's React rendering
+        if (
+            !ns
+                .ps("home")
+                .some(
+                    (p) =>
+                        p.filename === "dashboard.js" ||
+                        p.filename === "casino.js",
+                )
+        ) {
+            const dashPid = ns.run("dashboard.js");
+            if (dashPid)
+                log(ns, `INFO: Launched dashboard.js (pid: ${dashPid})`);
+        }
+
         // Start the main targetting loop
         await doTargetingLoop(ns);
     }
@@ -793,8 +829,12 @@ export async function main(ns) {
      * Gain a hack XP early after a new Augmentation by studying a bit, then doing a bit of XP grinding */
     async function kickstartHackXp(ns) {
         let startedStudying = false;
+        // Never interrupt grafting (graft.js starts right after an install): studying would cancel the graft
+        const grafting = async () =>
+            4 in dictSourceFiles &&
+            (await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()?.type ?? null", "/Temp/daemon-current-work-type.txt")) === "GRAFTING";
         try {
-            if (4 in dictSourceFiles && options["initial-study-time"] > 0) {
+            if (4 in dictSourceFiles && options["initial-study-time"] > 0 && !(await grafting())) {
                 // The safe/cheap thing to do is to study for free at the local university in our current town
                 // The most effective thing is to study Algorithms at ZB university in Aevum.
                 // Depending on our money, try to do the latter.
@@ -920,7 +960,9 @@ export async function main(ns) {
             );
         } finally {
             // Ensure we stop studying (in case no other running scripts end up stealing focus, so we don't keep studying forever)
-            if (startedStudying)
+            // - but only if we're still studying (not e.g. grafting, which stopAction would cancel)
+            if (startedStudying &&
+                (await getNsDataThroughFile(ns, "ns.singularity.getCurrentWork()?.type ?? null", "/Temp/daemon-current-work-type.txt")) === "CLASS")
                 await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
             studying = false; // This will allow work-for-faction to launch
         }
@@ -945,6 +987,19 @@ export async function main(ns) {
     async function runStartupScripts(ns) {
         let launched = 0;
         for (const script of asynchronousHelpers.filter((s) => !s.isLaunched)) {
+            // Long-running helpers must leave room for temp scripts (getNsDataThroughFile, up to ~30 GB): at a BitNode's
+            // start the helpers filled a 128 GB home to 127.7 GB, and every temp script failed (2026-11-16). Optional
+            // helpers wait until home has room; the ones that drive progress launch regardless.
+            if (!ESSENTIAL_HELPERS.includes(script.name)) {
+                const tool = getTool(script);
+                const headroom = Math.min(32, 0.25 * homeServer.totalRam(true));
+                if (homeServer.ramAvailable(true) - (tool?.cost ?? 0) < headroom) {
+                    if (!postponedHelpers.has(script.name))
+                        log(ns, `INFO: Postponing ${script.name} until home has ${formatRam(headroom)} free besides it (room for temp scripts).`);
+                    postponedHelpers.add(script.name);
+                    continue;
+                }
+            }
             if (!(await tryRunTool(ns, getTool(script)))) continue; // We may have chosen not to run the script for a number of reasons. Proceed to the next one.
             if (++launched > 1) await ns.sleep(1); // If we successfully launch more than 1 script at a time, yeild execution a moment to give them a chance to complete, so many aren't all fighting for temp RAM at the same time.
             script.isLaunched = true;
@@ -1187,6 +1242,15 @@ export async function main(ns) {
                 await updateCachedServerData(ns); // Update server data that only needs to be refreshed once per loop
                 await updatePortCrackers(ns); // Check if any new port crackers have been purchased
                 await getPlayerInfo(ns); // Force an update of _cachedPlayerInfo
+                // Helpers were launched once and then forgotten: one that crashed, was killed, or exited while its
+                // condition was unmet (e.g. darknet.js before DarkscapeNavigator) stayed down until daemon restarted.
+                if (loops % 600 == 300)
+                    for (const helper of asynchronousHelpers.filter((h) => h.isLaunched)) {
+                        if (whichServerIsRunning(ns, getTool(helper).name, false)[0] != null) continue;
+                        log(ns, `INFO: Helper ${helper.name} is no longer running; it will be launched again if it should run.`);
+                        helper.isLaunched = false;
+                        allHelpersRunning = false;
+                    }
                 if (!allHelpersRunning && loops % 60 == 0)
                     // If we have not yet launched all helpers see if any are now ready to be run (launch may have been postponed while e.g. awaiting more home ram, or TIX API to be purchased)
                     allHelpersRunning = await runStartupScripts(ns);
@@ -1332,6 +1396,14 @@ export async function main(ns) {
                     } else if (await server.isTargeting()) {
                         // Note servers already being targeted from a prior loop
                         targeting.push(server);
+                        // If enabled, append the next stream of batches while this one is still in flight (only in a safe "quiet" window)
+                        if (
+                            continuousBatching &&
+                            !xpOnly &&
+                            failed.length == 0 &&
+                            false === (await tryContinueBatching(ns, server))
+                        )
+                            failed.push(server);
                     } else if (await server.isPrepping()) {
                         // Note servers already being prepped from a prior loop
                         prepping.push(server);
@@ -1705,7 +1777,9 @@ export async function main(ns) {
     async function getServersDict(ns, command) {
         return await getNsDataThroughFile(
             ns,
-            `Object.fromEntries(ns.args.map(server => [server, ns.${command}(server)]))`,
+            // (per server: since 3.0 some lookups throw on hacknet servers, e.g. getServerRequiredHackingLevel, which killed
+            // daemon.js at startup with --use-hacknet-servers; 0 = like a server with no money, which they are)
+            `Object.fromEntries(ns.args.map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, 0]; } }))`,
             `/Temp/${command}-all.txt`,
             allHostNames,
         );
@@ -1865,7 +1939,7 @@ export async function main(ns) {
         getExpPerSecond() {
             return dictServerProfitInfo
                 ? (dictServerProfitInfo[this.name]?.expRate ?? 0)
-                : (1 / dictServerMinSecurityLevels[this.name] ?? 0);
+                : 1 / (dictServerMinSecurityLevels[this.name] ?? Infinity); // 0 when unknown
         }
         getMoney() {
             return ns.getServerMoneyAvailable(this.name);
@@ -1951,6 +2025,33 @@ export async function main(ns) {
                 useCache,
             );
             return this._isTargeting;
+        }
+        /** (Continuous batching) The earliest and latest planned landing times (start + duration args) of all in-flight
+         * batch jobs against this server, or null if there are none or any have unexpected args. */
+        getBatchLandingWindow(useCache = true) {
+            let first = Infinity,
+                last = -Infinity;
+            const hostNames = dictServerMaxRam
+                ? allHostNames.filter(
+                      (host) => (dictServerMaxRam[host] ?? 0) > 1.6,
+                  )
+                : allHostNames;
+            for (const hostname of hostNames)
+                for (const process of processList(ns, hostname, useCache)) {
+                    const a = process.args;
+                    if (
+                        a.length <= 3 ||
+                        a[0] != this.name ||
+                        typeof a[3] != "string" ||
+                        !a[3].startsWith("Batch")
+                    )
+                        continue;
+                    const landsAt = Number(a[1]) + Number(a[2]);
+                    if (!Number.isFinite(landsAt)) return null; // Can't reason about this job's timing
+                    first = Math.min(first, landsAt);
+                    last = Math.max(last, landsAt);
+                }
+            return first === Infinity ? null : { first, last };
         }
         async isXpFarming(useCache = true) {
             this._isXpFarming ??= await this.isSubjectOfRunningScript(
@@ -2310,7 +2411,11 @@ export async function main(ns) {
         if (percentPerHackThread >= 1) {
             currentTarget.percentageToSteal = percentPerHackThread;
             currentTarget.percentageToSteal = 1;
-            return getPerformanceSnapshot(currentTarget, networkStats);
+            return getPerformanceSnapshot(
+                currentTarget,
+                networkStats,
+                getOptimalPacedCycles(currentTarget),
+            );
         }
 
         let lastAdjustmentSign = 1;
@@ -2454,8 +2559,55 @@ export async function main(ns) {
         return 0.0;
     }
 
-    /** @param {NS} ns **/
-    async function performScheduling(ns, currentTarget, snapshot) {
+    /** Continuous batching: if the target is in a "quiet" window (every job that has landed so far has left it at min security /
+     * max money, and no in-flight job lands before the jobs we exec now are guaranteed to have started), append another stream of
+     * batches that lands after everything already in flight. Job durations are fixed at exec time (additionalMsec), so they are
+     * computed at min security, exactly as for the first stream. We wait for the *last* quiet moment before landings resume (so each
+     * stream is as long as possible), and leave a gap before the new stream that becomes the next quiet window.
+     * @param {NS} ns
+     * @param {Server} currentTarget
+     * @returns {Promise<boolean|null>} true if batches were scheduled, false if scheduling failed, null if there was nothing (safe) to do. */
+    async function tryContinueBatching(ns, currentTarget) {
+        const landings = currentTarget.getBatchLandingWindow();
+        if (!landings) return null;
+        // All new jobs must be running (and have computed their durations) this long before the next in-flight job lands
+        const guard = queueDelay + cycleTimingDelay / 4;
+        // Width of the window in which we act. Must exceed one targeting loop so that we don't miss it.
+        const catchWindow = 2 * loopInterval + maxLoopTime;
+        const untilNextLanding = landings.first - Date.now();
+        // A job is about to land, or is overdue / still finishing: security / money may not be at min / max. Wait.
+        if (untilNextLanding <= guard) return null;
+        // Too early: wait until just before landings resume, so the stream we append can extend as far as possible
+        if (untilNextLanding > guard + catchWindow) return null;
+        // Only append once per quiet window
+        if (continuationScheduledFor[currentTarget.name] === landings.first)
+            return null;
+        if (!currentTarget.isPrepped()) return null; // Something misfired. Let the batches drain so the target gets re-prepped.
+        if (getTotalNetworkUtilization() >= maxUtilization) return null; // Respect the "hard cap" on RAM utilization
+        const snapshot = optimizePerformanceMetrics(ns, currentTarget);
+        if (!snapshot || currentTarget.actualPercentageToSteal() === 0)
+            return null;
+        // Gap between the last in-flight landing and our first landing. It becomes the quiet window for appending the next stream.
+        const streamGap = guard + catchWindow + cycleTimingDelay / 4;
+        const result = await performScheduling(ns, currentTarget, snapshot, {
+            earliestStart:
+                landings.last + streamGap - currentTarget.timeToWeaken(),
+            quietUntil: landings.first - guard,
+        });
+        if (result !== null)
+            continuationScheduledFor[currentTarget.name] = landings.first;
+        return result;
+    }
+
+    /** @param {NS} ns
+     * @param {{earliestStart: number, quietUntil: number}?} continuation - (continuous batching only) No batch may start before
+     *        earliestStart, and no batch may be exec'd at or after quietUntil (shortly before in-flight jobs resume landing). **/
+    async function performScheduling(
+        ns,
+        currentTarget,
+        snapshot,
+        continuation = null,
+    ) {
         const start = Date.now();
         const scheduledTasks = [];
         const maxCycles = Math.min(
@@ -2486,7 +2638,10 @@ export async function main(ns) {
         while (cyclesScheduled < maxCycles) {
             const newBatchStart = new Date(
                 cyclesScheduled === 0
-                    ? Date.now() + queueDelay
+                    ? Math.max(
+                          Date.now() + queueDelay,
+                          continuation?.earliestStart ?? 0,
+                      )
                     : lastBatch.getTime() + cycleTimingDelay,
             );
             if (newBatchStart.getTime() > scheduleCutoff) break;
@@ -2503,10 +2658,12 @@ export async function main(ns) {
                 // Can't start anything after this first hack completes (until back at min security), or we risk throwing off timing
                 firstEnding = new Date(newBatch.hackEnd.valueOf());
             }
-            if (lastStart === null || lastStart < newBatch.firstFire) {
+            if (lastStart === null || lastStart < newBatch.lastFire) {
                 lastStart = new Date(newBatch.lastFire.valueOf());
             }
-            if (cyclesScheduled > 0 && lastStart >= firstEnding) {
+            // Workers call hack/grow/weaken immediately with additionalMsec, so every duration is fixed at exec time (at min
+            // security), long before the first hack lands. Only looping mode recomputes timings later, so only it needs this cap.
+            if (loopingMode && cyclesScheduled > 0 && lastStart >= firstEnding) {
                 if (verbose)
                     log(
                         ns,
@@ -2517,8 +2674,20 @@ export async function main(ns) {
             scheduledTasks.push(newBatch);
             cyclesScheduled++;
         }
+        if (continuation && cyclesScheduled === 0) return null; // Nothing fits within the lookahead yet
 
         for (const schedObj of scheduledTasks) {
+            // Continuous batching: never exec once in-flight jobs may start landing. Only whole batches are exec'd.
+            if (continuation && Date.now() >= continuation.quietUntil) {
+                if (schedObj.batchNumber === 0) return null;
+                log(
+                    ns,
+                    `INFO: Ran out of time to exec continuation batches for ${currentTarget.name} ` +
+                        `(${schedObj.batchNumber} of ${cyclesScheduled} scheduled).`,
+                );
+                cyclesScheduled = schedObj.batchNumber;
+                break;
+            }
             for (const schedItem of schedObj.scheduleItems) {
                 const discriminationArg = `Batch ${schedObj.batchNumber}-${schedItem.description}`;
                 const args = [
@@ -2801,7 +2970,7 @@ export async function main(ns) {
         let hnNodeIndex;
         while (
             -1 !==
-            (hnNodeIndex = preferredServerOrder.indexOf(
+            (hnNodeIndex = preferredServerOrder.findIndex(
                 (s) =>
                     s.name.startsWith("hacknet-server-") ||
                     s.name.startsWith("hacknet-node-"),
@@ -2923,7 +3092,9 @@ export async function main(ns) {
                     "/Temp/copy-scripts.txt",
                     [targetServer.name, daemonHost, ...missing_scripts],
                 );
-                missing_scripts.forEach((s) => (targetServer._files[s] = true)); // Make note that these files now exist on the target server
+                missing_scripts.forEach((s) =>
+                    targetServer._files?.add(s.startsWith("/") ? s.substring(1) : s),
+                ); // Make note that these files now exist on the target server
                 //await ns.sleep(5); // Workaround for Bitburner bug https://github.com/danielyxie/bitburner/issues/1714 - newly created/copied files sometimes need a bit more time, even if awaited
             }
             // By default, tools executed in this way will be marked as "temporary" (not to be included in the save file or recent scripts history)
@@ -3135,6 +3306,7 @@ export async function main(ns) {
         return getAllServers()
             .filter(
                 (server) =>
+                    !server.name.startsWith("hacknet-server-") && // (hosts only: lookups on them throw since 3.0)
                     (server.hasRoot() || server.canCrack()) &&
                     server.canHack() &&
                     server.shouldHack(),
@@ -3162,15 +3334,24 @@ export async function main(ns) {
         verbose = false,
         numTargets = undefined,
     ) {
-        if (!xpOnly)
-            // Only use basic single-target hacking unless we're in XP mode
+        if (!xpOnly) {
+            // Only use basic single-target hacking unless we're in XP mode. Never farm a server that is being
+            // batched or prepped: unsynchronised grow/hack threads there raise security and wreck batch timing.
+            let xpTarget = null;
+            for (const t of getXPFarmTargetsByExp())
+                if (!(await t.isTargeting()) && !(await t.isPrepping())) {
+                    xpTarget = t;
+                    break;
+                }
+            if (!xpTarget) return false;
             return await scheduleHackExpCycle(
                 ns,
-                getBestXPFarmTarget(),
+                xpTarget,
                 fractionOfFreeRamToConsume,
                 verbose,
                 false,
             ); // Grind some XP from the single best target for farming XP
+        }
         // Otherwise, target multiple servers until we can't schedule any more. Each next best host should get the next best (biggest) server
         getTool("grow").isThreadSpreadingAllowed = true; // Only true when in XP mode - where each grow thread is expected to give 1$. "weak" can always spread.
         const serversByMaxRam = getAllServersByMaxRam().filter((s) =>
@@ -3219,7 +3400,10 @@ export async function main(ns) {
             for (let target of targetsByExp)
                 if (!(target.name in jobHostMappings))
                     jobHostMappings[target.name] = jobHosts.filter(
-                        (h) => !(h.name in Object.values(jobHostMappings)),
+                        (h) =>
+                            !Object.values(jobHostMappings).some(
+                                (m) => m?.name === h.name,
+                            ),
                     )[0];
             if (verbose) {
                 log(
@@ -3258,7 +3442,9 @@ export async function main(ns) {
             // By defaults we match the host with the highest ram to the target with the largest exp-potential
             // but in looping-mode, targets are "locked" to a host once started.
             let selectedTarget = targetsByExp[i];
-            let selectedHost = loopingMode ? jobHostMappings[i] : jobHosts[i];
+            let selectedHost = loopingMode
+                ? jobHostMappings[selectedTarget.name]
+                : jobHosts[i];
             // If we aren't already configured for singleServerMode, switch to single-server mode if running out of hosts with high ram
             singleServerMode =
                 singleServerMode ||
@@ -3306,7 +3492,7 @@ export async function main(ns) {
                 ns,
                 `Waiting for last ${server.name} FarmXP process to complete... (ETA ${eta ? formatDuration(activeCycleTimeLeft) : "unknown"})`,
             );
-        while ((stillBusy = server.isXpFarming(false) && maxWaitTime > 0)) {
+        while ((stillBusy = await server.isXpFarming(false)) && maxWaitTime > 0) {
             await ns.sleep(waitInterval); // Sleep a very short while, then get a fresh process list to check again whether the process is done
             maxWaitTime -= waitInterval;
         }
@@ -3506,12 +3692,17 @@ export async function main(ns) {
             }
 
             let now = Date.now();
-            let scheduleTime = now + queueDelay;
-            let msToCycleEnd =
-                queueDelay + (loopingMode ? expTime * 4.0 : expTime);
-            nextXpCycleEnd[server.name] = now + msToCycleEnd; // Store how many MS before when this server's next cycle is expected to end
             const allowLoop =
                 advancedMode /*&& singleServer*/ && allTargetsPrepped; // Allow looping mode only once all targets are prepped
+            // Basic mode (weaken/grow, no hack threads to synchronise) needs no batch-safety margin: with --queue-delay 2000
+            // each cycle waited 2 s for an operation that takes a fraction of a second at high hacking levels, so XP farming
+            // ran ~5% of the time (BN12.84's World Daemon climb: "897 GB of 19.1 TB (4.7%)"). And its jobs don't loop, so
+            // they must not be timed as 4 operations because --looping-mode is on. (250 ms floor: one launch per target per
+            // cycle; see the freeze-causes notes before going lower.)
+            const delay = advancedMode ? queueDelay : Math.min(queueDelay, 250);
+            let scheduleTime = now + delay;
+            let msToCycleEnd = delay + (loopingMode && allowLoop ? expTime * 4.0 : expTime);
+            nextXpCycleEnd[server.name] = now + msToCycleEnd; // Store how many MS before when this server's next cycle is expected to end
             //log(ns, `allowLoop: ${allowLoop} advancedMode: ${advancedMode} singleServer: ${singleServer} allTargetsPrepped: ${allTargetsPrepped}`);
             // Schedule the FarmXP threads first, ensuring that they are not split (if they our split, our hack threads above 'effectiveHackThreads' lose their free ride)
             let success = true;
@@ -3561,6 +3752,7 @@ export async function main(ns) {
                 while (scheduleWeak < queueDelay) scheduleWeak += expTime;
                 while (scheduleGrow < queueDelay) scheduleGrow += expTime;
                 // Hack runs 4 times per weaken, so in looping mode we need to schedule 4 weaken loops to keep up with one hack loop.
+                let weakLoopPasses = 0, growLoopPasses = 0;
                 do {
                     const allWeakLoopsScheduled =
                         loopingMode &&
@@ -3597,7 +3789,10 @@ export async function main(ns) {
                         );
                     // The next loop (if any) we schedule needs to be offset by an additional +expTime
                     scheduleWeak += expTime;
-                } while (loopingMode); // In looping mode, set up additional recovery loops
+                    // In looping mode, set up additional recovery loops - but only while loops are allowed and counted. This
+                    // used to be `while (loopingMode)`: with allowLoop false (targets not all prepped, e.g. after a reload)
+                    // the loop counter never grew, so it launched weaken jobs forever and froze the game once home RAM was free.
+                } while (loopingMode && allowLoop && success && ++weakLoopPasses < 4);
                 // Schedule 4 grow loops to fire after each hack/weaken
                 do {
                     const allGrowLoopsScheduled =
@@ -3635,7 +3830,7 @@ export async function main(ns) {
                         );
                     // The next loop (if any) we schedule needs to be offset by an additional +expTime
                     scheduleGrow += expTime;
-                } while (loopingMode); // In looping mode, set up additional recovery loops
+                } while (loopingMode && allowLoop && success && ++growLoopPasses < 4); // (see the weaken loop above)
                 //log(ns, `XP Farm ${server.name} money available is ${formatMoney(server.getMoney())} and security is ` +
                 //    `${server.getSecurity().toPrecision(3)} of ${server.getMinSecurity().toPrecision(3)}`);
                 //log(ns, `Planned start: Hack: ${Math.round(scheduleTime - now)} Grow: ${Math.round(scheduleGrow - now)} ` +
@@ -4019,7 +4214,8 @@ export async function main(ns) {
     /** @param {number} homeRam Current ram on the home server (if low, priorities change slightly)
      * @returns {Promise<Server[]>} Sorted in the order we should prioritize spending ram on targeting them (for hacking) */
     async function getAllServersByTargetOrder(homeRam) {
-        _serverListByTargetOrder ??= getAllServers().slice(); // Take a fresh copy if not already cached
+        // (never hacknet servers: they're hosts only, and since 3.0 security/money lookups throw on them)
+        _serverListByTargetOrder ??= getAllServers().filter((s) => !s.name.startsWith("hacknet-server-")); // Take a fresh copy if not already cached
         // The check for whether a server is being targetted is async, so we must collect this info upfront before using in a sort function
         const dictIsTargeting = {};
         for (const server of _serverListByTargetOrder)

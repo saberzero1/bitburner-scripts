@@ -8,7 +8,8 @@ import {
 let haveHacknetServers = true; // Cached flag after detecting whether we do (or don't) have hacknet servers
 const argsSchema = [
     // ['max-payoff-time', '1h'], // Controls how far to upgrade hacknets. Can be a number of seconds, or an expression of minutes/hours (e.g. '123m', '4h')
-    ["max-payoff-time", "168h"],
+    // ["max-payoff-time", "168h"],
+    ["max-payoff-time", `${Number.MAX_SAFE_INTEGER}h`],
     ["time", null], // alias for max-payoff-time
     ["c", false], // Set to true to run continuously, otherwise, it runs once
     ["continuous", false],
@@ -16,6 +17,9 @@ const argsSchema = [
     ["max-spend", Number.MAX_VALUE], // The maximum amount of money to spend on upgrades
     ["toast", false], // Set to true to toast purchases
     ["reserve", null], // Reserve this much cash (defaults to contents of reserve.txt if not specified)
+    ["ram-first", false], // Buy RAM, not hash production: the cheapest RAM upgrade per GB, then new servers once all are at max RAM
+    // (autopilot via daemon.js after The Red Pill: hashes are useless then, while hacknet RAM is ~$1M/GB, ~260x cheaper than
+    // home's, and runs Stanek charges (24 cores) and XP farming; levels and cache only raise hash production)
 ];
 
 export function autocomplete(data, _) {
@@ -39,6 +43,8 @@ export async function main(ns) {
             Number.parseFloat(maxPayoffTime.replace("h", "")) * 3600;
     else maxPayoffTime = Number.parseFloat(maxPayoffTime);
     disableLogs(ns, ["sleep", "getServerUsedRam", "getServerMoneyAvailable"]);
+    // Module state persists between runs, so re-detect each run (hash capacity is 0 for plain hacknet nodes)
+    haveHacknetServers = ns.hacknet.numNodes() === 0 || ns.hacknet.hashCapacity() > 0;
     setStatus(
         ns,
         `Starting hacknet-upgrade-manager with purchase payoff time limit of ${formatDuration(maxPayoffTime * 1000)} and ` +
@@ -48,8 +54,9 @@ export async function main(ns) {
             `. Current fleet: ${ns.hacknet.numNodes()} nodes...`,
     );
     do {
+        let moneySpent = 0; // declared outside the try so the sleep below can see it
         try {
-            const moneySpent = upgradeHacknet(
+            moneySpent = upgradeHacknet(
                 ns,
                 maxSpend,
                 maxPayoffTime,
@@ -78,7 +85,8 @@ export async function main(ns) {
                 "warning",
             );
         }
-        if (continuous) await ns.sleep(interval);
+        // When nothing was affordable, don't poll faster than once a second (daemon runs this with --interval 0)
+        if (continuous) await ns.sleep(moneySpent ? interval : Math.max(interval, 1000));
     } while (continuous);
 }
 
@@ -95,6 +103,7 @@ export function upgradeHacknet(
     maxPayoffTimeSeconds = 3600 /* 3600 sec == 1 hour */,
     options,
 ) {
+    if (options?.["ram-first"]) return upgradeHacknetRam(ns, maxSpend, options);
     const currentHacknetMult = ns.getPlayer().mults.hacknet_node_money;
     // Get the lowest cache level, we do not consider upgrading the cache level of servers above this until all have the same cache level
     const minCacheLevel = [...Array(ns.hacknet.numNodes()).keys()].reduce(
@@ -118,16 +127,22 @@ export function upgradeHacknet(
             upgrade: ns.hacknet.upgradeRam,
             cost: (i) => ns.hacknet.getRamUpgradeCost(i, 1),
             nextValue: (nodeStats) => nodeStats.ram * 2,
-            addedProduction: (nodeStats) => nodeStats.production * 0.07,
+            // Hacknet servers: x1.07 per RAM doubling; hacknet nodes: production scales with 1.035^(ram-1)
+            addedProduction: (nodeStats) =>
+                nodeStats.production *
+                (haveHacknetServers ? 0.07 : Math.pow(1.035, nodeStats.ram) - 1),
         },
         {
             name: "cores",
             upgrade: ns.hacknet.upgradeCore,
             cost: (i) => ns.hacknet.getCoreUpgradeCost(i, 1),
             nextValue: (nodeStats) => nodeStats.cores + 1,
+            // Hacknet servers: 1 + (cores-1)/5; hacknet nodes: (cores+5)/6
             addedProduction: (nodeStats) =>
                 nodeStats.production *
-                ((nodeStats.cores + 5) / (nodeStats.cores + 4) - 1),
+                (haveHacknetServers
+                    ? (nodeStats.cores + 5) / (nodeStats.cores + 4) - 1
+                    : (nodeStats.cores + 6) / (nodeStats.cores + 5) - 1),
         },
         {
             name: "cache",
@@ -254,4 +269,66 @@ export function upgradeHacknet(
             : `Insufficient funds to purchase the next best upgrade: ${strPurchase}`,
     );
     return success ? cost : 0;
+}
+
+/** --ram-first: the RAM upgrade with the lowest cost per added GB, or a new server when it costs no more than that (cores,
+ * levels and cache add only hash production). Returns the money spent, 0 when it can't afford it yet, false when done. */
+function upgradeHacknetRam(ns, maxSpend, options) {
+    let best = null;
+    for (let i = 0; i < ns.hacknet.numNodes(); i++) {
+        const cost = ns.hacknet.getRamUpgradeCost(i, 1);
+        if (!Number.isFinite(cost)) continue; // at max RAM
+        const perGb = cost / ns.hacknet.getNodeStats(i).ram; // a RAM upgrade doubles it
+        if (!best || perGb < best.perGb) best = { i, cost, perGb };
+    }
+    // A new server whenever it costs no more than that upgrade: its own first RAM upgrades are the cheapest per GB of all,
+    // and waiting until every server is at max RAM stalled the fleet at 4 servers while new ones cost ~$1M (BN12.85)
+    const canBuy = ns.hacknet.numNodes() < ns.hacknet.maxNumNodes();
+    let newServer = canBuy && (!best || ns.hacknet.getPurchaseNodeCost() <= best.cost);
+    if (newServer) best = null;
+    // While stanek.js charges, cores too, whichever purchase is cheapest: a helper charge call weighs threads x
+    // (1 + (cores - 1) / 16) against the peak, so 1-core servers added only ~0.8 charge per call between all 15 after The
+    // Red Pill (24 cores: ~2, cutting the 1000-charge phase from ~18 to ~11 minutes); before The Red Pill a cored helper
+    // raises the charisma peak. Cores add nothing to XP farming, so not otherwise.
+    // Compared by value, not price: a helper's weight is RAM x (1 + (cores - 1) / 16), so a RAM doubling adds +100% and a
+    // core 1/16 of the core bonus (~3% at 19 cores). "Cheapest first" bought 19 cores per server with 1 TB of RAM each
+    // after BN12.86's Red Pill install. A new server is valued like a RAM upgrade (it adds a fresh server's weight).
+    let core = null;
+    if (ns.ps("home").some((p) => p.filename === "stanek.js"))
+        for (let i = 0; i < ns.hacknet.numNodes(); i++) {
+            const c = ns.hacknet.getCoreUpgradeCost(i, 1);
+            if (!Number.isFinite(c)) continue;
+            const bonus = 1 + (ns.hacknet.getNodeStats(i).cores - 1) / 16;
+            const value = (1 / 16) / bonus / c; // relative weight gain per $
+            if (!core || value > core.value) core = { i, cost: c, value };
+        }
+    const other = best ? best.cost : newServer ? ns.hacknet.getPurchaseNodeCost() : Infinity;
+    if (core && core.value > 1 / other) { best = null; newServer = false; } // (RAM / a new server: +100% for its cost)
+    else core = null;
+    if (core) {
+        const reserve = options["reserve"] != null ? options["reserve"] : Number(ns.read("reserve.txt") || 0);
+        if (core.cost > maxSpend) return false;
+        if (core.cost > ns.getPlayer().money - reserve) return 0;
+        const ok = ns.hacknet.upgradeCore(core.i, 1);
+        setStatus(ns, ok ? `Purchased hacknet-server-${core.i} core ${ns.hacknet.getNodeStats(core.i).cores} for ${formatMoney(core.cost)} (Stanek is charging)` : `Could not purchase a core`);
+        return ok ? core.cost : 0;
+    }
+    if (!best && !newServer) {
+        setStatus(ns, `Every hacknet server is at max RAM and the server limit is reached.`);
+        return false;
+    }
+    const cost = best ? best.cost : ns.hacknet.getPurchaseNodeCost();
+    const what = best ? `hacknet-server-${best.i} RAM ${ns.hacknet.getNodeStats(best.i).ram * 2} GB` : `a new hacknet server`;
+    if (cost > maxSpend) {
+        setStatus(ns, `The next RAM purchase (${what}, ${formatMoney(cost)}) exceeds the spending limit (${formatMoney(maxSpend)})`);
+        return false;
+    }
+    const reserve = options["reserve"] != null ? options["reserve"] : Number(ns.read("reserve.txt") || 0);
+    if (cost > ns.getPlayer().money - reserve) {
+        setStatus(ns, `The next RAM purchase (${what}, ${formatMoney(cost)}) exceeds our available funds` + (reserve ? ` (after reserving ${formatMoney(reserve)}).` : "."));
+        return 0;
+    }
+    const ok = best ? ns.hacknet.upgradeRam(best.i, 1) : ns.hacknet.purchaseNode() !== -1;
+    setStatus(ns, ok ? `Purchased ${what} for ${formatMoney(cost)}` : `Could not purchase ${what}`);
+    return ok ? cost : 0;
 }
