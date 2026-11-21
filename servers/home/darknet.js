@@ -839,6 +839,7 @@ async function orchestrateDarknet(ns, state, options) {
             const msg = JSON.parse(String(raw));
             if (msg.password && msg.host) {
                 log(ns, `SUCCESS: Labyrinth solver cracked ${msg.host}!`);
+                metric(state, { type: "lab", ev: "cracked", lab: msg.host });
                 // The solver got the password from authenticate's success response
                 state.addPassword(ns, msg.host, msg.password);
                 state.authenticatedServers.add(msg.host);
@@ -853,6 +854,7 @@ async function orchestrateDarknet(ns, state, options) {
                     ns,
                     `WARN: Labyrinth solver failed for ${msg.host}: ${msg.error}`,
                 );
+                metric(state, { type: "lab", ev: "solverfail", lab: msg.host, error: String(msg.error).slice(0, 80) });
                 state.activeLabSolvers.delete(msg.host);
             }
         } catch {}
@@ -1433,6 +1435,7 @@ async function deployLabyrinthSolver(ns, state, hostname, verbose) {
             );
             return false;
         }
+        metric(state, { type: "lab", ev: "solver", lab: hostname, host: solverHost, threads });
         state.activeLabSolvers.set(hostname, {
             pid,
             solverHost,
@@ -1921,8 +1924,14 @@ function pushProbeFiles(ns, state) {
     }
 }
 
+/** Queue a metrics record for the next recordMetrics flush. */
+function metric(state, rec) {
+    (state.metricQueue ??= []).push(JSON.stringify({ t: Date.now(), ...rec }));
+}
+
 function recordMetrics(ns, state) {
-    const lines = [];
+    const lines = state.metricQueue ?? [];
+    state.metricQueue = [];
     const now = Date.now();
     // Probe depth reports (probe v65+): kept as a map, not logged one by one. A probe reaching a deeper segment than any
     // before in this install is logged as a "cross" event, which times each air gap crossing.
@@ -2043,6 +2052,20 @@ async function getAnchorPhase(ns, state) {
     // Only the current labyrinth has a depth: earlier ones (solved, passwords still known) linger with depth -1
     const labs = [...state.labyrinthServers].filter((h) => Date.now() - (state.labReportedAt?.get(h) ?? 0) < 15 * 60 * 1000);
     const unsolved = labs.filter((h) => !isLabSolved(ns, state, h));
+    // Labyrinth lifecycle metrics (found -> solver -> cracked -> solved; the install follows in autopilot's log): the
+    // segment after the last air gap crossing still took 5-14 min on some installs (ub3r, 2026-11-21)
+    state.labFound ??= new Set();
+    state.labSolvedLogged ??= new Set();
+    for (const h of labs) {
+        if (!state.labFound.has(h)) {
+            state.labFound.add(h);
+            metric(state, { type: "lab", ev: "found", lab: h, depth: state.serverDepths.get(h) ?? null, cha: state.playerCharisma ?? null });
+        }
+        if (!unsolved.includes(h) && !state.labSolvedLogged.has(h)) {
+            state.labSolvedLogged.add(h);
+            metric(state, { type: "lab", ev: "solved", lab: h });
+        }
+    }
     if (labs.length === 0) return { phase: "push", lab: null, reason: "labyrinth not found yet" };
     if (unsolved.length === 0) return { phase: "stable", lab: labs[0], reason: "labyrinth solved" };
     const lab = unsolved[0];
