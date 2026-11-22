@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 67;
+const PROBE_VERSION = 68;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -52,7 +52,9 @@ export async function main(ns) {
             // Then free blocked RAM — maximizes available RAM for all subsequent operations
             await freeBlockedRam(ns);
 
-            const nearbyServers = (await runScan(ns)) || [];
+            // Labyrinths first: the neighbour with the most RAM often reached the lab only late in its pass, so the
+            // fastest solver started 36-190 s after the lab was found (BN12.123-128, labsolve metrics)
+            const nearbyServers = ((await runScan(ns)) || []).sort((a, b) => /l4byr1nth/.test(b) - /l4byr1nth/.test(a));
             abandonUnreachableLabSolvers(ns, nearbyServers);
             for (const hostname of nearbyServers) {
                 // Skip servers in cooldown from repeated failures
