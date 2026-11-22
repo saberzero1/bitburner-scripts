@@ -27,7 +27,15 @@ export async function main(ns) {
     let gridW = Number(ns.args[2]) || 61, gridH = Number(ns.args[3]) || 41;
     const offsets = Number(ns.args[4]) === 1;
     const me = ns.pid;
+    const t0 = Date.now();
+    let moves = 0, walls = 0;
     const finish = (ok, payload) => {
+        // One line per solver to darknet.js's metrics (port 25): which part of a solve's time is moves, threads, waits
+        try {
+            const me_ = ns.self();
+            ns.writePort(25, JSON.stringify({ t: Date.now(), type: "labsolve", lab: host, host: me_.server, threads: me_.threads,
+                ok, why: ok ? "" : String(payload), ms: Date.now() - t0, moves, walls, cells: cells.size }));
+        } catch {}
         if (result.startsWith("port:")) {
             const port = Number(result.slice(5));
             ns.writePort(port, JSON.stringify(ok ? { host, password: payload } : { host, error: payload }));
@@ -171,6 +179,7 @@ export async function main(ns) {
         const m = msg.match(/moved to (\d+),(\d+)/);
         if (m || /cannot go that way/i.test(msg)) misses = 0;
         if (m) {
+            moves++;
             route.path.shift();
             pos = [parseInt(m[1], 10), parseInt(m[2], 10)];
             growGrid(pos[0], pos[1]);
@@ -181,6 +190,7 @@ export async function main(ns) {
             cells.set(k, b);
             if (!sync(route && route.path.length ? [route.target, route.path.length] : null)) route = null;
         } else if (/cannot go that way/i.test(msg)) {
+            walls++;
             // Our map said open: from another maze. Start over from what we see here.
             cells.clear();
             const lr = await ns.dnet.labreport();
