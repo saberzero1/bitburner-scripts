@@ -832,6 +832,16 @@ async function orchestrateDarknet(ns, state, options) {
     cleanupOrphanedProbes(ns, state);
     pushProbeFiles(ns, state);
 
+    // Step 8a: Solvers for the current unsolved labyrinth on its reachable (stasis-linked or connected) neighbours, next
+    // to the probes' own. The lab itself is never connected or linked, so processServer/buildWorkQueue skip it and
+    // deployLabyrinthSolver was unreachable from there: no darknet.js solver ever ran (BN12.118-121 metrics).
+    for (const lab of state.labyrinthServers) {
+        if (Date.now() - (state.labReportedAt?.get(lab) ?? 0) > 15 * 60 * 1000 || isLabSolved(ns, state, lab)) continue;
+        try {
+            await deployLabyrinthSolver(ns, state, lab, options.verbose);
+        } catch {}
+    }
+
     // Step 8b: Collect labyrinth solver results from port
     while (portPeek(ns, LAB_SOLVER_RESULT_PORT) !== "NULL PORT DATA") {
         const raw = portRead(ns, LAB_SOLVER_RESULT_PORT);
