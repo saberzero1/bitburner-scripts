@@ -119,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 69; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 70; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -186,6 +186,22 @@ export async function main(ns) {
 
     // Main loop
     while (true) {
+        // A newer probe file on home (pushed while we run) would be copied out and launched with our old version
+        // argument, and probes exit on a version mismatch: no probe could deploy until an install restarted us (probe
+        // v69 pushed mid-install, 2026-11-23: 6-8 probes for minutes). Restart onto the new code instead.
+        try {
+            const src = String(ns.read(getFilePath(PROBE_SCRIPT)) || "");
+            const self = String(ns.read(ns.getScriptName()) || "");
+            // (only when our own file moved on too, else a lone probe edit would restart us every minute)
+            if (src && self && !src.includes(`const PROBE_VERSION = ${PROBE_VERSION};`) &&
+                !self.includes(`const PROBE_VERSION = ${PROBE_VERSION};`)) {
+                const helper = "/Temp/darknet-reload.js";
+                ns.write(helper, `export async function main(ns){ns.kill(Number(ns.args[0]));await ns.sleep(200);` +
+                    `ns.exec(String(ns.args[1]),"home",1,...ns.args.slice(2));}`, "w");
+                log(ns, `INFO: ${PROBE_SCRIPT} on home is a different probe version than ${PROBE_VERSION}: restarting darknet.js onto the new code`);
+                if (ns.exec(helper, "home", 1, ns.pid, ns.getScriptName(), ...ns.args)) await ns.sleep(60_000);
+            }
+        } catch {}
         try {
             await state.refresh(ns);
             await writeProbeOptions(ns, options, state);
