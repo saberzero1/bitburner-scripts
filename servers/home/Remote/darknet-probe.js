@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 68;
+const PROBE_VERSION = 69;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -40,8 +40,12 @@ export async function main(ns) {
     const passwords = loadPasswords(ns, PASSWORD_FILE);
     const failedServers = new Map(); // hostname -> { attempts: N, nextRetry: timestamp }
     const completedServers = loadCompletedServers(ns, COMPLETED_FILE);
+    // Hop timing metrics (port 25): when this probe first saw a server and when it finished it (cracked, probe deployed)
+    const firstSeen = new Map(), hopped = new Set();
 
     while (true) {
+        const loopStart = Date.now(), slowCalls = [];
+        let scanAt = 0, serversDoneAt = 0;
         try {
             // Open cache files first: a solved labyrinth's reward is one (autopilot holds installs until it is pending).
             // They were opened only after the whole neighbour loop, and RAM freeing left too little RAM for it, so a
@@ -54,8 +58,10 @@ export async function main(ns) {
 
             // Labyrinths first: the neighbour with the most RAM often reached the lab only late in its pass, so the
             // fastest solver started 36-190 s after the lab was found (BN12.123-128, labsolve metrics)
+            scanAt = Date.now();
             const nearbyServers = ((await runScan(ns)) || []).sort((a, b) => /l4byr1nth/.test(b) - /l4byr1nth/.test(a));
             abandonUnreachableLabSolvers(ns, nearbyServers);
+            for (const h of nearbyServers) if (!firstSeen.has(h)) firstSeen.set(h, Date.now());
             for (const hostname of nearbyServers) {
                 // Skip servers in cooldown from repeated failures
                 const failInfo = failedServers.get(hostname);
@@ -75,6 +81,7 @@ export async function main(ns) {
                 }
 
                 let result = { status: "failed", recheckAtMs: undefined };
+                const callStart = Date.now();
                 try {
                     result = await processServer(
                         ns,
@@ -85,6 +92,13 @@ export async function main(ns) {
                     );
                 } catch (err) {
                     logError(ns, `Probe error processing ${hostname}`, err);
+                }
+                const callMs = Date.now() - callStart;
+                if (callMs > 2000) slowCalls.push([hostname, callMs, result.status]);
+                if (result.status === "completed" && !hopped.has(hostname)) {
+                    hopped.add(hostname);
+                    portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "hop", from: HOST, host: hostname,
+                        seenMs: Date.now() - (firstSeen.get(hostname) ?? callStart), callMs }));
                 }
                 if (result.status === "completed") {
                     failedServers.delete(hostname);
@@ -131,6 +145,7 @@ export async function main(ns) {
                 await freeBlockedRam(ns);
             }
 
+            serversDoneAt = Date.now();
             // Free blocked RAM on neighbours remotely (memoryReallocation needs admin, i.e. a known password):
             // labyrinth neighbours first (they host solvers), then neighbours too blocked to host a probe, then the most
             // blocked RAM. While our own host still has blocked RAM (freeing it compounds), only neighbours that can't
@@ -240,6 +255,13 @@ export async function main(ns) {
         if (completedPruned) {
             saveCompletedServers(ns, COMPLETED_FILE, completedServers);
         }
+        // Slow passes only (where a probe's time goes between hops): before the neighbour scan, the neighbours, after
+        const loopMs = Date.now() - loopStart;
+        if (loopMs > 20_000)
+            portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "ploop", host: HOST, ms: loopMs,
+                pre: scanAt ? scanAt - loopStart : null, servers: serversDoneAt && scanAt ? serversDoneAt - scanAt : null,
+                post: serversDoneAt ? Date.now() - serversDoneAt : null,
+                slow: slowCalls.sort((a, b) => b[1] - a[1]).slice(0, 3) }));
         await ns.sleep(LOOP_INTERVAL);
     }
 }
