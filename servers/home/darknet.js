@@ -1975,8 +1975,16 @@ function recordMetrics(ns, state) {
             for (const [k, v] of Object.entries(rec.why ?? {})) if (v) agg.why[k] = (agg.why[k] ?? 0) + v;
             continue;
         }
+        if (rec?.type === "hop") {
+            // Depths of both ends, for the descent rate per row (probe v69+ hop timing)
+            const depthOf = (h) => state.reportedDepths.get(h)?.depth ?? state.serverDepths.get(h) ?? null;
+            lines.push(JSON.stringify({ ...rec, fromDepth: depthOf(rec.from), depth: depthOf(rec.host) }));
+            continue;
+        }
         if (rec?.type !== "pdepth") { lines.push(line); continue; }
         const prevDepth = state.reportedDepths.get(rec.host)?.depth ?? state.lastReportedDepth?.get(rec.host);
+        // A probe's first report this run: when it started, and where (the hop's deploy -> start delay)
+        if (!state.reportedDepths.has(rec.host)) lines.push(JSON.stringify({ t: rec.t, type: "pstart", host: rec.host, depth: rec.depth }));
         state.reportedDepths.set(rec.host, { depth: rec.depth, t: rec.t });
         (state.lastReportedDepth ??= new Map()).set(rec.host, rec.depth);
         const seg = Math.floor(rec.depth / AIR_GAP_DEPTH);
