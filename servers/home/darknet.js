@@ -1976,6 +1976,11 @@ function recordMetrics(ns, state) {
             continue;
         }
         if (rec?.type === "hop") {
+            // Only the first hop to each server this run: every probe reports each neighbour once, ~5x the lines
+            // (655 KB in 1.3 h pushed earlier runs out of the trimmed file)
+            state.hoppedHosts ??= new Set();
+            if (state.hoppedHosts.has(rec.host)) continue;
+            state.hoppedHosts.add(rec.host);
             // Depths of both ends, for the descent rate per row (probe v69+ hop timing)
             const depthOf = (h) => state.reportedDepths.get(h)?.depth ?? state.serverDepths.get(h) ?? null;
             lines.push(JSON.stringify({ ...rec, fromDepth: depthOf(rec.from), depth: depthOf(rec.host) }));
