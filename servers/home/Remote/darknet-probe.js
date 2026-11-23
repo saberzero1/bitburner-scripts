@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 70;
+const PROBE_VERSION = 71;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -98,7 +98,7 @@ export async function main(ns) {
                 if (result.status === "completed" && !hopped.has(hostname)) {
                     hopped.add(hostname);
                     portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "hop", from: HOST, host: hostname,
-                        seenMs: Date.now() - (firstSeen.get(hostname) ?? callStart), callMs }));
+                        seenMs: Date.now() - (firstSeen.get(hostname) ?? callStart), callMs, fails: failedServers.get(hostname)?.attempts ?? 0 }));
                 }
                 if (result.status === "completed") {
                     failedServers.delete(hostname);
@@ -132,6 +132,9 @@ export async function main(ns) {
                         nextRetry: 0,
                     };
                     prev.attempts++;
+                    if (result.authFail)
+                        portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "pfail", from: HOST, host: hostname,
+                            depth: result.authFail.depth, model: result.authFail.model, attempts: prev.attempts, callMs }));
                     // Exponential backoff: 10s, 30s, 90s, 270s, capped at 300s
                     const delay = Math.min(
                         10000 * Math.pow(3, prev.attempts - 1),
@@ -471,7 +474,8 @@ async function processServer(
         return { status: "retry", recheckAtMs: 5000 };
     }
 
-    return { status: "failed", recheckAtMs: undefined };
+    // A real crack failure (connected, attempted): reported with its depth and model (pfail metric)
+    return { status: "failed", recheckAtMs: undefined, authFail: { depth: effectiveDetails.depth ?? null, model: modelId } };
 }
 
 async function tryAccessServer(ns, hostname, details, passwords) {
