@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 72;
+const PROBE_VERSION = 73;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -28,8 +28,11 @@ export async function main(ns) {
     const HOST = ns.getHostname();
     // One probe per host: neighbours deploy in parallel (each checks for a running probe first), so several copies of the
     // same version landed on one host (BN12.87: 3 on h0m3, 5 on cryptoorg; ~7 GB each, RAM its migration charging and
-    // worker needed). The oldest (lowest PID) stays.
-    const peers = (await nsPs(ns, HOST)) || [];
+    // worker needed). The oldest (lowest PID) stays. ns.ps directly (already paid for, see the grow helper): nsPs runs a
+    // temp script, which doesn't fit on a 16 GB host beside two probes (1.6 GB left), so the check saw no peers and the
+    // duplicate stayed (2-3 hosts at a time in BN12.132, both copies v72).
+    let peers = [];
+    try { peers = ns.ps(HOST); } catch {}
     if (peers.some((p) => p.pid < ns.pid && (p.filename === SCRIPT_NAME || p.filename === "/" + SCRIPT_NAME) &&
         Number(p.args?.[0]) === PROBE_VERSION)) return;
     const LOOP_INTERVAL = 5000;
@@ -888,7 +891,9 @@ async function deployProbe(
         }
 
         // Step 3: Check for existing probes (kill old versions, skip if current exists)
-        const allProcs = await nsPs(ns, hostname);
+        // ns.ps directly: nsPs returns [] when its temp script doesn't fit here, which deployed a second probe
+        let allProcs;
+        try { allProcs = ns.ps(hostname); } catch { return false; }
         const scriptBaseName = scriptName.startsWith("/")
             ? scriptName.substring(1)
             : scriptName;
