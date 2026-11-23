@@ -119,7 +119,7 @@ const LAB_GRID = {
     th3_l4byr1nth: [21, 13], cru3l_l4byr1nth: [29, 21], m3rc1l3ss_l4byr1nth: [41, 25], ub3r_l4byr1nth: [61, 41],
     et3rn4l_l4byr1nth: [61, 41], end13ss_l4byr1nth: [61, 41], f1n4l_l4byr1nth: [61, 41], b0nus_l4byr1nth: [61, 41],
 };
-const PROBE_VERSION = 71; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
+const PROBE_VERSION = 72; // Must equal PROBE_VERSION in Remote/darknet-probe.js (bump both)
 
 /** Strip leading slash to match Bitburner's internal filename format (used by ns.ps()). */
 function normalizeFilename(path) {
@@ -1919,19 +1919,46 @@ const STASIS_RAM_NEEDED = 13.6; // 1.6 GB base + 12 GB setStasisLink
 /** Measurement for boundary crossing: migrations the probes started (port 25) and every depth change of a known server
  * (migration or the network's own mutation), noting boundary crossings, anchors and probes. */
 /** Servers that asked to be migrated past the gap (probes' requestOwnMigration), freshest 3 minutes, best first by
- * crossing chance x chargers (capped at 3): their neighbours' probes charge them together. */
+ * crossing chance x chargers (capped at 3) / charge still needed: their neighbours' probes charge them together, each
+ * helper going down the list of its neighbours in this order (probe v72).
+ * BN12.130: each gap's charge was spread over 5-15 targets (the most-charged got 13-50%) and 14 of 19 crossings were
+ * the network's own moves. The engine keeps a target's charge until it migrates, so finishing the most-charged one
+ * first is the quickest crossing. */
 function collectMigrationRequests(ns, state) {
     const reqs = (state.migrationRequests ??= new Map());
+    const charges = (state.migrationCharge ??= new Map());
     while (portPeek(ns, MIGRATION_REQUEST_PORT) !== "NULL PORT DATA") {
         try {
             const r = JSON.parse(String(portRead(ns, MIGRATION_REQUEST_PORT)));
-            if (r?.host) reqs.set(r.host, r);
+            if (!r?.host) continue;
+            reqs.set(r.host, r);
+            // A target that changed rows has moved (migrated, or the network moved it): our estimate no longer applies
+            const c = charges.get(r.host);
+            if (c && c.depth !== r.depth) charges.delete(r.host);
         } catch {}
     }
     const now = Date.now();
     for (const [h, r] of reqs) if (now - r.t > 180_000 || state.stasisServers.has(h)) reqs.delete(h);
-    return [...reqs.values()].sort((a, b) => b.chance * Math.min(b.chargers, 3) - a.chance * Math.min(a.chargers, 3))
-        .slice(0, 5).map((r) => ({ host: r.host, chance: r.chance }));
+    for (const [h, c] of charges) if (now - c.t > 900_000) charges.delete(h);
+    const score = (r) => r.chance * Math.min(r.chargers, 3) / Math.max(0.1, 1 - (charges.get(r.host)?.charge ?? 0));
+    return [...reqs.values()].sort((a, b) => score(b) - score(a))
+        .slice(0, 8).map((r) => ({ host: r.host, chance: r.chance }));
+}
+
+/** Estimated migration charge a helper put on its target (migend: calls x threads), with the engine's formula
+ * (getServerMigrationChargeValue): (charisma + 500) / (difficulty * 200 + 1000) * 1% per thread per call. At 1 the
+ * engine migrates the server and resets its charge. */
+function addMigrationCharge(ns, state, rec) {
+    if (!rec?.target || !(rec.calls > 0) || !(rec.threads > 0)) return;
+    const req = state.migrationRequests?.get(rec.target);
+    if (!req) return;
+    const cha = Number(state.playerCharisma) || 0;
+    const difficulty = typeof req.difficulty === "number" ? req.difficulty : req.gap + 1;
+    const add = ((cha + 500) / (difficulty * 200 + 1000)) * 0.01 * rec.threads * rec.calls;
+    const charges = (state.migrationCharge ??= new Map());
+    const c = charges.get(rec.target);
+    const total = (c && c.depth === req.depth ? c.charge : 0) + add;
+    charges.set(rec.target, { charge: total % 1, depth: req.depth, t: Date.now() });
 }
 
 /** Every 3 minutes, copy the current probe and labyrinth solver to every server whose password we know (scp works at any
@@ -1986,6 +2013,7 @@ function recordMetrics(ns, state) {
             lines.push(JSON.stringify({ ...rec, fromDepth: depthOf(rec.from), depth: depthOf(rec.host) }));
             continue;
         }
+        if (rec?.type === "migend") addMigrationCharge(ns, state, rec);
         if (rec?.type !== "pdepth") { lines.push(line); continue; }
         const prevDepth = state.reportedDepths.get(rec.host)?.depth ?? state.lastReportedDepth?.get(rec.host);
         // A probe's first report this run: when it started, and where (the hop's deploy -> start delay)

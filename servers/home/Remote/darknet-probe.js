@@ -1,6 +1,6 @@
 // Must equal PROBE_VERSION in darknet.js: a probe started with another version exits at once (bumping only one side
 // left the darknet without probes for over an hour, 2026-11-16)
-const PROBE_VERSION = 71;
+const PROBE_VERSION = 72;
 
 // Port helpers: use ns.port (newer dev builds) and fall back to the older top-level functions.
 const portWrite = (ns, port, data) =>
@@ -1694,7 +1694,7 @@ async function runMemoryReallocation(ns, hostname) {
 // Probes are on adjacent servers, making them ideal for migration charging.
 // Migration moves a server across an air gap when sufficiently charged.
 
-const MIGRATION_RECHECK_INTERVAL = 180000; // Re-evaluate migration every 3 minutes
+const MIGRATION_RECHECK_INTERVAL = 60_000; // Re-evaluate unrequested migration targets each minute (was 3: a gap waits ~2 min)
 
 // Air gaps (every AIR_GAP_DEPTH-th row) hold no servers, so the network splits into segments. A fully charged
 // induceServerMigration moves a neighbouring server to a random free spot 2 rows up to 4 rows deeper: from the last
@@ -1707,13 +1707,18 @@ const MIGRATION_MIN_CHANCE = 0.3; // only charge a neighbour with at least this 
 // (it reports how it ended on the metrics port (25): calls made, the target's charge, and why it stopped. Measurement,
 // 2026-11-18: of 101 targets charged, none was seen moving within 30 minutes, so labyrinths were reached only by the
 // game's own random moves.)
+// v72: args (threads, ...targets) in charging order. A target that stops answering (351: it moved, by our charge or the
+// network's own mutation, or the link broke) used to end the helper after a median 5 calls, and the probe started the
+// next one ~20 s later (BN12.130: helpers ran 30 s, idled 20 s). Now the helper moves straight on to the next target.
+// The live game's result has no progress field (definitions of 2026-11-15), so a target is charged until it fails.
 const MIGRATION_HELPER_SOURCE =
-    `export async function main(ns){const t=ns.args[0];let i=0,r=null,why="max";const p=[];` +
-    `const rec=(o)=>{try{ns.writePort(25,JSON.stringify(Object.assign({t:Date.now(),host:ns.getHostname(),target:t,threads:ns.args[1]},o)));}catch{}};` +
-    `rec({type:"migrun"});ns.atExit(()=>rec({type:"migend",calls:i,progress:r?r.progress:null,code:r?r.code:null,why,p}));for(;i<500;i++){` +
-    `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch(e){why="error:"+String(e).slice(0,60);return;}` +
+    `export async function main(ns){const th=ns.args[0];let t=null,i=0,r=null,why="max",p=[];` +
+    `const rec=(o)=>{try{ns.writePort(25,JSON.stringify(Object.assign({t:Date.now(),host:ns.getHostname(),target:t,threads:th},o)));}catch{}};` +
+    `const end=()=>{if(t!==null)rec({type:"migend",calls:i,progress:r?r.progress:null,code:r?r.code:null,why,p});t=null;};` +
+    `ns.atExit(end);for(const x of ns.args.slice(1)){t=String(x);i=0;r=null;why="max";p=[];rec({type:"migrun"});for(;i<500;i++){` +
+    `try{r=await ns.dnet.${["induce", "Server", "Migration"].join("")}(t);}catch(e){why="error:"+String(e).slice(0,60);break;}` +
     `if(p.length<10)p.push(r?Math.round((r.progress??-1)*1000)/1000:null);` +
-    `if(!r||!r.success){why="fail";return;}if(r.progress>=1||(i>0&&r.progress===0)){why="done";return;}}}`;
+    `if(!r||!r.success){why="fail";break;}if(r.progress>=1||(i>0&&r.progress===0)){why="done";break;}}end();}}`;
 const MIGRATION_THREAD_RAM = 5.65; // 1.6 base + 4.0 induceServerMigration + 0.05 getHostname (its migend report)
 
 // ===== Requested migrations (2026-11-17) =====
@@ -1758,7 +1763,7 @@ async function requestOwnMigration(ns, optionsFile, host) {
             if (procs.some((p) => /darknet-probe/.test(p.filename))) chargers++;
         }
         if (chargers < 1) return;
-        portWrite(ns, MIGRATION_REQUEST_PORT, JSON.stringify({ t: Date.now(), host, chance: +chance.toFixed(2), chargers, depth: me.depth, gap }));
+        portWrite(ns, MIGRATION_REQUEST_PORT, JSON.stringify({ t: Date.now(), host, chance: +chance.toFixed(2), chargers, depth: me.depth, difficulty: me.difficulty, gap }));
     } catch {}
 }
 
@@ -1771,8 +1776,9 @@ async function serveMigrationRequests(ns, optionsFile, host) {
         const procs = (await nsPs(ns, host)) || [];
         if (procs.some((p) => /dnet-migrate/.test(p.filename))) return; // already charging
         const nearby = new Set((await runScan(ns)) || []);
-        const req = options.migrationRequests.find((r) => r?.host && r.host !== host && nearby.has(r.host));
-        if (!req) return;
+        const reqs = options.migrationRequests.filter((r) => r?.host && r.host !== host && nearby.has(r.host));
+        if (!reqs.length) return;
+        const req = reqs[0];
         const workerRam = procs.filter((p) => /darknet-worker-/.test(p.filename)).reduce((t, p) => t + p.threads * WORKER_THREAD_RAM, 0);
         const spare = nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) + workerRam - MIGRATION_SERVE_HEADROOM_GB;
         if (Math.floor(spare / MIGRATION_THREAD_RAM) < 1) return;
@@ -1781,7 +1787,7 @@ async function serveMigrationRequests(ns, optionsFile, host) {
         const threads = Math.floor((nsGetServerMaxRam(ns, host) - nsGetServerUsedRam(ns, host) - MIGRATION_SERVE_HEADROOM_GB) / MIGRATION_THREAD_RAM);
         if (threads < 1) return;
         ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
-        const pid = ns.exec(MIGRATION_HELPER, host, threads, req.host, threads);
+        const pid = ns.exec(MIGRATION_HELPER, host, threads, threads, ...reqs.map((r) => r.host));
         if (pid) {
             portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migrate", requested: true, host, target: req.host, threads, chance: req.chance }));
             ns.print(`Charging requested migration of ${req.host} (~${Math.round((req.chance ?? 0) * 100)}% to cross) with ${threads} threads`);
@@ -1851,7 +1857,7 @@ async function attemptMigrationCharging(ns, optionsFile, hostname) {
             const threads = Math.floor(freeNow / MIGRATION_THREAD_RAM);
             if (threads < 1) return;
             ns.write(MIGRATION_HELPER, MIGRATION_HELPER_SOURCE, "w");
-            const pid = ns.exec(MIGRATION_HELPER, host, threads, target, threads);
+            const pid = ns.exec(MIGRATION_HELPER, host, threads, threads, target);
             if (pid) portWrite(ns, 25, JSON.stringify({ t: Date.now(), type: "migrate", host, target, depth, gap, threads, chance: +best.chance.toFixed(2) })); // metrics
             if (pid) ns.print(`Migrating ${target} (depth ${depth}, gap at ${gap}, ~${Math.round(best.chance * 100)}% to cross) with ${threads} threads`);
         }
