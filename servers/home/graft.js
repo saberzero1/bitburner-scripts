@@ -128,7 +128,9 @@ export async function main(ns) {
             `(() => { const p = ns.getPlayer(), owned = ns.singularity.getOwnedAugmentations(true);
                 return { lastAugReset: ns.getResetInfo().lastAugReset, money: p.money, city: p.city, hack: p.skills.hacking,
                     cha: p.skills.charisma, entropy: p.entropy, owned, installed: ns.singularity.getOwnedAugmentations(false),
-                    redPill: owned.includes("The Red Pill") }; })()`,
+                    redPill: ns.singularity.getOwnedAugmentations(false).includes("The Red Pill") }; })()`,
+            // (installed, not owned: between buying The Red Pill and the install, w0r1d_d43m0n doesn't exist yet and the
+            // requirement lookup below threw -- two runtime error dialogs per run, BN12.138/145)
             "/Temp/graft-player.txt");
         const graftable = await getNsDataThroughFile(ns,
             `ns.grafting.getGraftableAugmentations().map(name => ({ name,
