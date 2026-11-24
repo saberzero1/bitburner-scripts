@@ -25,6 +25,13 @@ const COMMANDS = {
     income: `ns.getTotalScriptIncome()[0]`,
     daemonReq: tryCall(`ns.getServerRequiredHackingLevel(ns.args[0])`),
     work: tryCall(`ns.singularity.getCurrentWork()?.type ?? null`),
+    // BN12.139's World Daemon phase took 69 min (others 17-31): hack gains fell ~3x after a graft finished and the
+    // snapshots couldn't say why. These show what is grafted, hacking XP itself, and the RAM hacking had.
+    graftAug: tryCall(`ns.singularity.getCurrentWork()?.augmentation ?? null`),
+    hackExp: `ns.getPlayer().exp.hacking`,
+    ram: tryCall(
+        `(s => ({ home: ns.getServerMaxRam("home"), homeUsed: Math.round(ns.getServerUsedRam("home")), pserv: s.length, pservRam: s.reduce((t, h) => t + ns.getServerMaxRam(h), 0) }))(ns.getPurchasedServers())`,
+    ),
     daedalus: tryCall(`ns.singularity.getFactionRep("Daedalus")`),
     bladeburner: tryCall(
         `ns.bladeburner.inBladeburner() ? { rank: ns.bladeburner.getRank(), next: ns.bladeburner.getNextBlackOp(), action: ns.bladeburner.getCurrentAction()?.name ?? null } : null`,
