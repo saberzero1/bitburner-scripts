@@ -1,0 +1,12 @@
+G_office2 {"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+O3 {"budget":{"mainOffice":0.52,"supportOffices":0.52}}
+O4 {"budget":{"mainOffice":0.70,"supportOffices":0.70}}
+Omain3 {"budget":{"mainOffice":0.52}}
+Osup3 {"budget":{"supportOffices":0.52}}
+E2 {"budget":{"employeeStats":0.70}}
+O2E2 {"budget":{"mainOffice":0.348,"supportOffices":0.348,"employeeStats":0.70}}
+O2lowWA {"budget":{"mainOffice":0.348,"supportOffices":0.348,"wilson":0.043,"advert":0.043}}
+O2P5 {"budget":{"mainOffice":0.348,"supportOffices":0.348},"product-share":0.05}
+O2P5S3E1 {"budget":{"mainOffice":0.348,"supportOffices":0.348},"product-share":0.05,"support-scale":0.3,"spend-interval":1}
+P10 {"product-share":0.1}
+O3P10 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"product-share":0.1}

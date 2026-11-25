@@ -42,14 +42,21 @@ export async function main(ns) {
             tempName,
             [serializedContractDb],
         );
-    let dictContractTypes = await contractsDictCommand(
-        "ns.codingcontract.getContractType(c.contract, c.hostname)",
-        "/Temp/contract-types.txt",
-    );
-    let dictContractDataStrings = await contractsDictCommand(
-        "JSON.stringify(ns.codingcontract.getData(c.contract, c.hostname), jsonReplacer)",
-        "/Temp/contract-data-stringified.txt",
-    );
+    // daemon.js reruns this every 27 s, so when home is too full for the temp scripts (getContractType/getData need
+    // ~5 GB beside us) give up quietly until next time instead of crashing with a runtime error dialog.
+    let dictContractTypes, dictContractDataStrings;
+    try {
+        dictContractTypes = await contractsDictCommand(
+            "ns.codingcontract.getContractType(c.contract, c.hostname)",
+            "/Temp/contract-types.txt",
+        );
+        dictContractDataStrings = await contractsDictCommand(
+            "JSON.stringify(ns.codingcontract.getData(c.contract, c.hostname), jsonReplacer)",
+            "/Temp/contract-data-stringified.txt",
+        );
+    } catch (err) {
+        return log(ns, `WARNING: Couldn't gather contract data (will retry next run): ${String(err?.message ?? err).split("\n")[0]}`);
+    }
     contractsDb.forEach((c) => (c.type = dictContractTypes[c.contract]));
     contractsDb.forEach(
         (c) => (c.dataJson = dictContractDataStrings[c.contract]),

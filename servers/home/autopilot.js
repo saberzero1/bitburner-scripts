@@ -12,6 +12,7 @@ import {
     unEscapeArrayArgs,
     formatMoney,
     formatDuration,
+    formatRam,
     formatNumber,
     getErrorInfo,
     tail,
@@ -24,7 +25,26 @@ const argsSchema = [
     ["disable-auto-destroy-bn", false], // Set to true if you do not want to auto destroy this BN when done
     ["install-at-aug-count", 8], // Automatically install when we can afford this many new augmentations (with NF only counting as 1). Note: This number will automatically be increased by 1 for every level of SF11 you have (up to 3)
     ["install-at-aug-plus-nf-count", 12], // or... automatically install when we can afford this many augmentations including additional levels of Neuroflux.  Note: This number will automatically be increased by 1 for every level of SF11 you have (up to 3)
-    ["install-for-augs", ["The Red Pill"]], // or... automatically install as soon as we can afford one of these augmentations
+    [
+        "install-for-augs",
+        [
+            "The Red Pill",
+            "The W1ngs of Icarus",
+            "The B00ts of Perseus",
+            "The St4ff of Asclepius",
+            "The H4mmer of Daedalus",
+            "The L4w of Bayes",
+            "The B1ade of Solomonoff",
+            "The Thr3ad of Ariadne",
+        ],
+    ], // or... automatically install as soon as we can afford one of these augmentations
+    ["disable-hacking-stanek", false], // After The Red Pill, keep Stanek's normal layout instead of the hacking-only one
+    ["wd-stanek-charges", 1000], // After The Red Pill, charge Stanek's fragments to this many charges (stanek.js --max-charges, default 120)
+    ["keep-stocks-after-red-pill", false], // Keep stockmaster trading after The Red Pill (default: sell all, money goes to grafts and hacknet RAM)
+    ["disable-charisma-stanek", false], // Before The Red Pill, keep the generic Stanek layout instead of the charisma one
+    ["disable-hacknet-xp", false], // After The Red Pill, don't let daemon.js farm hacking XP on hacknet servers (it costs their hash rate)
+    ["disable-wd-install-check", false], // After The Red Pill, install even if that reaches the World Daemon later (rebuilding experience, Stanek and the Go bonus)
+    ["darknet-install-hold-minutes", 90], // Hold installs this long after the last one while the darknet pushes toward an unsolved labyrinth (0 = never; twice as long once it is found). Searches took 26-60+ min (2026-11-17); a cut-short search is lost
     ["install-countdown", 5 * 60 * 1000], // If we're ready to install, wait this long first to see if more augs come online (we might just be gaining momentum)
     ["time-before-boosting-best-hack-server", 15 * 60 * 1000], // Wait this long before picking our best hack-income server and spending hashes on boosting it
     ["reduced-aug-requirement-per-hour", 0.5], // For every hour since the last reset, require this many fewer augs to install.
@@ -37,12 +57,17 @@ const argsSchema = [
     ["disable-wait-for-4s", false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
     ["disable-rush-gangs", false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
     ["disable-casino", false], // Set to true to disable running the casino.js script automatically
+    ["boost-horizon-minutes", 60], // A server boost must repay its hashes' sale value within this long (see below)
     ["spend-hashes-on-server-hacking-threshold", 0.1], // Threshold for how good hacking multipliers must be to merit spending hashes for boosting hack income. Set to a large number to disable this entirely.
     ["on-completion-script", null], // Spawn this script when we defeat the bitnode
     ["on-completion-script-args", []], // Optional args to pass to the script when we defeat the bitnode
     ["xp-mode-interval-minutes", 55], // Every time this many minutes has elapsed, toggle daemon.js to runing in --xp-only mode, which prioritizes earning hack-exp rather than money
+    ["xp-mode-hack-income-share", 0.01], // Always run daemon.js in --xp-only mode while hacking earns less than this share of our other income
     ["xp-mode-duration-minutes", 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
-    ["no-tail-windows", false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["no-tail-windows", true], // Tail windows stay closed by default (open them from the dashboard). Set to false to open them for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
+    ["disable-darknet", false], // Set to true to keep daemon.js from launching darknet.js
+    ["disable-grafting", false], // Set to true to not launch graft.js (grafts for darknet labyrinth charisma, then hacking after The Red Pill)
+    ["disable-infiltration", false], // Set to true to disable running the infiltrator.js script automatically
 ];
 
 export function autocomplete(data, args) {
@@ -127,9 +152,13 @@ export async function main(ns) {
     let playerInstalledAugCount = /**@returns{null|number}*/ (() => null)(); // Number of augs installed, or null if we don't have SF4 and can't tell.
     let installedAugmentations = [];
     let acceptedStanek = false,
-        stanekLaunched = false;
+        stanekLaunched = false,
+        hackingStanekChecked = false, // after The Red Pill: whether we've checked/switched to the hacking-only layout
+        charismaStanekChecked = false, // before The Red Pill: whether we've checked/switched to the charisma layout
+        stocksLiquidated = false; // after The Red Pill: whether we've sold all stocks (once per autopilot start)
     let daemonStartTime = 0; // The time we personally launched daemon.
     let installCountdown = 0; // Start of a countdown before we install augmentations.
+    const WD_CLIMB_FILE = "/data/wd-climb.txt"; // {reset, target, samples: [msSinceInstall, exp, level, mult, goBonus]} (recordWdClimb)
     let installCountdownResets = 0; // Number of times we've reset the countdown because our affordable augs has increased
     let bnCompletionSuppressed = false; // Flag if we've detected that we've won the BN, but are suppressing a restart
     let sleevesMaxedOut = false; // Flag used only when the player is replaying BN 10 with all sleeves but has suppressed auto-destroying the BN, to allow continued auto-installs
@@ -148,7 +177,11 @@ export async function main(ns) {
     /** @param {NS} ns **/
     async function main_start(ns) {
         const runOptions = getConfiguration(ns, argsSchema);
-        if (!runOptions || (await instanceCount(ns)) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
+        if (!runOptions) return;
+        if ((await instanceCount(ns, "home", false, false)) > 1) {
+            await warnDuplicateAutopilot(ns);
+            return; // Prevent multiple instances of this script from being started, even with different args.
+        }
         options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
 
         log(ns, "INFO: Auto-pilot engaged...", true, "info");
@@ -189,6 +222,53 @@ export async function main(ns) {
         }
     }
 
+    async function warnDuplicateAutopilot(ns) {
+        const warningFile = "/Temp/autopilot-duplicate-warning.txt";
+        const now = Date.now();
+        const lastWarning = Number(ns.read(warningFile) || 0);
+        const warningCooldown = 1000 * 60 * 5;
+        if (now - lastWarning < warningCooldown) return;
+
+        const scriptName = ns.getScriptName();
+        let otherInstancePids = [];
+        let potentialLaunchers = [];
+        try {
+            const runningScripts = await getNsDataThroughFile(
+                ns,
+                "ns.ps('home')",
+                "/Temp/ps-home-autopilot.txt",
+            );
+            otherInstancePids = runningScripts
+                .filter((p) => p.filename === scriptName)
+                .map((p) => p.pid);
+            potentialLaunchers = runningScripts
+                .filter(
+                    (p) =>
+                        p.filename !== scriptName &&
+                        Array.isArray(p.args) &&
+                        p.args.includes(scriptName),
+                )
+                .map(
+                    (p) =>
+                        `${p.filename} (pid ${p.pid}) args=${JSON.stringify(p.args)}`,
+                );
+        } catch (error) {}
+
+        const launcherInfo =
+            potentialLaunchers.length > 0
+                ? ` Potential launchers: ${potentialLaunchers.join("; ")}`
+                : "";
+        log(
+            ns,
+            `WARNING: You cannot start multiple versions of this script (${scriptName}). ` +
+                `Please shut down the other instance(s) first: ${otherInstancePids}.` +
+                launcherInfo,
+            true,
+            "warning",
+        );
+        ns.write(warningFile, `${now}`, "w");
+    }
+
     /** @param {NS} ns **/
     async function startUp(ns) {
         await persistConfigChanges(ns);
@@ -223,7 +303,7 @@ export async function main(ns) {
                 playerInstalledAugCount = installedAugmentations.length;
             }
         } catch (err) {
-            if (unlockedSFs[4] || 0 == 3) throw err; // No idea why this failed, treat as temporary and allow auto-retry.
+            if ((unlockedSFs[4] || 0) == 3) throw err; // No idea why this failed, treat as temporary and allow auto-retry.
             log(
                 ns,
                 `WARNING: You only have SF4 level ${unlockedSFs[4]}. Without level 3, some singularity functions will be ` +
@@ -364,6 +444,7 @@ export async function main(ns) {
         await maybeUpgradeSleeveMemory(ns, player);
         await checkOnRunningScripts(ns, player);
         await maybeDoCasino(ns, player);
+        await recordWdClimb(ns, player);
         await maybeInstallAugmentations(ns, player);
         return shouldWeKeepRunning(ns); // Return false to shut down autopilot.js if we installed augs, or don't have enough home RAM
     }
@@ -666,6 +747,13 @@ export async function main(ns) {
             return (bnCompletionSuppressed = true);
         }
 
+        // Free home first, with direct calls: daemon.js's XP farming and Stanek's charging fill home (BN12.88: 18 GB
+        // free of 32.8 TB), and every temp script (killScript, cleanup.js, the 33.6 GB destroyW0r1dD43m0n call) needs
+        // free RAM to start, so the win routine waited for RAM forever (BN12.88: minutes, BN12.89: hours). The BN ends
+        // anyway; keep only this script and cmd-runner.js (for diagnosis if the destroy fails).
+        const freed = ns.ps("home").filter((p) => p.pid != ns.pid && p.filename != "cmd-runner.js")
+            .reduce((n, p) => n + (ns.kill(p.pid) ? 1 : 0), 0);
+        log(ns, `INFO: Killed ${freed} scripts on home to free RAM for destroying the BitNode.`);
         // Clean out our temp folder and flags so we don't have any stale data when the next BN starts.
         let pid = launchScriptHelper(ns, "cleanup.js");
         if (pid) await waitForProcessToComplete(ns, pid);
@@ -793,8 +881,35 @@ export async function main(ns) {
             ["home"],
         );
 
+        // Launch the dashboard if it's not already running (e.g. after augmentation reset)
+        // Skip if casino hasn't run yet — dashboard's DOM/React usage would interfere with casino.js
+        if (
+            !findScript("dashboard.js") &&
+            homeRam >= 16 &&
+            (ranCasino || options["disable-casino"])
+        )
+            launchScriptHelper(ns, "dashboard.js", [], false, true);
+
+        // Run timeline logger (tools/run-timeline): a snapshot every few minutes, to see what gates each run
+        if (!findScript("run-logger.js") && homeRam >= 64) launchScriptHelper(ns, "run-logger.js", [], false, true);
+        // Records every script that dies of a runtime error to /data/script-crashes.txt (the error dialogs get dismissed unread)
+        if (!findScript("crash-logger.js") && homeRam >= 64) launchScriptHelper(ns, "crash-logger.js", [], false, true);
+        // Runs scripts queued in /Temp/cmd-queue.txt (external tooling can write files over the Remote API, not run scripts)
+        if (!findScript("cmd-runner.js") && homeRam >= 64) launchScriptHelper(ns, "cmd-runner.js", [], false);
+
+        // After The Red Pill money only buys hacking grafts and hacknet RAM: sell all stocks once and stop trading (BN12.86:
+        // $16b sat in positions while hacknet RAM, ~$1M/GB, waited for money). --keep-stocks-after-red-pill keeps trading.
+        const stocksOff = installedAugmentations.includes(augTRP) && !options["keep-stocks-after-red-pill"];
+        if (stocksOff && !stocksLiquidated) {
+            stocksLiquidated = true;
+            const trader = findScript("stockmaster.js", (s) => !s.args.includes("--liquidate") && !s.args.includes("-l"));
+            if (trader) await killScript(ns, "stockmaster.js", null, trader);
+            log(ns, `INFO: The Red Pill is installed: selling all stocks for grafts and hacknet RAM.`, true);
+            launchScriptHelper(ns, "stockmaster.js", ["--liquidate"]);
+        }
         // Launch stock-master in a way that emphasizes it as our main source of income early-on
         if (
+            !stocksOff &&
             !findScript("stockmaster.js") &&
             !disableStockmasterForDaedalus &&
             homeRam >= 32
@@ -852,9 +967,29 @@ export async function main(ns) {
                     );
                 const spendHashesMultThreshold =
                     options["spend-hashes-on-server-hacking-threshold"];
+                // Compare with selling: a boost level (+2% max money, the cheapest at 50 hashes) adds ~2% of our
+                // actual hack income; the same hashes sell for $12.5m. In BN12.74 hacking earned ~$1.5k/s, so a level
+                // took days to repay while darknet and the casino earned billions.
+                const moneySources = await getPlayerMoneySources(ns);
+                const hackIncomeRate =
+                    (moneySources?.sinceInstall?.hacking ?? 0) / Math.max(1, getTimeInAug() / 1000);
+                const boostRepays =
+                    resetInfo.currentNode == 9 ||
+                    0.02 * hackIncomeRate * options["boost-horizon-minutes"] * 60 > 50 * 250e3;
+                if (!boostRepays) {
+                    if (existingSpendHashesProc) {
+                        log(ns, `Killing spend-hacknet-hashes.js server boosting: hack income (${formatMoney(hackIncomeRate)}/s) is too low ` +
+                            `for a boost to repay what its hashes would sell for within ${options["boost-horizon-minutes"]} minutes.`);
+                        await killScript(ns, "spend-hacknet-hashes.js", null, existingSpendHashesProc);
+                        existingSpendHashesProc = false;
+                    } else
+                        log_once(ns, `INFO: Not boosting servers with hashes: hack income (${formatMoney(hackIncomeRate)}/s) is too low ` +
+                            `for a boost to repay what its hashes would sell for within ${options["boost-horizon-minutes"]} minutes (--boost-horizon-minutes).`);
+                }
                 // If hacking gain multipliers are too low, assume the bitnode is meant to be won a different way and don't bother wasting hashes on boosting hack income
                 // The exception is that in BN9, despite high penalties, we're definitely meant to spend hashes to boost hack income
                 if (
+                    boostRepays &&
                     bestServer &&
                     (gain > spendHashesMultThreshold ||
                         resetInfo.currentNode == 9)
@@ -913,6 +1048,7 @@ export async function main(ns) {
                             bestServer,
                             "--spend-on",
                             "Increase_Maximum_Money",
+                            "--no-corp-priority", // Server boosting shouldn't divert hashes to the corporation
                         ];
                         if (shouldReduceMinSecurity)
                             spendHashesArgs.push(
@@ -925,6 +1061,8 @@ export async function main(ns) {
                             spendHashesArgs,
                         );
                     }
+                } else if (!boostRepays) {
+                    // (logged above)
                 } else if (gain <= 1)
                     log_once(
                         ns,
@@ -945,10 +1083,20 @@ export async function main(ns) {
 
         // Determine the arguments we want to run daemon.js with. We will either pass these directly, or through stanek.js if we're running it first.
         const hackThreshold = options["high-hack-threshold"]; // If player.skills.hacking level is about 8000, tweak daemon to increase income rates
+        // When hacking earns a negligible share of our income, money mode only gives up hack exp. Measured live in
+        // BN12.74 (hacking ~$1.5k/s against ~$5m/s from darknet etc.): --xp-only earned 448k hack exp/s, money mode
+        // 15.7k/s (28x less), and hack level drives the World Daemon requirement and faction work rep.
+        const sources = (await getPlayerMoneySources(ns))?.sinceInstall ?? {};
+        const hackIncome = Math.max(0, sources.hacking ?? 0);
+        const otherIncome = Object.entries(sources)
+            .filter(([k, v]) => !["hacking", "total"].includes(k) && v > 0)
+            .reduce((total, [, v]) => total + v, 0);
+        const hackMoneyNegligible = otherIncome > 0 && hackIncome < options["xp-mode-hack-income-share"] * otherIncome;
         // When our hack level gets sufficiently high, hack/grow/weaken go so fast that spawning new scripts for each cycle becomes very
         // expensive / laggy. To help with this, daemon.js supports "looping mode", to just spawn one long-lived script that does H/G/W in a loop.
         if (player.skills.hacking >= hackThreshold) {
             daemonArgs = [
+                ...(hackMoneyNegligible ? ["--xp-only"] : []),
                 "--looping-mode",
                 "--cycle-timing-delay",
                 40,
@@ -973,6 +1121,7 @@ export async function main(ns) {
         } else {
             // XP-ONLY MODE: We can shift daemon.js to this when we want to prioritize earning hack exp rather than money
             let useXpOnlyMode =
+                hackMoneyNegligible ||
                 prioritizeHackForDaedalus ||
                 prioritizeHackForWd ||
                 // In BNs that give no money for hacking, always start daemon.js in this mode (except BN8)
@@ -1010,7 +1159,9 @@ export async function main(ns) {
                                   bitNodeMults.ScriptHackMoneyGain ==
                               0
                             ? `The current BitNode does not give any money from hacking, so we will run daemon.js in --xp-only mode.`
-                            : `Relaunching daemon.js to focus on earning Hack Experience for ${options["xp-mode-duration-minutes"]} minutes (--xp-mode-duration-minutes)`;
+                            : hackMoneyNegligible
+                              ? `Hacking earns under ${options["xp-mode-hack-income-share"] * 100}% of our other income, so we will run daemon.js in --xp-only mode.`
+                              : `Relaunching daemon.js to focus on earning Hack Experience for ${options["xp-mode-duration-minutes"]} minutes (--xp-mode-duration-minutes)`;
             }
         }
         // Prevent daemon from starting "work-for-faction.js" since we now manage that script
@@ -1018,6 +1169,8 @@ export async function main(ns) {
             "--disable-script",
             getFilePath("work-for-factions.js"),
         );
+        daemonArgs.push("--disable-script", getFilePath("infiltrator.js"));
+        if (options["disable-darknet"]) daemonArgs.push("--disable-script", getFilePath("darknet.js"));
         // In BN8, always run in a mode that prioritizes stock market manipulation
         if (resetInfo.currentNode == 8)
             daemonArgs.push("--stock-manipulation-focus");
@@ -1031,8 +1184,48 @@ export async function main(ns) {
             daemonArgs.push(
                 "--reserved-ram",
                 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16),
+                // 32 * ((unlockedSFs[4] ?? 0) == 2 ? 4 : 16),
             );
 
+        // Before The Red Pill charisma gates the labyrinths: switch to the charisma layout (checked once per autopilot start;
+        // the layout persists across installs): the charisma fragment (power 3) alone, ringed by up to 8 boosters. With hacknet helpers (below) a big hacknet server's call sets the peak while home is still small (BN12.86:
+        // home 1 TB, peaks ~400 on the generic 14-fragment layout): charisma x~2 by the formula. The Red Pill switch below
+        // replaces it.
+        if (13 in unlockedSFs && !options["disable-charisma-stanek"] && !charismaStanekChecked &&
+            installedAugmentations.includes(augStanek) && !installedAugmentations.includes(augTRP)) {
+            charismaStanekChecked = true;
+            try {
+                const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
+                if (!ids.includes(18) || ids.some((id) => id < 100 && id !== 18)) { // (charisma alone: charismaLayouts)
+                    log(ns, `INFO: Switching Stanek's Gift to the charisma layout (charisma gates the labyrinths).`, true);
+                    if (findScript("stanek.js")) await killScript(ns, "stanek.js");
+                    const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--charisma"]);
+                    if (pid) await waitForProcessToComplete(ns, pid);
+                    stanekLaunched = false; // charge the new layout
+                }
+            } catch (err) {
+                log(ns, `WARNING: Could not check Stanek's layout: ${getErrorInfo(err)}`);
+            }
+        }
+        // After The Red Pill only hacking level matters: switch Stanek's Gift to the hacking-only layout (both hacking
+        // fragments ringed by boosters) once, then charge it. stanek.js charging the old layout is stopped first: a higher
+        // peak charge resets the charge count, so it can run for a long time (BN12.77: 20+ minutes, never finishing).
+        if (13 in unlockedSFs && !options["disable-hacking-stanek"] && !hackingStanekChecked &&
+            installedAugmentations.includes(augTRP)) {
+            hackingStanekChecked = true;
+            try {
+                const ids = await getNsDataThroughFile(ns, "ns.stanek.activeFragments().map((f) => f.id)", "/Temp/stanek-active-ids.txt");
+                if (!ids.includes(0) || ids.some((id) => id < 100 && id !== 0 && id !== 1 && id !== 18)) { // (18: charisma beside the pair)
+                    log(ns, `INFO: The Red Pill is installed: switching Stanek's Gift to the hacking-only layout.`, true);
+                    if (findScript("stanek.js")) await killScript(ns, "stanek.js");
+                    const pid = launchScriptHelper(ns, "stanek.js.create.js", ["--clear", "--hacking"]);
+                    if (pid) await waitForProcessToComplete(ns, pid);
+                    stanekLaunched = false; // charge the new layout
+                }
+            } catch (err) {
+                log(ns, `WARNING: Could not check Stanek's layout: ${getErrorInfo(err)}`);
+            }
+        }
         // Once stanek's gift is accepted, launch it once per reset before we launch daemon (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
         let stanekRunning =
             13 in unlockedSFs && findScript("stanek.js") !== undefined;
@@ -1043,21 +1236,36 @@ export async function main(ns) {
             installedAugmentations.includes(augStanek)
         ) {
             stanekLaunched = true; // Once we've know we've launched stanek once, we never have to again this reset.
-            const stanekArgs = [
-                "--on-completion-script",
-                getFilePath("daemon.js"),
-            ];
+            // stanek.js used to launch daemon.js itself on completion, with the args chosen at launch (stale by then: e.g.
+            // non-looping while autopilot had moved daemon to --looping-mode), killing the running daemon and starting
+            // the stale one with all home RAM free. Now autopilot
+            // relaunches daemon.js with its current args once stanek.js has exited.
+            // Likewise stanek.js's default on-startup-script launched its own plain daemon.js, killing ours.
+            const stanekArgs = ["--no-completion-script", "--no-startup-script"];
+            // After The Red Pill: charge to 1000 charges instead of 120 (both hacking fragments: hacking skill and exp x~1.24,
+            // for ~30 more minutes of home charging; no money needed), from the hacknet servers too as they're rebought
+            // (stanek.js --hacknet-helpers; hashes have no use then, and daemon.js only gets them once Stanek is done, below)
+            // (the charisma fragment beside the hacking pair only needs to lift darknet money: 120 charges)
+            if (installedAugmentations.includes(augTRP)) stanekArgs.push("--max-charges", options["wd-stanek-charges"], "--charge-cap", "18:120");
+            if (!options["disable-hacknet-xp"]) stanekArgs.push("--hacknet-helpers"); // (before The Red Pill too: see the charisma layout)
+            // Before The Red Pill, keep stanek.js watching to raise the charisma peak as the hacknet grows (home isn't needed for
+            // XP then; after The Red Pill home makes the peak and daemon.js needs it back once charging is done)
+            if (!installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"]) stanekArgs.push("--repeak");
             if (options["no-tail-windows"]) stanekArgs.push("--no-tail"); // Relay the option to suppress tail windows
-            if (daemonArgs.length >= 0)
-                stanekArgs.push(
-                    "--on-completion-script-args",
-                    JSON.stringify(daemonArgs),
-                ); // Pass in all the args we wanted to run daemon.js with
             launchScriptHelper(ns, "stanek.js", stanekArgs);
             stanekRunning = true;
         }
         // If stanek is running, tell daemon to reserve all home RAM for it.
         if (stanekRunning) daemonArgs.push("--reserved-ram", 1e100);
+        // After The Red Pill hashes have no use left (only hacking level gates the BitNode), while the hacknet servers hold
+        // most of our RAM (BN12.85: 14 x 4 TB idle beside ~19 TB elsewhere): let daemon farm hacking XP on them too.
+        if (installedAugmentations.includes(augTRP) && !options["disable-hacknet-xp"] && !stanekRunning) daemonArgs.push("--use-hacknet-servers");
+        // ...and buy hacknet RAM rather than hash production (hacknet-upgrade-manager.js --ram-first): ~$1M/GB, ~260x cheaper than
+        // home RAM, for Stanek's helper charges and XP farming. Grafts keep priority through graft.js's reserve.
+        // (from the start: hashes have no use before The Red Pill either, and Stanek's helpers need the RAM)
+        if (!options["disable-hacknet-xp"]) daemonArgs.push("--hacknet-ram-first");
+        if (installedAugmentations.includes(augTRP) && !options["keep-stocks-after-red-pill"])
+            daemonArgs.push("--disable-script", getFilePath("stockmaster.js")); // (stocks are sold after The Red Pill, see above)
 
         // Launch (or re-launch) daemon if it is not already running with all our desired args.
         // Hack: Ignore numeric arguments in the comparison, since we e.g. tweak --recovery-thread-padding over time
@@ -1068,7 +1276,8 @@ export async function main(ns) {
                     !existingDaemon.args.includes(arg) && !Number.isFinite(arg),
             ) ||
             // Special cases: We also must relaunch daemon if it is running with certain flags we wish to remove
-            ["--xp-only"].some(
+            // (--reserved-ram: stanek.js has finished charging and no longer relaunches daemon.js itself)
+            ["--xp-only", "--reserved-ram"].some(
                 (arg) =>
                     !daemonArgs.includes(arg) &&
                     existingDaemon.args.includes(arg),
@@ -1087,7 +1296,10 @@ export async function main(ns) {
             let daemonPid = launchScriptHelper(ns, "daemon.js", daemonArgs);
             daemonStartTime = Date.now();
             // Open the tail window if it's the start of a new BN. Especially useful to new players.
-            if (getTimeInBitnode() < 1000 * 60 * 5 || homeRam == 8)
+            if (
+                !options["no-tail-windows"] &&
+                (getTimeInBitnode() < 1000 * 60 * 5 || homeRam == 8)
+            )
                 // First 5 minutes, or BN1.1 where we have 8GB ram
                 tail(ns, daemonPid);
         }
@@ -1165,6 +1377,20 @@ export async function main(ns) {
             }
         }
 
+        // Once The Red Pill is installed, the World Daemon's hacking requirement is the last gate. Grafted augmentations
+        // apply immediately and persist across installs, and hacking level scales directly with the hacking multiplier,
+        // so graft.js grafts hacking augmentations until the requirement is met (SF10 needed for the grafting API).
+        // graft.js decides itself what to graft for (darknet labyrinth charisma before The Red Pill, hacking after), and
+        // idles otherwise; it exits once the World Daemon's hacking requirement is met.
+        if (
+            !options["disable-grafting"] &&
+            10 in unlockedSFs &&
+            !(wdHack != null && Number.isFinite(wdHack) && wdHack > 0 && player.skills.hacking >= wdHack) &&
+            homeRam >= 64 &&
+            !findScript("graft.js")
+        )
+            launchScriptHelper(ns, "graft.js", [], true, true);
+
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
         // Note: We delay launching our own 'work-for-factions.js' until daemon has warmed up, so we don't steal it's "kickstartHackXp" study focus
         if (
@@ -1179,6 +1405,28 @@ export async function main(ns) {
                 "work-for-factions.js",
                 rushGang ? rushGangsArgs : workForFactionsArgs,
             );
+        }
+
+        // Infiltration earns money and faction rep passively via automated mini-game solving.
+        // Note: Unlike work-for-factions, infiltration has no SF requirements (it's DOM-based).
+        // (not while graft.js grafts focused: infiltrator.js's UI navigation takes focus, and unfocused grafting runs at 0.8x)
+        let focusedGraft = false;
+        try {
+            const st = JSON.parse(ns.read("/Temp/graft-status.txt") || "null");
+            focusedGraft = !!st?.focus && !!st?.mode && Date.now() - st.t < 60_000;
+        } catch {}
+        if (
+            !options["disable-infiltration"] &&
+            !focusedGraft &&
+            !findScript("infiltrator.js") &&
+            homeRam >= 32 && // Don't waste RAM on infiltration when we're still low on home RAM
+            Date.now() - daemonStartTime > 30000 // Wait for daemon to warm up
+        ) {
+            // launchScriptHelper(ns, "infiltrator.js", ["--auto"]);
+            const infiltratorArgs = options["no-tail-windows"]
+                ? ["--no-tail"]
+                : [];
+            launchScriptHelper(ns, "infiltrator.js", infiltratorArgs, true, true);
         }
     }
 
@@ -1325,17 +1573,22 @@ export async function main(ns) {
         // Run casino.js (and expect this script to get killed in the process)
         // Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
         await killScript(ns, "work-for-factions.js");
+        await killScript(ns, "infiltrator.js"); // Kill infiltration too — it uses the DOM and would interfere with casino
         await killScript(ns, "daemon.js"); // We also have to kill daemon which can make us study.
+        await killScript(ns, "dashboard.js"); // Kill dashboard — its React rendering interferes with casino's DOM manipulation
         // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
         if (4 in unlockedSFs)
             // No big deal if we can't, casino.js has logic to find the stop button and click it.
-            _ = await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
+            await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
 
         const pid = launchScriptHelper(ns, "casino.js", [
             "--kill-all-scripts",
             true,
             "--on-completion-script",
             ns.getScriptName(),
+            // One JSON-array arg, so autopilot's own flags (which start with --) survive casino.js's flag parsing
+            "--on-completion-script-args",
+            JSON.stringify(ns.args),
         ]);
         if (pid) {
             await waitForProcessToComplete(ns, pid);
@@ -1343,8 +1596,10 @@ export async function main(ns) {
             // Otherwise, something went wrong
             log(
                 ns,
-                `ERROR: Something went wrong. casino.js was run, but we haven't been killed. It must have run into a problem...`,
+                `ERROR: Something went wrong. casino.js was run, but we haven't been killed. It must have run into a problem... ` +
+                    `Not retrying it this reset (each attempt kills work-for-factions, infiltrator, daemon and dashboard).`,
             );
+            ranCasino = true;
         }
     }
 
@@ -1444,8 +1699,10 @@ export async function main(ns) {
                 : "");
         let resetStatus = `Reserving ${formatMoney(totalCost)} to install ${augSummary}`;
         let shouldReset =
-            options["install-for-augs"].some((a) =>
-                facman.affordable_augs.includes(a),
+            options["install-for-augs"].some(
+                (a) =>
+                    facman.affordable_augs.includes(a) ||
+                    facman.awaiting_install_augs.includes(a),
             ) ||
             pendingAugCount >= augsNeeded ||
             pendingAugInclNfCount >= augsNeededInclNf;
@@ -1502,16 +1759,22 @@ export async function main(ns) {
             // If we're currently in a state where we should not be resetting, skip reset logic
             return (reservedPurchase = 0);
 
+        // A labyrinth reward (or another --install-for-augs aug) pending: install after 30 s, not --install-countdown (5 min,
+        // "in case more augs come online"): the next labyrinth waits for this install, and money for more augs has usually
+        // built up while something held it (BN12.83: the H4mmer install came 9 minutes after the graft holding it ended)
+        const priorityInstall = options["install-for-augs"].some((a) => augsToInstall.includes(a));
+        const countdownMs = priorityInstall ? Math.min(30_000, options["install-countdown"]) : options["install-countdown"];
+        if (priorityInstall && installCountdown > Date.now() + countdownMs) installCountdown = Date.now() + countdownMs;
         // Ensure the money needed for the above augs doesn't get ripped out from under us by reserving it
         if (reservedPurchase < totalCost) {
             // A countdown is displayed to give the user a heads up, and give us time to potentially earn money for more augmentations
             if (reservedPurchase == 0)
-                installCountdown = Date.now() + options["install-countdown"];
+                installCountdown = Date.now() + countdownMs;
             else {
                 // If we were already reserving for a purchase and the number went up, log a notice of the timer being reset.
                 let purchaseChangeLog = `INFO: The augmentation purchase we can afford has increased from ${formatMoney(reservedPurchase)} to ${formatMoney(totalCost)}.`;
                 // First, check if we're ready to install TRP - if so, don't delay the install for any additional augmentations.
-                if (!augsToInstall.includes(augTRP)) {
+                if (!options["install-for-augs"].some((a) => augsToInstall.includes(a))) {
                     // Otherwise, each time we can afford more augs, reset the install delay timer to take advantage of "momentum"
                     // and potentially purchase many more augmentations in this reset. To avoid delaying an install indefinitely,
                     // we reduce the additional time we're willing to wait a little bit each time this happens.
@@ -1534,12 +1797,12 @@ export async function main(ns) {
                 }
                 log(ns, purchaseChangeLog, true);
             }
-            ns.write("reserve.txt", totalCost, "w"); // Should prevent other scripts from spending this money
+            writeReserve(ns, totalCost); // Should prevent other scripts from spending this money
         }
         // We must wait until the configured cooldown elapses before we install augs.
         if (installCountdown > Date.now()) {
             resetStatus +=
-                `\n  Waiting for ${formatDuration(options["install-countdown"])} (--install-countdown) ` +
+                `\n  Waiting for ${formatDuration(countdownMs)} (--install-countdown) ` +
                 `to elapse before we install, in case we're close to being able to purchase more augmentations...`;
             setStatus(ns, resetStatus);
             ns.toast(
@@ -1584,9 +1847,143 @@ export async function main(ns) {
      *           affordable_augs: string[], affordable_count: number, affordable_count_nf: number, affordable_count_ex_nf: number,
      *           total_rep_cost: number, total_aug_cost: number, unowned_count: number }} facmanOutput
      */
+    /** After The Red Pill, record the hacking climb since the last install (per minute, /data/wd-climb.txt): experience,
+     * level, hacking multiplier (it includes the Go bonus and Stanek) and the World Daemon's Go bonus. The install check
+     * replays it: after an install, experience, Stanek and the Go bonus rebuild as they did since this one. */
+    let lastWdSample = 0;
+    async function recordWdClimb(ns, player) {
+        if (!installedAugmentations.includes(augTRP) || Date.now() - lastWdSample < 60_000) return;
+        lastWdSample = Date.now();
+        try {
+            const [exp, level, mult, go, target] = await getNsDataThroughFile(ns,
+                `(() => { const p = ns.getPlayer(); return [p.exp.hacking, p.skills.hacking, p.mults.hacking,
+                    (ns.go.analysis.getStats()["????????????"]?.bonusPercent ?? 0) / 100, ns.getServerRequiredHackingLevel("w0r1d_d43m0n")]; })()`,
+                "/Temp/wd-climb-sample.txt");
+            let climb = null;
+            try {
+                climb = JSON.parse(ns.read(WD_CLIMB_FILE) || "null");
+            } catch {}
+            if (!climb || climb.reset !== resetInfo.lastAugReset) climb = { reset: resetInfo.lastAugReset, samples: [] };
+            climb.target = target;
+            climb.samples.push([Date.now() - resetInfo.lastAugReset, exp, level, mult, go]);
+            ns.write(WD_CLIMB_FILE, JSON.stringify(climb), "w");
+        } catch {}
+    }
+
+    /** Time to the World Daemon's hacking requirement without installing, and after installing augs worth `gain` (hacking
+     * multiplier). Level = mult x c x (32 ln(exp + 534.6) - 200) (c: the BitNode's level multiplier, from the latest sample).
+     * Staying: the multiplier stays, experience grows at its rate over the last ~10 minutes. Installing: the climb since
+     * this install replays (experience, and the multiplier's rebuilding part: Stanek and the Go bonus), with the permanent
+     * part (augs, grafts) scaled by gain. Conservative for installing: grafts that landed during the recorded climb count
+     * as rebuilding. null without enough samples. */
+    function estimateWdInstall(gain) {
+        let climb = null;
+        try {
+            climb = JSON.parse(ns.read(WD_CLIMB_FILE) || "null");
+        } catch {}
+        // (the replay needs the climb from the start: not when recording began late, e.g. autopilot updated mid-phase)
+        if (!climb || climb.reset !== resetInfo.lastAugReset || climb.samples.length < 10 || climb.samples[0][0] > 5 * 60_000) return null;
+        const S = climb.samples, T = climb.target, last = S[S.length - 1];
+        const f = (exp) => 32 * Math.log(exp + 534.6) - 200;
+        const [tNow, expNow, levelNow, multNow] = last;
+        if (levelNow >= T) return { stay: 0, install: Infinity };
+        const c = levelNow / (multNow * f(expNow));
+        const ref = S.find((x) => tNow - x[0] >= 10 * 60_000 && tNow - x[0] <= 20 * 60_000) ?? S[Math.max(0, S.length - 11)];
+        const rate = (expNow - ref[1]) / Math.max(1, tNow - ref[0]); // exp per ms
+        // ...and the multiplier at its relative rate over that window (the Go bonus and grafts keep raising it; experience
+        // alone barely moves the level this late: held flat, staying looked ~80 hours away and every install won)
+        const multGrowth = Math.max(0, (multNow / ref[3] - 1) / Math.max(1, tNow - ref[0])); // per ms, linear
+        const timeFrom = (exp, mult) => { // ms until the level reaches T, in 1-minute steps (up to 2 days)
+            for (let t = 0; t <= 48 * 3600_000; t += 60_000)
+                if (mult * (1 + multGrowth * t) * c * f(exp + rate * t) >= T) return t;
+            return Infinity;
+        };
+        const stay = timeFrom(expNow, multNow);
+        // The multiplier's rebuilding part relative to now: mult(t) / mult(now), capped at 1 (Stanek's charge and the Go bonus
+        // were lower then). After an install: mult(t) x gain, with experience as recorded.
+        for (const [t, exp, , mult] of S) {
+            const multAfter = Math.min(mult, multNow) * gain;
+            if (multAfter * c * f(exp) >= T) return { stay, install: t + 60_000 }; // (+1 min: the install itself)
+        }
+        return { stay, install: tNow + 60_000 + timeFrom(expNow, multNow * gain) };
+    }
+
+    const lastFactionRep = {}; // faction -> rep at the previous install check
     async function shouldDelayInstall(ns, player, facmanOutput) {
-        // Don't install if we're currently grafting an augmentation
-        if (await checkIfGrafting(ns)) return true;
+        // Don't install if we're currently grafting an augmentation, except a charisma graft when a labyrinth reward is
+        // pending: graft.js grafts charisma past the requirement (1.3x), and the reward must not wait for it
+        if (await checkIfGrafting(ns)) {
+            let graftMode = null;
+            try {
+                graftMode = JSON.parse(ns.read("/Temp/graft-status.txt") || "null")?.mode;
+            } catch {}
+            const pendingAugs = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
+            const labRewardPending = options["install-for-augs"].some((a) => pendingAugs.includes(a));
+            if (!(graftMode === "charisma" && labRewardPending)) return true;
+            // ...unless the charisma graft is nearly done: BN12.82's Merciless install cancelled a TITN-41 graft 22 minutes in,
+            // and graft.js started it over
+            try {
+                const remainingMs = await getNsDataThroughFile(ns,
+                    "(() => { const w = ns.singularity.getCurrentWork(); return w?.type === 'GRAFTING' ? ns.grafting.getAugmentationGraftTime(w.augmentation) - w.cyclesWorked * 200 : 0; })()",
+                    "/Temp/graft-remaining.txt");
+                if (remainingMs > 0 && remainingMs <= 10 * 60_000) {
+                    setStatus(ns, `Waiting ~${formatDuration(remainingMs)} for the charisma graft to finish before installing the labyrinth reward.`);
+                    return true;
+                }
+            } catch {}
+        }
+        // After The Red Pill only hacking level gates the BitNode. An install resets Go stats (the World Daemon's bonus is
+        // a hacking level multiplier, +80% after 14 minutes of games in BN12.77) and hacking experience, so it must bring
+        // more hacking multiplier than that: hold unless the pending augs' hacking multipliers beat the Go bonus x1.1.
+        if (installedAugmentations.includes(augTRP) && !options["disable-wd-install-check"]) {
+            const pending = [...new Set([...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs])];
+            try {
+                const gain = await getNsDataThroughFile(ns,
+                    `ns.args.reduce((m, a) => m * (ns.singularity.getAugmentationStats(a).hacking ?? 1), 1)`,
+                    "/Temp/wd-install-check.txt", pending);
+                const est = estimateWdInstall(gain);
+                if (est && !(est.install * 1.1 < est.stay)) {
+                    setStatus(ns, `Not installing: the pending augs (hacking x${gain.toFixed(2)}) would reach the World Daemon's ` +
+                        `requirement in ~${formatDuration(est.install)} after rebuilding experience, Stanek and the Go bonus, ` +
+                        `vs ~${formatDuration(est.stay)} without installing (--disable-wd-install-check).`);
+                    return true;
+                }
+                if (est) log(ns, `INFO: Installing for hacking x${gain.toFixed(2)}: the World Daemon in ~${formatDuration(est.install)} ` +
+                    `(rebuild included) vs ~${formatDuration(est.stay)} without installing.`, true);
+                else if (gain < 1.5) {
+                    // (no climb recorded since the last install yet: hold for small gains, as before)
+                    setStatus(ns, `Not installing: the pending augs multiply hacking by only x${gain.toFixed(2)}, and there is ` +
+                        `no recorded climb yet to estimate an install's rebuild time (--disable-wd-install-check).`);
+                    return true;
+                }
+            } catch (err) {
+                log(ns, `WARNING: Could not compare pending augs with the World Daemon climb: ${getErrorInfo(err)}`);
+            }
+        }
+        // Every install regenerates the darknet. Quick installs of a few cheap augs (SoA, social) every 6-14 minutes kept
+        // it from ever reaching the next labyrinth (2026-11-16, Endless at depth 31). Hold installs while darknet.js pushes
+        // toward an unsolved labyrinth, unless a labyrinth reward is pending (it must be installed to unlock the next one).
+        let dnet = null;
+        try {
+            dnet = JSON.parse(ns.read("/data/darknet-anchor-status.txt") || "null");
+        } catch {}
+        // Twice as long once the labyrinth is found: an install throws away the solver's progress, and moves are slow
+        // while charisma is barely above the requirement (BN12.79: Eternal found 32 min in at 3108/3000 charisma, not
+        // solved by the 60-minute cap; the next install, at 4152, solved it in minutes)
+        const darknetHoldMs = options["darknet-install-hold-minutes"] * 60_000 * (dnet?.lab ? 4 / 3 : 1); // 90 -> 120 min
+        if (darknetHoldMs > 0 && !installedAugmentations.includes(augTRP) && getTimeInAug() < darknetHoldMs) {
+            const pending = [...facmanOutput.affordable_augs, ...facmanOutput.awaiting_install_augs];
+            const labRewardPending = options["install-for-augs"].some((a) => pending.includes(a));
+            const dnetCurrent = dnet && dnet.t > resetInfo.lastAugReset && Date.now() - dnet.t < 10 * 60_000;
+            // Also while "stable": a solved labyrinth's reward only arrives once a probe opens the cache file on it. On
+            // 2026-11-16 Endless was solved while no probes ran, the hold released, and the install lost the reward.
+            if (dnetCurrent && (dnet.phase === "push" || dnet.phase === "stable") && !labRewardPending) {
+                setStatus(ns, `Not installing for up to ${formatDuration(darknetHoldMs - getTimeInAug())} more: the darknet is ` +
+                    (dnet.phase === "push" ? `pushing toward ${dnet.lab ?? "the next labyrinth"}` : `opening ${dnet.lab}'s reward cache`) +
+                    `, and an install would regenerate it (--darknet-install-hold-minutes).`);
+                return true;
+            }
+        }
         // Are we close to being able to afford 4S TIX data?
         if (!have4STixApi)
             have4STixApi = await getNsDataThroughFile(
@@ -1698,12 +2095,16 @@ export async function main(ns) {
             return true;
         }
 
-        if (7 in unlockedSFs && !options["disable-bladeburner"]) {
+        if (
+            7 in unlockedSFs &&
+            !options["disable-bladeburner"] &&
+            playerInBladeburner
+        ) {
             const currentAction = await getNsDataThroughFile(
                 ns,
                 "ns.bladeburner.getCurrentAction()",
             );
-            if (currentAction?.type == "BlackOp") {
+            if (currentAction?.type == "Black Operations") {
                 setStatus(
                     ns,
                     `Not installing because a Bladeburner BlackOp is in progress (${currentAction.name}).`,
@@ -1711,6 +2112,15 @@ export async function main(ns) {
                 return true;
             }
         }
+        // Never let the donation heuristic below block an install for a priority aug (Red Pill, darknet lab augs)
+        if (
+            options["install-for-augs"].some(
+                (a) =>
+                    facmanOutput.affordable_augs?.includes(a) ||
+                    facmanOutput.awaiting_install_augs?.includes(a),
+            )
+        )
+            return false;
         const favorToDonate = await getNsDataThroughFile(
             ns,
             "ns.getFavorToDonate()",
@@ -1731,16 +2141,25 @@ export async function main(ns) {
             );
             const repToFavour = (rep) =>
                 Math.ceil(25500 * 1.02 ** (rep - 1) - 25000);
+            // These factions never accept donations, so getting close to the favor threshold doesn't matter
+            const noDonationFactions = ["Shadows of Anarchy", "Bladeburners", "Church of the Machine God"];
             for (const fac of factions) {
+                if (noDonationFactions.includes(fac)) continue;
                 const currentFavor = dictFavors[fac] ?? 0;
                 const repRequired = Math.max(
                     0,
                     repToFavour(favorToDonate) - repToFavour(currentFavor),
                 );
+                const currentRep = dictReps[fac] ?? 0;
+                // Only wait if we're actually gaining rep with this faction (otherwise we'd wait forever)
+                const gainingRep = currentRep > (lastFactionRep[fac] ?? Infinity);
+                lastFactionRep[fac] = currentRep;
                 if (
                     repRequired > 0 &&
                     repRequired <= 200000 &&
-                    (dictReps[fac] ?? 0) >= repRequired * 0.5
+                    currentRep >= repRequired * 0.5 &&
+                    currentRep < repRequired &&
+                    gainingRep
                 ) {
                     setStatus(
                         ns,
@@ -1764,8 +2183,14 @@ export async function main(ns) {
             ns,
             "ns.singularity.getCurrentWork()",
         );
-        // Never interrupt grafting
-        if (currentWork?.type == "GRAFTING") {
+        // Never interrupt grafting - including the moment between two grafts while graft.js is choosing the next one
+        // (graft.js reports a non-idle mode while it is in a graft series; it idles permanently otherwise)
+        let graftSeries = false;
+        try {
+            const st = JSON.parse(ns.read("/Temp/graft-status.txt") || "null");
+            graftSeries = !!st?.mode && Date.now() - st.t < 3 * 60_000 && !!findScriptHelper("graft.js", await getRunningScripts(ns));
+        } catch {}
+        if (currentWork?.type == "GRAFTING" || graftSeries) {
             if (!wasGrafting)
                 // Only log the first time we detect we've started grafting
                 log(
@@ -1784,9 +2209,9 @@ export async function main(ns) {
         const currentReserve = Number(ns.read("reserve.txt") || 0);
         if (reservingMoneyForDaedalus)
             // Reserve 100b to get the daedalus invite
-            return currentReserve == 100e9
+            return currentReserve == 100e9 + graftReserve(ns)
                 ? true
-                : ns.write("reserve.txt", 100e9, "w");
+                : writeReserve(ns, 100e9);
         // Otherwise, reserve money for stocks for a while, as it's our main source of income early in the BN
         // It also acts as a decent way to save up for augmentations
         const minStockValue = 8e9; // At a minimum 8 of the 10 billion earned from the casino must be reserved for buying stock
@@ -1805,9 +2230,9 @@ export async function main(ns) {
                 minStockValue - stocksValue,
             ),
         );
-        return currentReserve == reserve
+        return currentReserve == reserve + graftReserve(ns)
             ? true
-            : ns.write("reserve.txt", reserve, "w"); // Reserve for stocks
+            : writeReserve(ns, reserve); // Reserve for stocks
         // NOTE: After several iterations, I decided that the above is actually best to keep in all scenarios:
         // - Casino.js ignores the reserve, so the above takes care of ensuring our casino seed money isn't spent
         // - In low-income situations, stockmaster will be our best source of income. We invoke it such that it ignores
@@ -1858,7 +2283,19 @@ export async function main(ns) {
         baseScriptName,
         args = [],
         convertFileName = true,
+        keepHeadroom = false, // optional helper: don't launch it if home would be left without room for temp scripts
     ) {
+        if (keepHeadroom) {
+            // Temp scripts (getNsDataThroughFile, up to ~30 GB) need free home RAM: at a BitNode's start the helpers
+            // filled a 128 GB home to 127.7 GB and every temp script failed (2026-11-16)
+            const file = convertFileName ? getFilePath(baseScriptName) : baseScriptName;
+            const maxRam = ns.getServerMaxRam("home");
+            const headroom = Math.min(32, 0.25 * maxRam);
+            if (maxRam - ns.getServerUsedRam("home") - ns.getScriptRam(file, "home") < headroom) {
+                log_once(ns, `INFO: Not launching ${baseScriptName} yet: home would have less than ${formatRam(headroom)} free for temp scripts.`);
+                return 0;
+            }
+        }
         if (!options["no-tail-windows"]) tail(ns); // If we're going to be launching scripts, show our tail window so that we can easily be killed if the user wants to interrupt.
         let pid, err;
         try {
@@ -1914,9 +2351,28 @@ export async function main(ns) {
      * @param {string} message The message to log, only if it hasn't been previously logged.
      * @param {boolean} alsoPrintToTerminal Set to true to print not only to the current script's tail file, but to the terminal
      * @param {""|"success"|"warning"|"error"|"info"} toastStyle - If specified, your log will will also become a toast notification */
+    /** Cash graft.js needs for its starter grafts (/Temp/graft-reserve.txt, fresh within 5 minutes). */
+    function graftReserve(ns) {
+        try {
+            const r = JSON.parse(ns.read("/Temp/graft-reserve.txt") || "null");
+            return r && Date.now() - r.t < 5 * 60_000 ? Number(r.amount) || 0 : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    /** Write reserve.txt, adding graft.js's starter-graft cash so other scripts (which respect reserve.txt) leave it. */
+    function writeReserve(ns, amount) {
+        return ns.write("reserve.txt", amount + graftReserve(ns), "w");
+    }
+
     function log_once(ns, message, alsoPrintToTerminal, toastStyle) {
-        if (logged_once.has(message)) return;
-        logged_once.add(log(ns, message, alsoPrintToTerminal, toastStyle));
+        // Messages that differ only in their numbers count as the same: "Not boosting servers ... hack income ($705/s)"
+        // was logged every 10 s with a new figure, flooding the log (its tail is all that getScriptLogs returns)
+        const key = String(message).replace(/[\d.,]+/g, "#");
+        if (logged_once.has(key)) return;
+        logged_once.add(key);
+        log(ns, message, alsoPrintToTerminal, toastStyle);
     }
 
     // Invoke the main function

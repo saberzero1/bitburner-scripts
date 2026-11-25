@@ -52,7 +52,8 @@ const argsSchema = [
     ["fracH", 0.2], // Fraction of assets to retain as cash in hand when buying
     ["buy-threshold", 0.0001], // Buy only stocks forecasted to earn better than a 0.01% return (1 Basis Point)
     ["sell-threshold", 0], // Sell stocks forecasted to earn less than this return (default 0% - which happens when prob hits 50% or worse)
-    ["diversification", 0.34], // Before we have 4S data, we will not hold more than this fraction of our portfolio as a single stock
+    ["diversification", 0.5], // Before we have 4S data, we will not hold more than this fraction of our portfolio as a single stock
+    // (Was 0.34. tools/stock-sim, BN12 from $1b, 6 seeds: 0.5 bought 4S ~3h sooner and doubled net worth at 12h and 24h.)
     ["disableHud", false], // Disable showing stock value in the HUD panel
     ["disable-purchase-tix-api", false], // Disable purchasing the TIX API if you do not already have it.
     // The following settings are related only to tweaking pre-4s stock-market logic
@@ -76,6 +77,16 @@ export function autocomplete(data, args) {
 
 /** Requires access to the TIX API. Purchases access to the 4S Mkt Data API as soon as it can
  * @param {NS} ns */
+/** Cash graft.js needs for its starter grafts (/Temp/graft-reserve.txt, fresh within 5 minutes): kept out of stocks. */
+function graftReserve(ns) {
+    try {
+        const r = JSON.parse(ns.read("/Temp/graft-reserve.txt") || "null");
+        return r && Date.now() - r.t < 5 * 60_000 ? Number(r.amount) || 0 : 0;
+    } catch {
+        return 0;
+    }
+}
+
 export async function main(ns) {
     const runOptions = getConfiguration(ns, argsSchema);
     if (!runOptions) return; // Invalid options, or ran in --help mode.
@@ -140,6 +151,9 @@ export async function main(ns) {
         options["show-pre-4s-forecast"] || options["show-market-summary"];
     // Other global values must be reset at start lest they be left in memory from a prior run
     ((lastTick = 0),
+        (forceMarketRefresh = true),
+        (earliestNextMarketTick = 0),
+        (lastSnapshotStart = 0),
         (totalProfit = 0),
         (lastLog = ""),
         (marketCycleDetected = false),
@@ -169,9 +183,9 @@ export async function main(ns) {
             await ns.sleep(sleepInterval);
             try {
                 const reserve =
-                    options["reserve"] != null
+                    (options["reserve"] != null
                         ? options["reserve"]
-                        : Number(ns.read("reserve.txt") || 0);
+                        : Number(ns.read("reserve.txt") || 0)) + graftReserve(ns);
                 player = await getPlayerInfo(ns);
                 success = await tryGetStockMarketAccess(
                     ns,
@@ -227,13 +241,18 @@ export async function main(ns) {
     while (true) {
         try {
             const playerStats = await getPlayerInfo(ns);
+            // (+ graft.js's starter-graft cash: autopilot runs us with --reserve 0, so we'd invest it otherwise)
             const reserve =
-                options["reserve"] != null
+                (options["reserve"] != null
                     ? options["reserve"]
-                    : Number(ns.read("reserve.txt") || 0);
+                    : Number(ns.read("reserve.txt") || 0)) + graftReserve(ns);
+            // Get all market data in one temp script - unless the market cannot have ticked since our last fetch and we haven't traded since
+            const snapshot = await getMarketSnapshot(ns, allStocks);
             // Check whether we have 4s access yes (once we do, we can stop checking)
-            if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
-            const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
+            if (pre4s && snapshot) pre4s = !snapshot.has4sApi;
+            const holdings = snapshot
+                ? await refresh(ns, !pre4s, allStocks, myStocks, snapshot) // Returns total stock value
+                : allStocks.reduce((sum, stk) => sum + stk.positionValue(), 0); // Nothing changed, so this is what refresh would return
             const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
             const maxHoldings = (1 - fracH) * corpus; // The largest value of stock we could hold without violiating fracH (Fraction to keep as cash)
             if (
@@ -489,22 +508,55 @@ async function initAllStocks(ns) {
     }));
 }
 
+const minMsBetweenMarketTicks = 4000; // The game never processes two market ticks less than this far apart (src/StockMarket/data/Constants.ts msPerStockUpdateMin)
+let forceMarketRefresh = true; // Set whenever we transact, since our own trades change positions (and can move prices)
+let earliestNextMarketTick = 0; // Until this time (Date.now()), the market cannot have ticked again
+let lastSnapshotStart = 0;
+let lastHas4SData = false;
+
+/** Fetch ask/bid/volatility/forecast/position for every symbol (plus 4S access flags) in a single temp script.
+ * Returns null (skips the fetch) if the market cannot have ticked since our last fetch and we haven't transacted since.
+ * @param {NS} ns
+ * @returns {Promise<{has4sApi: boolean, has4sData: boolean, stocks: {[sym: string]: {ask: number, bid: number, vol: number|null, prob: number|null, pos: number[]}}}|null>} */
+async function getMarketSnapshot(ns, allStocks) {
+    if (!forceMarketRefresh && Date.now() < earliestNextMarketTick) return null;
+    const wasForced = forceMarketRefresh;
+    forceMarketRefresh = false;
+    const fetchStart = Date.now();
+    const snapshot = await getNsDataThroughFile(
+        ns,
+        `(() => { const a = ns.stock.has4SDataTixApi(); return { has4sApi: a, has4sData: ns.stock.has4SData(), ` +
+            `stocks: Object.fromEntries(ns.args.map(s => [s, { ask: ns.stock.getAskPrice(s), bid: ns.stock.getBidPrice(s), ` +
+            `vol: a ? ns.stock.getVolatility(s) : null, prob: a ? ns.stock.getForecast(s) : null, pos: ns.stock.getPosition(s) }])) }; })()`,
+        "/Temp/stock-market-snapshot.txt",
+        allStockSymbols,
+    );
+    // If prices changed (and not because of our own trades), the tick happened after our previous fetch started,
+    // so the next tick can be no sooner than minMsBetweenMarketTicks after that.
+    const pricesChanged = allStocks.some(
+        (stk) => stk.ask_price != snapshot.stocks[stk.sym].ask,
+    );
+    if (pricesChanged && !wasForced && lastSnapshotStart > 0)
+        earliestNextMarketTick = lastSnapshotStart + minMsBetweenMarketTicks;
+    lastSnapshotStart = fetchStart;
+    lastHas4SData = snapshot.has4sData;
+    return snapshot;
+}
+
 /** @param {NS} ns **/
-async function refresh(ns, has4s, allStocks, myStocks) {
+async function refresh(ns, has4s, allStocks, myStocks, snapshot) {
     let holdings = 0;
 
-    // Dodge hefty RAM requirements by spawning a sequence of temporary scripts to collect info for us one function at a time
-    const dictAskPrices = await getStockInfoDict(ns, "getAskPrice");
-    const dictBidPrices = await getStockInfoDict(ns, "getBidPrice");
-    const dictVolatilities = !has4s
-        ? null
-        : await getStockInfoDict(ns, "getVolatility");
-    const dictForecasts = !has4s
-        ? null
-        : await getStockInfoDict(ns, "getForecast");
-    const dictPositions = mock
-        ? null
-        : await getStockInfoDict(ns, "getPosition");
+    // All data was collected in a single ram-dodging temp script (see getMarketSnapshot)
+    const pick = (field) =>
+        Object.fromEntries(
+            Object.entries(snapshot.stocks).map(([sym, d]) => [sym, d[field]]),
+        );
+    const dictAskPrices = pick("ask");
+    const dictBidPrices = pick("bid");
+    const dictVolatilities = !has4s ? null : pick("vol");
+    const dictForecasts = !has4s ? null : pick("prob");
+    const dictPositions = mock ? null : pick("pos");
     const ticked = allStocks.some(
         (stk) => stk.ask_price != dictAskPrices[stk.sym],
     ); // If any price has changed since our last update, the stock market has "ticked"
@@ -787,13 +839,15 @@ let sellStockWrapper = async (ns, sym, numShares) =>
     await transactStock(ns, sym, numShares, "sellStock"); // ns.stock.sellStock(sym, numShares);
 let sellShortWrapper = async (ns, sym, numShares) =>
     await transactStock(ns, sym, numShares, "sellShort"); // ns.stock.sellShort(sym, numShares);
-let transactStock = async (ns, sym, numShares, action) =>
-    await getNsDataThroughFile(
+let transactStock = async (ns, sym, numShares, action) => {
+    forceMarketRefresh = true; // Our positions (and possibly prices) change, so refresh market data next loop
+    return await getNsDataThroughFile(
         ns,
         `ns.stock.${action}(ns.args[0], ns.args[1])`,
         null,
         [sym, numShares],
     );
+};
 
 /** @param {NS} ns
  * Automatically buys either a short or long position depending on the outlook of the stock. */
@@ -1001,34 +1055,17 @@ async function liquidate(ns) {
 
 /** @param {NS} ns **/
 /** @param {Player} playerStats **/
+let last4SApiFailure = 0; // Back off after a failed purchase, so we don't liquidate every loop
 async function tryGet4SApi(ns, playerStats, budget) {
-    if (await checkAccess(ns, "has4SDataTixApi")) return false; // Only return true if we just bought it
-    const cost4sData = 1e9 * bitNodeMults.FourSigmaMarketDataCost;
+    // Only called while pre-4S (the latest market snapshot reported no 4S TIX API access), so no need to re-check that here
+    if (Date.now() - last4SApiFailure < 10 * 60 * 1000) return false;
+    // The TIX API version of 4S data doesn't require the (UI) 4S Market Data, so don't buy that
     const cost4sApi = 25e9 * bitNodeMults.FourSigmaMarketDataApiCost;
-    const has4S = await checkAccess(ns, "has4SData");
-    const totalCost = (has4S ? 0 : cost4sData) + cost4sApi;
-    // Liquidate shares if it would allow us to afford 4S API data
-    if (totalCost > budget)
+    if (cost4sApi > budget)
         /* Need to reserve some money to invest */
         return false;
-    if (playerStats.money < totalCost) await liquidate(ns);
-    if (!has4S) {
-        if (await tryBuy(ns, "purchase4SMarketData"))
-            log(
-                ns,
-                `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} ` +
-                    `(At ${formatDuration(getTimeInBitnode())} into BitNode)`,
-                true,
-                "success",
-            );
-        else
-            log(
-                ns,
-                "ERROR attempting to purchase 4SMarketData!",
-                false,
-                "error",
-            );
-    }
+    // Liquidate shares if it would allow us to afford 4S API data
+    if (playerStats.money < cost4sApi) await liquidate(ns);
     if (await tryBuy(ns, "purchase4SMarketDataTixApi")) {
         log(
             ns,
@@ -1038,14 +1075,15 @@ async function tryGet4SApi(ns, playerStats, budget) {
             "success",
         );
         return true;
-    } else {
-        log(
-            ns,
-            "ERROR attempting to purchase 4SMarketDataTixApi!",
-            false,
-            "error",
-        );
     }
+    last4SApiFailure = Date.now();
+    log(
+        ns,
+        "ERROR attempting to purchase 4SMarketDataTixApi (e.g. 4S data disabled in this BitNode, or the cost estimate " +
+            "was off). Retrying in 10 minutes.",
+        false,
+        "error",
+    );
     return false;
 }
 
@@ -1060,6 +1098,7 @@ async function checkAccess(ns, stockFn) {
  * @param {"purchaseWseAccount"|"purchaseTixApi"|"purchase4SMarketData"|"purchase4SMarketDataTixApi"} stockFn
  * Helper to try and buy a stock access. Yes, the code is the same as above, but I wanted to be explicit. */
 async function tryBuy(ns, stockFn) {
+    forceMarketRefresh = true; // Access may have changed, refresh market data next loop
     return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`);
 }
 

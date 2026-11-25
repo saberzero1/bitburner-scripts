@@ -153,32 +153,41 @@ const ALL_MODEL_IDS = [
     "(The Labyrinth)",
 ];
 
+// Solvers the orchestrator (on home) can run without per-attempt feedback. Feedback-based models
+// (FEEDBACK_MODEL_IDS) are solved by the probes, which read the feedback from the server log.
 const SOLVER_MAP = {
     ZeroLogon: solveZeroLogon,
     "DeskMemo_3.1": solveEchoVuln,
     "FreshInstall_1.0": solveFreshInstall,
     "CloudBlare(tm)": solveCloudBlare,
     Laika4: solveDogNames,
-    NIL: solveYesnt,
     Pr0verFl0: solveBufferOverflow,
     "PHP 5.4": solveSortedEchoVuln,
-    DeepGreen: solveMastermind,
     BellaCuore: solveRomanNumeral,
-    "AccountsManager_4.2": solveGuessNumber,
     OctantVoxel: solveConvertToBase10,
-    "Factori-Os": solveDivisibilityTest,
     OpenWebAccessPoint: solvePacketSniffer,
-    KingOfTheHill: solveGlobalMaxima,
-    "RateMyPix.Auth": solveSpiceLevel,
     "PrimeTime 2": solveLargestPrimeFactor,
     TopPass: solveTopPass,
     "EuroZone Free": solveEuroZone,
-    "2G_cellular": solveTimingAttack,
     110100100: solveBinaryEncoded,
     MathML: solveParsedExpression,
     OrdoXenos: solveXorEncrypted,
-    "BigMo%od": solveTripleModulo,
 };
+
+// Models whose password can only be found with per-attempt feedback (authentication.ts checkPassword).
+const FEEDBACK_MODEL_IDS = new Set([
+    "NIL", // yes/yesn't per position
+    "DeepGreen", // mastermind exact/misplaced counts
+    "AccountsManager_4.2", // higher/lower
+    "Factori-Os", // divisibility
+    "KingOfTheHill", // altitude
+    "RateMyPix.Auth", // count of correct positions
+    "2G_cellular", // first mismatch index
+    "BigMo%od", // modulo results
+]);
+// Never format-brute-forced: the solver already covers every candidate (sorted echo permutations) or the
+// password is read from the server log (packet sniffer).
+const NO_BRUTEFORCE_MODEL_IDS = new Set(["PHP 5.4", "OpenWebAccessPoint"]);
 
 export function getDarknetPasswordSolver(modelId) {
     if (!modelId) return null;
@@ -220,52 +229,101 @@ export function getDarknetPasswordSolver(modelId) {
 
 export async function solveLabyrinth(ns, hostname) {
     const visited = new Set();
-    const stack = [];
-    let position = { x: 0, y: 0 };
-    let lastView = null;
+    const pathStack = [];
+    // Start position is always (1,1) per source
+    let pos = { x: 1, y: 1 };
 
-    const initial = await safeAuthenticate(ns, hostname, "go north");
-    if (initial?.success) return true;
-    lastView = parseLabyrinthView(initial?.data);
-    if (!lastView) return false;
+    // Try labreport first to get reliable position + open directions
+    try {
+        const report = ns.dnet.labreport();
+        if (report && report.success && report.coords) {
+            pos = { x: report.coords[0], y: report.coords[1] };
+        }
+    } catch {}
 
-    while (true) {
-        const key = `${position.x},${position.y}`;
-        if (!visited.has(key)) visited.add(key);
+    // Maximum iterations to prevent infinite loops (largest maze is 60x40 = 2400 cells)
+    const maxIter = 5000;
+    let iter = 0;
 
-        const openDirs = getOpenDirections(lastView);
-        const nextDir = openDirs.find(
-            (dir) => !visited.has(nextPositionKey(position, dir)),
-        );
-        if (nextDir) {
-            stack.push({ position: { ...position }, dir: nextDir });
-            const moved = await moveLabyrinth(ns, hostname, position, nextDir);
-            if (moved.success) return true;
-            if (moved.moved) {
-                position = moved.position;
+    while (iter++ < maxIter) {
+        const key = `${pos.x},${pos.y}`;
+        visited.add(key);
+
+        // Get open directions — prefer labreport (free, reliable), fallback to labradar/view parsing
+        let openDirs = null;
+        try {
+            const rpt = ns.dnet.labreport();
+            if (rpt && rpt.success) {
+                openDirs = [];
+                if (rpt.north) openDirs.push("north");
+                if (rpt.south) openDirs.push("south");
+                if (rpt.east) openDirs.push("east");
+                if (rpt.west) openDirs.push("west");
+                if (rpt.coords) {
+                    pos = { x: rpt.coords[0], y: rpt.coords[1] };
+                }
             }
-            lastView = moved.view;
-            if (!lastView) return false;
+        } catch {}
+
+        // Fallback: try labradar and parse the 7x7 view
+        if (!openDirs) {
+            try {
+                const radar = ns.dnet.labradar();
+                if (radar && radar.success && radar.message) {
+                    openDirs = parseRadarDirections(radar.message);
+                }
+            } catch {}
+        }
+
+        // Last resort: send a dummy auth to get surroundings from 3x3 view data
+        if (!openDirs) {
+            const probe = await safeAuthenticate(ns, hostname, "go north");
+            if (probe?.success) return true;
+            const view = parseLabyrinthView(probe?.data);
+            if (view) {
+                openDirs = getOpenDirections(view);
+            }
+        }
+
+        if (!openDirs) return false;
+
+        // Find an unvisited direction (maze moves 2 cells per step)
+        const nextDir = openDirs.find((dir) => {
+            const delta = directionDelta(dir);
+            const nk = `${pos.x + delta.dx},${pos.y + delta.dy}`;
+            return !visited.has(nk);
+        });
+
+        if (nextDir) {
+            pathStack.push({ position: { ...pos }, dir: nextDir });
+            const moveResult = await moveLabyrinth(ns, hostname, pos, nextDir);
+            if (moveResult.success) return true;
+            if (moveResult.moved) {
+                pos = moveResult.position;
+            } else {
+                // Wall hit despite directions saying it's open — pop stack entry
+                pathStack.pop();
+            }
             continue;
         }
 
-        if (stack.length === 0) return false;
-        const back = stack.pop();
+        // No unvisited neighbors — backtrack
+        if (pathStack.length === 0) return false;
+        const back = pathStack.pop();
         const reverseDir = reverseDirection(back.dir);
-        const movedBack = await moveLabyrinth(
-            ns,
-            hostname,
-            position,
-            reverseDir,
-        );
-        if (movedBack.success) return true;
-        if (!movedBack.moved) return false;
-        position = movedBack.position;
-        lastView = movedBack.view;
-        if (!lastView) return false;
+        const moveBack = await moveLabyrinth(ns, hostname, pos, reverseDir);
+        if (moveBack.success) return true;
+        if (!moveBack.moved) return false; // Can't backtrack — stuck
+        pos = moveBack.position;
     }
+
+    return false; // Exceeded max iterations
 }
 
+/**
+ * Password-like tokens and hints from server logs or clue text. Only "password: X" / "password = X" counts:
+ * free text such as "The password for X contains a and b" or "Password is not divisible by 7" does not.
+ */
 export function parseDarknetLogs(logs) {
     const passwords = [];
     const hints = [];
@@ -274,11 +332,9 @@ export function parseDarknetLogs(logs) {
         : String(logs || "").split(/\r?\n/);
     for (const log of entries) {
         const line = String(log || "");
-        const pwdMatch = line.match(/password[:\s]+['"]?([^'"}\s]+)/i);
+        const pwdMatch = line.match(/password\s*[:=]\s*['"]?([^'"}\s,]+)/i);
         if (pwdMatch) passwords.push(pwdMatch[1]);
-        const authMatch = line.match(
-            /auth(?:enticate)?[:\s]+['"]?([^'"}\s]+)/i,
-        );
+        const authMatch = line.match(/auth(?:enticate)?\s*:\s*['"]?([^'"}\s,]+)/i);
         if (authMatch) passwords.push(authMatch[1]);
         const hintMatch = line.match(/hint[:\s]+(.+)/i);
         if (hintMatch) hints.push(hintMatch[1].trim());
@@ -327,6 +383,9 @@ export function estimateCrackDifficulty(serverInfo) {
 }
 
 export async function tryFormatBruteforce(ns, hostname, serverInfo) {
+    // Never blind-guess models whose solver needs feedback, or ones a solver already covers exhaustively.
+    if (needsAuthFeedback(serverInfo) || NO_BRUTEFORCE_MODEL_IDS.has(serverInfo?.modelId)) return null;
+    resetCrackedCheck(hostname);
     const format = serverInfo?.passwordFormat;
     const length =
         Number.isFinite(serverInfo?.passwordLength) &&
@@ -343,6 +402,7 @@ export async function tryFormatBruteforce(ns, hostname, serverInfo) {
             const pin = i.toString();
             const result = await safeAuthenticate(ns, hostname, pin);
             if (result.success) return pin;
+            if (await isAlreadyCracked(ns, hostname)) return null;
         }
         return null;
     }
@@ -361,8 +421,27 @@ export async function tryFormatBruteforce(ns, hostname, serverInfo) {
         const candidate = buildCandidate(i, charset, length);
         const result = await safeAuthenticate(ns, hostname, candidate);
         if (result.success) return candidate;
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
+}
+
+/**
+ * True for models whose solver needs per-attempt feedback (authentication.ts). authenticate() only returns
+ * that feedback (`data`) on labyrinth servers; for everything else it is written to the server log, which
+ * the probes read with heartbleed. The orchestrator leaves these to the probes and never brute-forces them.
+ */
+export function needsAuthFeedback(serverInfo) {
+    const modelId = serverInfo?.modelId || "";
+    if (FEEDBACK_MODEL_IDS.has(modelId)) return true;
+    // Roman numerals: the value itself below difficulty 8, a range to binary-search (needs feedback) above.
+    if (modelId === "BellaCuore") return getHintData(serverInfo).includes(",");
+    // Sorted echo: RMS-deviation feedback only exists for 5+ digit passwords; shorter ones are permuted.
+    if (modelId === "PHP 5.4") {
+        const digits = (getHintData(serverInfo) || getHint(serverInfo)).match(/\d/g);
+        return getPasswordLength(serverInfo, digits?.length ?? 0) >= 5;
+    }
+    return false;
 }
 
 async function solveZeroLogon() {
@@ -408,30 +487,6 @@ async function solveDogNames(ns, hostname) {
     return await tryDictionary(ns, hostname, dogNameDictionary);
 }
 
-async function solveYesnt(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, 4);
-    const charset =
-        getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
-    let current = charset[0].repeat(length);
-    for (let i = 0; i < length; i++) {
-        let found = false;
-        for (const ch of charset) {
-            const attempt =
-                current.substring(0, i) + ch + current.substring(i + 1);
-            const resp = await safeAuthenticate(ns, hostname, attempt);
-            if (resp.success) return attempt;
-            const flags = parseYesnt(resp);
-            if (flags && flags[i]) {
-                current = attempt;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return null;
-    }
-    return current;
-}
-
 async function solveBufferOverflow(ns, hostname, serverInfo) {
     const hint = getHint(serverInfo);
     const match = hint.match(/(\d+)/);
@@ -444,139 +499,22 @@ async function solveBufferOverflow(ns, hostname, serverInfo) {
 }
 
 async function solveSortedEchoVuln(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
     const sortedRaw = (getHintData(serverInfo) || getHint(serverInfo)).replace(
         /\s+/g,
         "",
     );
     const sorted = sortedRaw.match(/\d+/g)?.join("") || "";
     if (!sorted || !/^\d+$/.test(sorted)) return null;
-    const length = sorted.length;
-
-    if (length < 5 || length <= 7) {
-        const result = await solvePermutationByAuth(
-            ns,
-            hostname,
-            sorted.split(""),
-            10000,
-        );
-        return result;
-    }
-
-    const attempts = 2500;
-    let bestCandidate = shuffleString(sorted);
-    let bestScore = Infinity;
-    let stagnation = 0;
-
-    for (let i = 0; i < attempts; i++) {
-        const resp = await safeAuthenticate(ns, hostname, bestCandidate);
-        if (resp.success) return bestCandidate;
-        const rmsd = parseRmsd(resp);
-        if (!Number.isFinite(rmsd)) break;
-        if (rmsd < bestScore) {
-            bestScore = rmsd;
-            stagnation = 0;
-        } else {
-            stagnation++;
-        }
-        const next = mutateSwap(bestCandidate);
-        const nextResp = await safeAuthenticate(ns, hostname, next);
-        if (nextResp.success) return next;
-        const nextRmsd = parseRmsd(nextResp);
-        if (Number.isFinite(nextRmsd) && nextRmsd <= bestScore) {
-            bestCandidate = next;
-            bestScore = nextRmsd;
-        }
-        if (stagnation > 50) {
-            bestCandidate = shuffleString(sorted);
-            stagnation = 0;
-        }
-    }
-    return null;
-}
-
-async function solveMastermind(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, 4);
-    const charset =
-        getCharsetForFormat(serverInfo?.passwordFormat) || "0123456789";
-    const constraints = [];
-    const counts = new Map();
-
-    for (const ch of charset) {
-        const attempt = ch.repeat(length);
-        const resp = await safeAuthenticate(ns, hostname, attempt);
-        if (resp.success) return attempt;
-        const feedback = parseMastermindData(resp);
-        if (feedback) {
-            counts.set(ch, feedback.exact + feedback.misplaced);
-            constraints.push({
-                guess: attempt,
-                exact: feedback.exact,
-                misplaced: feedback.misplaced,
-            });
-        }
-    }
-
-    const multiset = [];
-    for (const [ch, count] of counts.entries()) {
-        for (let i = 0; i < count; i++) multiset.push(ch);
-    }
-
-    if (multiset.length !== length || multiset.length === 0) {
-        return await bruteMastermind(
-            ns,
-            hostname,
-            charset,
-            length,
-            constraints,
-        );
-    }
-
-    const tries = { count: 0, limit: 6000 };
-    const checkCandidate = async (candidate) => {
-        for (const c of constraints) {
-            const feedback = compareMastermind(candidate, c.guess);
-            if (
-                feedback.exact !== c.exact ||
-                feedback.misplaced !== c.misplaced
-            )
-                return false;
-        }
-        const resp = await safeAuthenticate(ns, hostname, candidate);
-        if (resp.success) return candidate;
-        const feedback = parseMastermindData(resp);
-        if (feedback)
-            constraints.push({
-                guess: candidate,
-                exact: feedback.exact,
-                misplaced: feedback.misplaced,
-            });
-        return false;
-    };
-
-    return await permuteWithConstraints(multiset, tries, checkCandidate);
+    // 5+ digit passwords need RMS-deviation feedback from the server log (see needsAuthFeedback); the
+    // probes solve those. Shorter ones have at most 24 orderings.
+    if (sorted.length >= 5) return null;
+    return await solvePermutationByAuth(ns, hostname, sorted.split(""), 200);
 }
 
 async function solveRomanNumeral(ns, hostname, serverInfo) {
-    const hintData = getHintData(serverInfo);
-    if (hintData.includes(",")) {
-        const [minRaw, maxRaw] = hintData.split(",");
-        const min = romanToNumber(minRaw.trim());
-        const max = romanToNumber(maxRaw.trim());
-        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-        let low = Math.min(min, max);
-        let high = Math.max(min, max);
-        while (low <= high) {
-            const mid = Math.floor((low + high) / 2);
-            const resp = await safeAuthenticate(ns, hostname, String(mid));
-            if (resp.success) return String(mid);
-            const msg = String(resp.data || resp.message || "").toUpperCase();
-            if (msg.includes("ALTUS")) high = mid - 1;
-            else if (msg.includes("PARUM")) low = mid + 1;
-            else break;
-        }
-        return null;
-    }
-
+    // A range hint ("between X and Y") needs ALTUS/PARUM feedback from the server log: left to the probes.
+    if (getHintData(serverInfo).includes(",")) return null;
     const encoded = extractRoman(
         getHintData(serverInfo) || getHint(serverInfo),
     );
@@ -584,27 +522,6 @@ async function solveRomanNumeral(ns, hostname, serverInfo) {
     const candidate = String(romanToNumber(encoded));
     const result = await safeAuthenticate(ns, hostname, candidate);
     return result.success ? candidate : null;
-}
-
-async function solveGuessNumber(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, 4);
-    const maxValue = Math.pow(10, length) - 1;
-    let low = 0;
-    let high = maxValue;
-    for (let attempt = 0; attempt < 32 && low <= high; attempt++) {
-        const guess = Math.floor((low + high) / 2);
-        const resp = await safeAuthenticate(ns, hostname, String(guess));
-        if (resp.success) return String(guess);
-        const direction = String(resp.data || "").toLowerCase();
-        if (direction === "higher") {
-            low = guess + 1;
-        } else if (direction === "lower") {
-            high = guess - 1;
-        } else {
-            break;
-        }
-    }
-    return null;
 }
 
 async function solveConvertToBase10(ns, hostname, serverInfo) {
@@ -621,33 +538,68 @@ async function solveConvertToBase10(ns, hostname, serverInfo) {
     return result.success ? candidate : null;
 }
 
-async function solveDivisibilityTest(ns, hostname) {
-    const primes = generatePrimes(997);
-    let product = 1n;
-    for (const prime of primes) {
-        const primeValue = BigInt(prime);
-        const divisible = await isDivisibleBy(ns, hostname, primeValue);
-        if (!divisible) continue;
-        let power = primeValue;
-        while (true) {
-            const nextPower = power * primeValue;
-            const divisiblePower = await isDivisibleBy(ns, hostname, nextPower);
-            if (!divisiblePower) break;
-            power = nextPower;
+/**
+ * OpenWebAccessPoint (packet sniffer) servers put captured traffic in the `data` of a FAILED attempt's server
+ * log entry, read back with heartbleed (ns.dnet.packetCapture was removed in #2594).
+ * - Easy servers (difficulty <= 16): traffic contains " <hostname>:<password> ".
+ * - Hard servers: the bare password is embedded in random noise at a random offset, so the
+ *   only length-L substring present in every capture is the password.
+ */
+async function sniffPacketPassword(ns, hostname, serverInfo, maxCaptures = 12) {
+    const expectedLength = serverInfo?.passwordLength || 0;
+    const tried = new Set();
+    let common = null;
+    const tryCandidate = async (candidate) => {
+        if (!candidate || tried.has(candidate)) return false;
+        if (expectedLength && candidate.length !== expectedLength) return false;
+        tried.add(candidate);
+        const r = await safeAuthenticate(ns, hostname, candidate);
+        return !!r?.success;
+    };
+    for (let i = 0; i < maxCaptures; i++) {
+        const probeGuess = "0".repeat(Math.max(1, expectedLength || 1));
+        const r = await safeAuthenticate(ns, hostname, probeGuess);
+        if (r?.success) return probeGuess;
+        tried.add(probeGuess);
+        // authenticate() only returns feedback data on labyrinth servers; elsewhere it's in the server log,
+        // as JSON of the response ({code, message, data, passwordAttempted}). data holds the captured packets.
+        let text = "";
+        try {
+            const bleed = await ns.dnet.heartbleed(hostname, { peek: true, logsToCapture: 8 });
+            for (const line of bleed?.logs ?? []) {
+                try {
+                    const entry = JSON.parse(String(line));
+                    if (entry?.passwordAttempted === probeGuess && typeof entry.data === "string") {
+                        text = entry.data;
+                        break;
+                    }
+                } catch {}
+            }
+        } catch {}
+        if (!text) continue;
+        for (const m of text.matchAll(/(\S+):(\S+)/g)) {
+            if (m[1] === hostname && (await tryCandidate(m[2]))) return m[2];
         }
-        let temp = power;
-        while (temp > 1n) {
-            product *= primeValue;
-            temp /= primeValue;
+        if (!expectedLength || text.length < expectedLength) continue;
+        const subs = new Set();
+        for (let j = 0; j + expectedLength <= text.length; j++)
+            subs.add(text.slice(j, j + expectedLength));
+        common = common ? new Set([...common].filter((s) => subs.has(s))) : subs;
+        if (common.size === 0) common = null; // capture didn't contain it; start over
+        else if (common.size <= 3 && i > 0) {
+            for (const c of common) if (await tryCandidate(c)) return c;
+            common = null;
         }
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
-    if (product <= 1n) return null;
-    const candidate = product.toString();
-    const result = await safeAuthenticate(ns, hostname, candidate);
-    return result.success ? candidate : null;
+    return null;
 }
 
 async function solvePacketSniffer(ns, hostname, serverInfo) {
+    resetCrackedCheck(hostname);
+    const sniffed = await sniffPacketPassword(ns, hostname, serverInfo);
+    if (sniffed !== null) return sniffed;
+
     const candidates = new Set();
     const hint = getHint(serverInfo);
     if (hint) {
@@ -656,82 +608,20 @@ async function solvePacketSniffer(ns, hostname, serverInfo) {
     }
     for (const value of defaultSettingsDictionary) candidates.add(value);
     for (const value of commonPasswordDictionary) candidates.add(value);
+    const expectedLength = serverInfo?.passwordLength;
+    const format = serverInfo?.passwordFormat;
     for (const candidate of candidates) {
         if (!candidate) continue;
+        if (expectedLength && candidate.length !== expectedLength) continue;
+        if (format === "numeric" && !/^\d+$/.test(candidate)) continue;
+        if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(candidate)) continue;
+        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(candidate))
+            continue;
         const result = await safeAuthenticate(ns, hostname, candidate);
         if (result.success) return candidate;
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
-}
-
-async function solveGlobalMaxima(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, 3);
-    const width = Math.pow(10, Math.max(length - 2, 0)) + 1;
-    let low = 0;
-    let high = width - 1;
-    const cache = new Map();
-
-    const altitudeAt = async (x) => {
-        if (cache.has(x)) return cache.get(x);
-        const resp = await safeAuthenticate(ns, hostname, String(x));
-        if (resp.success) return { success: true, altitude: Number(resp.data) };
-        const altitude = parseAltitude(resp);
-        const value = { success: false, altitude };
-        cache.set(x, value);
-        return value;
-    };
-
-    while (high - low > 3) {
-        const m1 = Math.floor(low + (high - low) / 3);
-        const m2 = Math.floor(high - (high - low) / 3);
-        const a1 = await altitudeAt(m1);
-        if (a1.success) return String(m1);
-        const a2 = await altitudeAt(m2);
-        if (a2.success) return String(m2);
-        if (a1.altitude < a2.altitude) low = m1 + 1;
-        else high = m2 - 1;
-    }
-
-    let best = { x: low, altitude: -Infinity };
-    for (let x = low; x <= high; x++) {
-        const resp = await safeAuthenticate(ns, hostname, String(x));
-        if (resp.success) return String(x);
-        const altitude = parseAltitude(resp);
-        if (altitude > best.altitude) best = { x, altitude };
-    }
-    return best ? String(best.x) : null;
-}
-
-async function solveSpiceLevel(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, null);
-    const charset =
-        getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
-    if (!length) return null;
-
-    let guess = charset[0].repeat(length);
-    let baseResp = await safeAuthenticate(ns, hostname, guess);
-    if (baseResp.success) return guess;
-    let baseCount = parsePepperCount(baseResp);
-    if (!Number.isFinite(baseCount)) return null;
-
-    for (let i = 0; i < length; i++) {
-        let bestChar = guess[i];
-        let bestCount = baseCount;
-        for (const ch of charset) {
-            const attempt = guess.substring(0, i) + ch + guess.substring(i + 1);
-            const resp = await safeAuthenticate(ns, hostname, attempt);
-            if (resp.success) return attempt;
-            const count = parsePepperCount(resp);
-            if (Number.isFinite(count) && count > bestCount) {
-                bestCount = count;
-                bestChar = ch;
-            }
-        }
-        guess = guess.substring(0, i) + bestChar + guess.substring(i + 1);
-        baseCount = bestCount;
-    }
-    const finalResp = await safeAuthenticate(ns, hostname, guess);
-    return finalResp.success ? guess : null;
 }
 
 async function solveLargestPrimeFactor(ns, hostname, serverInfo) {
@@ -750,29 +640,6 @@ async function solveTopPass(ns, hostname) {
 
 async function solveEuroZone(ns, hostname) {
     return await tryDictionary(ns, hostname, euCountries);
-}
-
-async function solveTimingAttack(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, 4);
-    const charset =
-        getCharsetForFormat(serverInfo?.passwordFormat) || defaultCharset();
-    let prefix = "";
-    for (let i = 0; i < length; i++) {
-        let found = false;
-        for (const ch of charset) {
-            const attempt = (prefix + ch).padEnd(length, charset[0]);
-            const resp = await safeAuthenticate(ns, hostname, attempt);
-            if (resp.success) return attempt;
-            const idx = parseMismatchIndex(resp);
-            if (Number.isFinite(idx) && idx > i) {
-                prefix += ch;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return null;
-    }
-    return prefix;
 }
 
 async function solveBinaryEncoded(ns, hostname, serverInfo) {
@@ -819,35 +686,6 @@ async function solveXorEncrypted(ns, hostname, serverInfo) {
     return result.success ? output : null;
 }
 
-async function solveTripleModulo(ns, hostname, serverInfo) {
-    const length = getPasswordLength(serverInfo, null);
-    if (!length) return null;
-    const max = BigInt(Math.pow(10, length) - 1);
-    const moduli = [31, 29, 27, 25, 23];
-    const residues = [];
-    for (const mod of moduli) {
-        const n = nextAlignedGreater(max, mod);
-        const resp = await safeAuthenticate(ns, hostname, n.toString());
-        if (resp.success) return n.toString();
-        const result = parseModuloResult(resp);
-        if (!Number.isFinite(result)) return null;
-        residues.push(BigInt(result));
-    }
-    const modulus = moduli.reduce((acc, m) => acc * BigInt(m), 1n);
-    let candidate = crt(
-        residues,
-        moduli.map((m) => BigInt(m)),
-    );
-    if (candidate < 0n) candidate = ((candidate % modulus) + modulus) % modulus;
-    while (candidate > max) candidate -= modulus;
-    for (let k = 0n; candidate + k * modulus <= max; k++) {
-        const attempt = candidate + k * modulus;
-        const result = await safeAuthenticate(ns, hostname, attempt.toString());
-        if (result.success) return attempt.toString();
-    }
-    return null;
-}
-
 function getHint(serverInfo) {
     return String(
         serverInfo?.staticPasswordHint ?? serverInfo?.passwordHint ?? "",
@@ -855,7 +693,9 @@ function getHint(serverInfo) {
 }
 
 function getHintData(serverInfo) {
-    return String(serverInfo?.passwordHintData ?? "").trim();
+    return String(
+        serverInfo?.data ?? serverInfo?.passwordHintData ?? "",
+    ).trim();
 }
 
 function getPasswordLength(serverInfo, fallback) {
@@ -886,10 +726,43 @@ function logError(ns, message, err) {
     } catch {}
 }
 
-async function tryDictionary(ns, hostname, words) {
+/** Auth-attempt counter per hostname — used to throttle isAlreadyCracked checks. */
+const _crackedCheckCounters = new Map();
+const _CRACKED_CHECK_INTERVAL = 25;
+
+/**
+ * Throttled check: has another agent already cracked this server?
+ * Only actually queries every _CRACKED_CHECK_INTERVAL calls per hostname.
+ * Returns true if server already has admin rights (cracked by someone else).
+ */
+async function isAlreadyCracked(ns, hostname) {
+    const count = (_crackedCheckCounters.get(hostname) || 0) + 1;
+    _crackedCheckCounters.set(hostname, count);
+    if (count % _CRACKED_CHECK_INTERVAL !== 0) return false;
+    try {
+        return ns.hasRootAccess(hostname) === true;
+    } catch {
+        return false;
+    }
+}
+
+/** Reset the cracked-check counter for a hostname (call at start of each solver). */
+function resetCrackedCheck(hostname) {
+    _crackedCheckCounters.delete(hostname);
+}
+
+async function tryDictionary(ns, hostname, words, serverInfo) {
+    resetCrackedCheck(hostname);
+    const expectedLength = serverInfo?.passwordLength;
+    const format = serverInfo?.passwordFormat;
     for (const word of words) {
+        if (expectedLength && word.length !== expectedLength) continue;
+        if (format === "numeric" && !/^\d+$/.test(word)) continue;
+        if (format === "alphabetic" && !/^[a-zA-Z]+$/.test(word)) continue;
+        if (format === "alphanumeric" && !/^[a-zA-Z0-9]+$/.test(word)) continue;
         const result = await safeAuthenticate(ns, hostname, word);
         if (result.success) return word;
+        if (await isAlreadyCracked(ns, hostname)) return null;
     }
     return null;
 }
@@ -952,10 +825,6 @@ function getCharsetForFormat(format) {
     return null;
 }
 
-function defaultCharset() {
-    return "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-}
-
 function buildCandidate(index, charset, length) {
     let value = index;
     let output = "";
@@ -966,111 +835,8 @@ function buildCandidate(index, charset, length) {
     return output;
 }
 
-function parseYesnt(resp) {
-    const data = String(resp?.data ?? "").trim();
-    if (!data) return null;
-    return data.split(",").map((entry) => entry.trim().startsWith("yes"));
-}
-
-function parseMismatchIndex(resp) {
-    const text = String(resp?.message ?? resp?.data ?? "");
-    const match = text.match(/\((\d+)\)/);
-    return match ? Number(match[1]) : NaN;
-}
-
-function parseMastermindData(resp) {
-    const data = String(resp?.data ?? resp?.message ?? "");
-    const match = data.match(/(\d+)\s*,\s*(\d+)/);
-    if (!match) return null;
-    return { exact: Number(match[1]), misplaced: Number(match[2]) };
-}
-
-function compareMastermind(candidate, guess) {
-    let exact = 0;
-    const remainingCandidate = [];
-    const remainingGuess = [];
-    for (let i = 0; i < candidate.length; i++) {
-        if (candidate[i] === guess[i]) exact++;
-        else {
-            remainingCandidate.push(candidate[i]);
-            remainingGuess.push(guess[i]);
-        }
-    }
-    const counts = new Map();
-    for (const ch of remainingCandidate)
-        counts.set(ch, (counts.get(ch) || 0) + 1);
-    let misplaced = 0;
-    for (const ch of remainingGuess) {
-        const count = counts.get(ch) || 0;
-        if (count > 0) {
-            misplaced++;
-            counts.set(ch, count - 1);
-        }
-    }
-    return { exact, misplaced };
-}
-
-async function bruteMastermind(ns, hostname, charset, length, constraints) {
-    const total = Math.pow(charset.length, length);
-    if (!Number.isFinite(total) || total > 300000) return null;
-    for (let i = 0; i < total; i++) {
-        const candidate = buildCandidate(i, charset, length);
-        let ok = true;
-        for (const c of constraints) {
-            const feedback = compareMastermind(candidate, c.guess);
-            if (
-                feedback.exact !== c.exact ||
-                feedback.misplaced !== c.misplaced
-            ) {
-                ok = false;
-                break;
-            }
-        }
-        if (!ok) continue;
-        const resp = await safeAuthenticate(ns, hostname, candidate);
-        if (resp.success) return candidate;
-        const feedback = parseMastermindData(resp);
-        if (feedback)
-            constraints.push({
-                guess: candidate,
-                exact: feedback.exact,
-                misplaced: feedback.misplaced,
-            });
-    }
-    return null;
-}
-
-async function permuteWithConstraints(multiset, tries, checkCandidate) {
-    const counts = new Map();
-    for (const d of multiset) counts.set(d, (counts.get(d) || 0) + 1);
-    const keys = Array.from(counts.keys());
-    const targetLen = multiset.length;
-    const buffer = new Array(targetLen);
-
-    const backtrack = async (idx) => {
-        if (tries.count >= tries.limit) return null;
-        if (idx === targetLen) {
-            tries.count++;
-            const candidate = buffer.join("");
-            const match = await checkCandidate(candidate);
-            return match || null;
-        }
-        for (const key of keys) {
-            const count = counts.get(key);
-            if (!count) continue;
-            counts.set(key, count - 1);
-            buffer[idx] = key;
-            const result = await backtrack(idx + 1);
-            if (result) return result;
-            counts.set(key, count);
-        }
-        return null;
-    };
-
-    return await backtrack(0);
-}
-
 async function solvePermutationByAuth(ns, hostname, digits, limit) {
+    resetCrackedCheck(hostname);
     const counts = new Map();
     for (const d of digits) counts.set(d, (counts.get(d) || 0) + 1);
     const keys = Array.from(counts.keys());
@@ -1084,6 +850,7 @@ async function solvePermutationByAuth(ns, hostname, digits, limit) {
             const candidate = buffer.join("");
             const resp = await safeAuthenticate(ns, hostname, candidate);
             if (resp.success) return candidate;
+            if (await isAlreadyCracked(ns, hostname)) return null;
             return null;
         }
         for (const key of keys) {
@@ -1099,51 +866,6 @@ async function solvePermutationByAuth(ns, hostname, digits, limit) {
     };
 
     return await backtrack(0);
-}
-
-function parseRmsd(resp) {
-    const text = String(resp?.data ?? resp?.message ?? "");
-    const match = text.match(/RMS\s*Deviation\s*:?\s*([0-9.]+)/i);
-    return match ? Number(match[1]) : NaN;
-}
-
-function shuffleString(value) {
-    const chars = value.split("");
-    for (let i = chars.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [chars[i], chars[j]] = [chars[j], chars[i]];
-    }
-    return chars.join("");
-}
-
-function mutateSwap(value) {
-    if (value.length < 2) return value;
-    const chars = value.split("");
-    const i = Math.floor(Math.random() * chars.length);
-    let j = Math.floor(Math.random() * chars.length);
-    if (i === j) j = (j + 1) % chars.length;
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-    return chars.join("");
-}
-
-function parsePepperCount(resp) {
-    const data = String(resp?.data ?? "");
-    if (!data) return NaN;
-    if (data.startsWith("0/")) return 0;
-    const count = (data.match(/🌶️/g) || []).length;
-    if (count > 0) return count;
-    const match = data.match(/^(\d+)\//);
-    return match ? Number(match[1]) : NaN;
-}
-
-function parseAltitude(resp) {
-    if (resp?.data !== undefined && resp?.data !== null && resp?.data !== "") {
-        const value = Number(resp.data);
-        if (Number.isFinite(value)) return value;
-    }
-    const text = String(resp?.message ?? "");
-    const match = text.match(/current altitude:\s*([0-9.]+)/i);
-    return match ? Number(match[1]) : NaN;
 }
 
 function parseBaseN(encoded, base) {
@@ -1284,72 +1006,6 @@ function buildExpressionCandidates(value) {
     return Array.from(new Set(candidates));
 }
 
-function generatePrimes(limit) {
-    const sieve = new Array(limit + 1).fill(true);
-    sieve[0] = false;
-    sieve[1] = false;
-    for (let i = 2; i * i <= limit; i++) {
-        if (!sieve[i]) continue;
-        for (let j = i * i; j <= limit; j += i) sieve[j] = false;
-    }
-    const primes = [];
-    for (let i = 2; i <= limit; i++) if (sieve[i]) primes.push(i);
-    return primes;
-}
-
-async function isDivisibleBy(ns, hostname, divisor) {
-    const resp = await safeAuthenticate(ns, hostname, divisor.toString());
-    if (resp.success) return true;
-    const data = String(resp?.data ?? "").toLowerCase();
-    if (data === "true") return true;
-    if (data === "false") return false;
-    const msg = String(resp?.message ?? "").toLowerCase();
-    if (msg.includes("is divisible")) return true;
-    if (msg.includes("not divisible")) return false;
-    return false;
-}
-
-function parseModuloResult(resp) {
-    const data = resp?.data ?? resp?.message ?? "";
-    const match = String(data).match(/(-?\d+)/);
-    return match ? Number(match[1]) : NaN;
-}
-
-function nextAlignedGreater(max, mod) {
-    const maxMod = Number(max % 32n);
-    let delta = (mod - maxMod + 32) % 32;
-    if (delta === 0) delta = 32;
-    return max + BigInt(delta);
-}
-
-function crt(residues, moduli) {
-    let x = 0n;
-    let m = 1n;
-    for (let i = 0; i < residues.length; i++) {
-        const r = residues[i];
-        const mod = moduli[i];
-        const inv = modInverse(m, mod);
-        const t = (((r - x) % mod) + mod) % mod;
-        const k = (t * inv) % mod;
-        x = x + m * k;
-        m *= mod;
-        x = ((x % m) + m) % m;
-    }
-    return x;
-}
-
-function modInverse(a, mod) {
-    const { g, x } = extendedGcd(a, mod);
-    if (g !== 1n) return 0n;
-    return ((x % mod) + mod) % mod;
-}
-
-function extendedGcd(a, b) {
-    if (b === 0n) return { g: a, x: 1n, y: 0n };
-    const { g, x: x1, y: y1 } = extendedGcd(b, a % b);
-    return { g, x: y1, y: x1 - (a / b) * y1 };
-}
-
 function tierLabel(tier) {
     if (tier === 0) return "trivial";
     if (tier === 1) return "easy";
@@ -1378,11 +1034,6 @@ function getOpenDirections(view) {
     return open;
 }
 
-function nextPositionKey(position, dir) {
-    const delta = directionDelta(dir);
-    return `${position.x + delta.dx},${position.y + delta.dy}`;
-}
-
 function directionDelta(dir) {
     if (dir === "north") return { dx: 0, dy: -2 };
     if (dir === "south") return { dx: 0, dy: 2 };
@@ -1399,17 +1050,40 @@ function reverseDirection(dir) {
 
 async function moveLabyrinth(ns, hostname, position, dir) {
     const resp = await safeAuthenticate(ns, hostname, `go ${dir}`);
-    if (resp.success) return { success: true };
-    const view = parseLabyrinthView(resp.data);
-    const moved = resp?.code !== 401;
-    if (moved) {
-        const delta = directionDelta(dir);
+    if (resp.success) return { success: true, moved: true, position };
+
+    // Parse movement from message text
+    // Moved: "You have moved to X,Y."
+    // Wall:  "You cannot go that way. You are still at X,Y."
+    const msg = resp.message || "";
+    const movedMatch = msg.match(/moved to (\d+),(\d+)/);
+    if (movedMatch) {
+        const newX = parseInt(movedMatch[1], 10);
+        const newY = parseInt(movedMatch[2], 10);
         return {
             success: false,
             moved: true,
-            position: { x: position.x + delta.dx, y: position.y + delta.dy },
-            view,
+            position: { x: newX, y: newY },
         };
     }
-    return { success: false, moved: false, position, view };
+
+    // Not moved (wall or invalid command)
+    return { success: false, moved: false, position };
+}
+
+function parseRadarDirections(radarText) {
+    // labradar returns a 7x7 grid with @ at center (row 3, col 3 in 0-indexed)
+    // We only need the immediate neighbors (1 cell away) to check for walls
+    const rows = radarText.split("\n");
+    if (rows.length < 7) return null;
+    const dirs = [];
+    // North: row 2, col 3 (one cell above center in the 7x7 grid)
+    if (rows[2]?.[3] !== "\u2588") dirs.push("north");
+    // South: row 4, col 3
+    if (rows[4]?.[3] !== "\u2588") dirs.push("south");
+    // West: row 3, col 2
+    if (rows[3]?.[2] !== "\u2588") dirs.push("west");
+    // East: row 3, col 4
+    if (rows[3]?.[4] !== "\u2588") dirs.push("east");
+    return dirs;
 }

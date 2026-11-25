@@ -136,7 +136,7 @@ export function main(ns) {
 function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
     let details;
     try {
-        details = ns.dnet.getServerAuthDetails(hostname);
+        details = ns.dnet.getServerDetails(hostname);
     } catch {
         return null;
     }
@@ -168,7 +168,11 @@ function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
     const difficulty = estimateCrackDifficulty({ modelId: details.modelId });
     const hasStasis = stasisServers.has(hostname);
     const hasPassword = knownPasswords.has(hostname);
-    const hasCaches = details.hasAdminRights
+    let hasAdmin = false;
+    try {
+        hasAdmin = ns.hasRootAccess(hostname);
+    } catch {}
+    const hasCaches = hasAdmin
         ? safeLsCaches(ns, hostname)
         : false;
 
@@ -178,7 +182,7 @@ function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
         isOnline: details.isOnline,
         isConnected: details.isConnectedToCurrentServer,
         hasSession: details.hasSession,
-        hasAdmin: details.hasAdminRights,
+        hasAdmin,
         hasStasis,
         hasPassword,
         hasCaches,
@@ -187,8 +191,8 @@ function gatherServerInfo(ns, hostname, knownPasswords, stasisServers) {
         usedRam,
         blockedRam,
         requiredCharisma,
-        passwordHint: details.passwordHint || details.staticPasswordHint || "",
-        passwordHintData: details.passwordHintData || "",
+        passwordHint: details.passwordHint || "",
+        passwordHintData: details.data || "",
         passwordFormat: details.passwordFormat || "",
         passwordLength: details.passwordLength || 0,
         tier: difficulty.tier,

@@ -146,7 +146,8 @@ const getBBDict = async (ns, strFunction, elements, ...args) =>
     await getNsDataThroughFile(
         ns,
         `Object.fromEntries(JSON.parse(ns.args[0]).map(e => [e, ns.bladeburner.${strFunction.replace("%", "e")}]))`,
-        `/Temp/bladeburner-${strFunction.split("(")[0]}-all.txt`,
+        // One file per action type when there is one (dashboard.jsx reads each), instead of overwriting a shared file
+        `/Temp/bladeburner-${strFunction.split("(")[0]}${args.length ? "-" + String(args[0]).replace(/\s+/g, "") : ""}-all.txt`,
         [JSON.stringify(elements), ...args],
     );
 // Helper for dual-parameter bladeburner functions e.g. getActionCountRemaining(actionType, action)
@@ -319,8 +320,8 @@ async function mainLoop(ns) {
     // If the only operations left to us are "Raid" (reduces population by a %, which, counter-intuitively, is bad for us),
     // thrash the city with the lowest population (but still having some communities to enable Raid).
     if (
-        getCount("Raid") > 0 &&
-        unreservedActions.every((c) => getCount(c) == 0)
+        getCount("Raid") >= 1 &&
+        unreservedActions.every((c) => getCount(c) < 1)
     ) {
         const raidableCities = cityNames.filter(
             (c) => communitiesByCity[c] > 0,
@@ -342,11 +343,11 @@ async function mainLoop(ns) {
         //    `(--allow-raiding-highest-pop-city is set to ${options['allow-raiding-highest-pop-city']})`);
     }
     // SPECIAL CASE: GO TO HIGHEST-CHAOS CITY
-    if (!goToCity && unreservedActions.every((c) => getCount(c) == 0)) {
+    if (!goToCity && unreservedActions.every((c) => getCount(c) < 1)) {
         let [maxChaosCity, maxChaos] = getMaxKeyValue(chaosByCity, cityNames);
         // If all we have left is "Stealth Retirement Operation", switch to the city with the most chaos (if it's a decent amount), and use them up.
         if (
-            getCount("Stealth Retirement Operation") &&
+            getCount("Stealth Retirement Operation") >= 1 &&
             maxChaos > options["chaos-recovery-threshold"]
         ) {
             goToCity = maxChaosCity;
@@ -449,7 +450,7 @@ async function mainLoop(ns) {
     } // If current city chaos is greater than our threshold, keep it low with "Stealth Retirement" if odds are good
     else if (
         chaosByCity[currentCity] > options["chaos-recovery-threshold"] &&
-        getCount(antiChaosOperation) > 0 &&
+        getCount(antiChaosOperation) >= 1 &&
         minChance(antiChaosOperation) > 0.99
     ) {
         bestActionName = antiChaosOperation;
@@ -457,7 +458,7 @@ async function mainLoop(ns) {
     } // If current city chaos is very high, we should be very wary of the snowballing effects, and try to reduce it.
     else if (chaosByCity[currentCity] > options["max-chaos"]) {
         bestActionName =
-            getCount(antiChaosOperation) > 0 &&
+            getCount(antiChaosOperation) >= 1 &&
             minChance(antiChaosOperation) > 0.8
                 ? antiChaosOperation
                 : "Diplomacy";
@@ -528,7 +529,7 @@ async function mainLoop(ns) {
             ? populationActionsByEffectiveness
             : unreservedActions;
         // Filter out candidates with no contract counts remaining
-        candidateActions = candidateActions.filter((a) => getCount(a) > 0);
+        candidateActions = candidateActions.filter((a) => getCount(a) >= 1); // below 1 the action can't be started
         //log(ns, `The following actions are available: ${candidateActions}`); // Debug log to see what candidate actions are
 
         // Pick the first candidate action with a minimum chance of success that exceeds our --success-threshold
@@ -566,7 +567,9 @@ async function mainLoop(ns) {
                 reason = `High population uncertainty in ${currentCity}`;
             } // If all (non-reserved) operation counts are 0, and chaos isn't too high, Incite Violence to get more work (logic above should subsequently reduce chaos)
             else if (
-                unreservedActions.every((a) => getCount(a) == 0) &&
+                // Counts grow fractionally: below 1 an action can't be started, so treat that as none left
+                // (was "== 0", so Incite Violence never ran and ~60% of the time went to Field Analysis; tools/bb-sim)
+                unreservedActions.every((a) => getCount(a) < 1) &&
                 cityNames.every((c) => chaosByCity[c] < options["max-chaos"])
             ) {
                 bestActionName = "Incite Violence";
@@ -613,15 +616,17 @@ async function mainLoop(ns) {
     const currentAction = await getBBInfo(ns, `getCurrentAction()`);
     // Special case: If the user has manually kicked off the last BlackOps, don't interrupt it, let it be our last task
     if (
-        currentAction?.name ==
-        remainingBlackOpsNames[remainingBlackOpsNames - 1]
+        currentAction &&
+        remainingBlackOpsNames.length > 0 &&
+        currentAction.name ==
+            remainingBlackOpsNames[remainingBlackOpsNames.length - 1]
     )
         lastAssignedTask = currentAction;
     // Warn the user if it looks like a task was interrupted by something else (user activity or bladeburner automation). Ignore if our last assigned task has run out of actions.
     if (
         lastAssignedTask &&
         lastAssignedTask != currentAction?.name &&
-        getCount(lastAssignedTask) > 0
+        getCount(lastAssignedTask) >= 1
     ) {
         log(
             ns,
@@ -715,51 +720,31 @@ async function switchToCity(ns, city, reason) {
 /** @param {NS} ns
  * Decides how to spend skill points. */
 async function spendSkillPoints(ns) {
-    while (true) {
-        // Loop until we determine there's nothing left to spend skill points on
-        const unspent = await getBBInfo(ns, "getSkillPoints()");
-        if (unspent == 0) return;
-        const skillLevels = await getBBDict(ns, "getSkillLevel(%)", skillNames);
-        const skillCosts = await getBBDict(
+    // Run the whole greedy loop in one temp script (previously 4 temp scripts + a sleep per skill point, which
+    // blocked the main loop for minutes when hashes were converted to SP). Same rule: repeatedly buy the skill
+    // with the lowest perceived (adjusted) cost while affordable.
+    const bought = await getNsDataThroughFile(
+        ns,
+        "(()=>{const b=ns.bladeburner;const names=JSON.parse(ns.args[0]);const adj=JSON.parse(ns.args[1]);const bought={};" +
+            "for(let n=0;n<100000;n++){const sp=b.getSkillPoints();let best=null,bestCost=Infinity;" +
+            "for(const s of names){let c=b.getSkillUpgradeCost(s);if(c==null)c=Infinity;" +
+            "if(s==='Overclock'&&b.getSkillLevel(s)>=90)c=Infinity;const pc=c*(adj[s]||1);" +
+            "if(pc<bestCost){bestCost=pc;best=[s,c];}}" +
+            "if(!best||bestCost>sp||best[1]>sp)break;if(!b.upgradeSkill(best[0]))break;" +
+            "bought[best[0]]=(bought[best[0]]||0)+1;}return bought;})()",
+        "/Temp/bladeburner-spend-skill-points.txt",
+        [JSON.stringify(skillNames), JSON.stringify(costAdjustments)],
+    );
+    const summary = Object.entries(bought ?? {})
+        .map(([name, n]) => `${name} x${n}`)
+        .join(", ");
+    if (summary)
+        log(
             ns,
-            "getSkillUpgradeCost(%)",
-            skillNames,
+            `SUCCESS: Upgraded Bladeburner skills: ${summary}`,
+            false,
+            options["toast-upgrades"] ? "success" : undefined,
         );
-        // Find the next lowest skill cost
-        let skillToUpgrade,
-            minPercievedCost = Number.MAX_SAFE_INTEGER;
-        for (const skillName of skillNames) {
-            // Workaround: Next v2.6.0 API is supposed to return 'Infinity' for skills that can't be upgraded but this comes back as null
-            let percievedCost =
-                (skillCosts[skillName] ?? Number.POSITIVE_INFINITY) *
-                (costAdjustments[skillName] || 1);
-            // Bitburner pre-2.6.0 workaround: Overclock is capped at lvl 90, but the cost makes it seem upgradable
-            if (skillName === "Overclock" && skillLevels[skillName] == 90)
-                percievedCost = Number.POSITIVE_INFINITY;
-            if (percievedCost < minPercievedCost)
-                [skillToUpgrade, minPercievedCost] = [skillName, percievedCost];
-        }
-        // If the percieved or actual cost of the next best upgrade is too high, save our remaining points for later
-        if (minPercievedCost > unspent || skillCosts[skillToUpgrade] > unspent)
-            return;
-        // Otherwise, purchase the upgrade
-        if (await getBBInfo(ns, `upgradeSkill(ns.args[0])`, skillToUpgrade))
-            log(
-                ns,
-                `SUCCESS: Upgraded Bladeburner skill ${skillToUpgrade}`,
-                false,
-                options["toast-upgrades"] ? "success" : undefined,
-            );
-        else
-            log(
-                ns,
-                `WARNING: Something went wrong while trying to upgrade Bladeburner skill ${skillToUpgrade}. ` +
-                    `Currently have ${unspent} SP, upgrade should cost ${skillCosts[skillToUpgrade]} SP.`,
-                false,
-                "warning",
-            );
-        await ns.sleep(10);
-    }
 }
 
 /** @param {NS} ns
@@ -822,7 +807,7 @@ async function beingInBladeburner(ns) {
                 if (9 in ownedSourceFiles && options["disable-spending-hashes"])
                     message +=
                         " --disable-spending-hashes is set, but consider running the following command to give it a boost:\n" +
-                        "run spend-hacknet-hashes.js --spend-on Exchange_for_Bladeburner_Rank --spend-on Exchange_for_Bladeburner_SP --liquidate";
+                        "run spend-hacknet-hashes.js --spend-on Exchange_for_Bladeburner_Rank --liquidate --no-corp-priority";
                 log(ns, message, true, "success");
                 break;
             } else
@@ -856,16 +841,17 @@ async function beingInBladeburner(ns) {
         );
     const fPath = getFilePath("spend-hacknet-hashes.js");
     const args = [
+        // Rank only: in tools/bb-sim (BN12, 50 hashes/s, installs hourly) rank alone finished the Black Operations in
+        // 43h without sleeves (11.5h with 8), rank+SP in 52h (12h), SP alone 63h - no better than no hashes (61h)
         "--spend-on",
         "Exchange_for_Bladeburner_Rank",
-        "--spend-on",
-        "Exchange_for_Bladeburner_SP",
         "--liquidate",
+        "--no-corp-priority", // hashes are for Bladeburner rank here
     ];
     if (ns.run(fPath, { preventDuplicates: true }, ...args))
         log(
             ns,
-            `INFO: Launched '${fPath}' to gain Bladeburner Rank and Skill Points more quickly (Can be disabled with --disable-spending-hashes)`,
+            `INFO: Launched '${fPath}' to gain Bladeburner Rank more quickly (Can be disabled with --disable-spending-hashes)`,
         );
     else log(ns, `WARNING: Failed to launch '${fPath}' (already running?)`);
 }

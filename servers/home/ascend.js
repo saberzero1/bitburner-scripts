@@ -67,7 +67,7 @@ export async function main(ns) {
 
     // STEP 1: Liquidate Stocks and (SF9) Hacknet Hashes
     log(ns, "Sell stocks and hashes...", true, "info");
-    ns.run(getFilePath("spend-hacknet-hashes.js"), 1, "--liquidate");
+    ns.run(getFilePath("spend-hacknet-hashes.js"), 1, "--liquidate", "--no-corp-priority"); // all hashes to money before buying augs
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
     const hasTixApiAccess = await getNsDataThroughFile(
@@ -181,6 +181,7 @@ export async function main(ns) {
         facmanArgs.push("--ignore-stanek");
     }
     pid = ns.run(getFilePath("faction-manager.js"), 1, ...facmanArgs);
+    const facmanLaunched = pid != 0;
     await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it is done.
 
     // If we are not slated to install any augmentations, ABORT
@@ -197,14 +198,22 @@ export async function main(ns) {
     );
     let noAugsToInstall =
         purchasedAugmentations.length == installedAugmentations.length;
-    if (noAugsToInstall && !options["allow-soft-reset"])
-        return log(
+    if (noAugsToInstall && !options["allow-soft-reset"]) {
+        log(
             ns,
-            `ERROR: See above faction-manager.js logs - there are no new purchased augs. ` +
+            `ERROR: Not installing - there are no new purchased augs. ` +
+                (facmanLaunched
+                    ? `See the faction-manager.js logs (it may have aborted because costs exceeded player money, ` +
+                      `another instance may already have been running, or nothing on its plan was actually affordable). `
+                    : `faction-manager.js failed to launch (pid 0 - not enough RAM?). `) +
                 `Specify --allow-soft-reset to proceed without any purchased augs.`,
             true,
             "error",
         );
+        // We killed every script (including autopilot) at startup. Relaunch automation so the game doesn't sit idle.
+        await relaunchAutomation(ns, options);
+        return;
+    }
 
     // STEP 2 (If Deferred): Upgrade home RAM after purchasing augmentations if this option was set.
     if (!options["prioritize-home-ram"]) await spendOnHomeRam();
@@ -358,7 +367,9 @@ export async function main(ns) {
     }
     const canExport = await getNsDataThroughFile(
         ns,
-        "ns.singularity.exportGameBonus()",
+        // hasExportGameBonus replaces exportGameBonus on newer dev builds; use whichever exists
+        "(ns.singularity.hasExportGameBonus ?? ns.singularity.exportGameBonus)()",
+        "/Temp/singularity-hasExportGameBonus.txt",
     );
     if (canExport) {
         log(ns, "Exporting game to claim free faction favor...", true, "info");
@@ -403,5 +414,35 @@ export async function main(ns) {
                 `to actually perform the reset automatically.`,
             true,
             "success",
+        );
+}
+
+/** Called when ascend.js gives up without resetting. Since we killed all scripts at startup,
+ * restart the --on-reset-script (default: autopilot.js) so that automation resumes.
+ * @param {NS} ns */
+async function relaunchAutomation(ns, options) {
+    const script = options["on-reset-script"] ?? getFilePath("autopilot.js");
+    log(
+        ns,
+        `INFO: Relaunching ${script} so that automation resumes after the aborted install.`,
+        true,
+        "warning",
+    );
+    if (ns.run(script) != 0) return;
+    // Likely not enough free RAM while this script is still running. Launch a tiny helper that waits
+    // for this script to exit (freeing its RAM) and then starts the target script.
+    const helperPid = await runCommand(
+        ns,
+        `while (ns.isRunning(ns.args[1])) await ns.sleep(50); ` +
+            `if (!ns.run(ns.args[0])) ns.tprint("ERROR: ascend.js failed to relaunch " + ns.args[0]);`,
+        "/Temp/ascend-relaunch.js",
+        [script, ns.pid],
+    );
+    if (!helperPid)
+        log(
+            ns,
+            `ERROR: Failed to relaunch ${script}. Automation is not running - please start it manually.`,
+            true,
+            "error",
         );
 }

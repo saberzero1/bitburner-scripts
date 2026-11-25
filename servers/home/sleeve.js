@@ -11,7 +11,8 @@ import {
 } from "./helpers.js";
 
 const argsSchema = [
-    ["min-shock-recovery", 97], // Minimum shock recovery before attempting to train or do crime (Set to 100 to disable, 0 to recover fully)
+    // ["min-shock-recovery", 97], // Minimum shock recovery before attempting to train or do crime (Set to 100 to disable, 0 to recover fully)
+    ["min-shock-recovery", 90], // Minimum shock recovery before attempting to train or do crime (Set to 100 to disable, 0 to recover fully)
     ["shock-recovery", 0.05], // Set to a number between 0 and 1 to devote that ratio of time to periodic shock recovery (until shock is at 0)
     ["crime", null], // If specified, sleeves will perform only this crime regardless of stats
     ["homicide-chance-threshold", 0.5], // Sleeves on crime will automatically start homicide once their chance of success exceeds this ratio
@@ -29,7 +30,10 @@ const argsSchema = [
     ["study-to-hacking", 25], // Sleeves will go to university until they reach this much Hak
     ["study-to-charisma", 25], // Sleeves will go to university until they reach this much Cha
     ["training-reserve", null], // Defaults to global reserve.txt. Can be set to a negative number to allow debt. Sleeves will not train if money is below this amount.
-    ["training-cap-seconds", 2 * 60 * 60 /* 2 hours */], // Time since the start of the bitnode after which we will no longer attempt to train sleeves to their target "train-to" settings
+    ["training-cap-seconds", 5 * 60 * 60 /* 5 hours */], // Time since the start of the bitnode after which we will no longer attempt to train sleeves to their target "train-to" settings
+    // (tools/sleeve-sim with BN12.76's stat LEVEL multipliers too (verified against a live run: karma -7.7k at 2.5h both):
+    // gang karma at 11.5h with 5h, 11.7h with 4h, 12.1h with 3h, 12.4h with 8h. An earlier sim without the level
+    // multipliers made sleeves ~4.5x stronger and picked 3h, predicting 6.6h.)
     ["disable-spending-hashes-for-gym-upgrades", false], // Set to true to disable spending hashes on gym upgrades when training up sleeves.
     ["disable-spending-hashes-for-study-upgrades", false], // Set to true to disable spending hashes on study upgrades when smarting up sleeves.
     ["enable-bladeburner-team-building", false], // Set to true to have one sleeve support the main sleeve, and another do recruitment. Otherwise, they will just do more "Infiltrate Synthoids"
@@ -91,6 +95,9 @@ export async function main(ns) {
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     disableLogs(ns, ["getServerMoneyAvailable"]);
     // Ensure the global state is reset (e.g. after entering a new bitnode)
+    // Module state persists across runs (and installs), so don't reuse faction caches from a previous run
+    factionWorkCacheExpiry = 0;
+    factionWorkTypesCacheExpiry = 0;
     ((task = []),
         (lastStatusUpdateTime = []),
         (lastPurchaseTime = []),
@@ -257,6 +264,8 @@ async function getFactionWorkTargets(ns, playerInfo) {
             unownedCount: factionAugMap[name].filter(
                 (aug) => !ownedAugs.includes(aug),
             ).length,
+            // The Red Pill's rep is usually the last thing a run waits for, so its faction gets a sleeve first
+            redPill: factionAugMap[name].includes("The Red Pill") && !ownedAugs.includes("The Red Pill"),
             rep: factionRepCache[name] ?? 0,
             supportedWorks: factionWorkTypesCache[name] ?? works,
             supportedWorksLower: (factionWorkTypesCache[name] ?? works).map(
@@ -273,6 +282,7 @@ async function getFactionWorkTargets(ns, playerInfo) {
         )
         .sort(
             (a, b) =>
+                b.redPill - a.redPill ||
                 b.unownedCount - a.unownedCount ||
                 a.rep - b.rep ||
                 a.name.localeCompare(b.name),
@@ -435,7 +445,7 @@ async function mainLoop(ns) {
     )
         if (
             sleeveInfo[i].shock == 0 &&
-            (i < i || i > 3 || !playerInBladeburner)
+            (i < 1 || i > 3 || !playerInBladeburner) // sleeves 1-3 do Bladeburner contracts
         )
             followPlayerSleeve ??= i; // Skips assignment if previously assigned
     followPlayerSleeve ??= 0; // If all have shock, use the first sleeve
@@ -446,12 +456,12 @@ async function mainLoop(ns) {
         `/Temp/sleeve-getTask-all.txt`,
         [...Array(numSleeves).keys()],
     );
-    const assignedFactions = new Set(
-        currentSleeveTasks
-            .filter((t) => t?.type === "FACTION")
-            .map((t) => t.factionName)
-            .filter(Boolean),
-    );
+    // faction -> index of the sleeve working for it. Only OTHER sleeves block a faction: a sleeve that is already
+    // working for a faction must not treat it as taken (it would flip between tasks every loop).
+    const assignedFactions = new Map();
+    currentSleeveTasks.forEach((t, idx) => {
+        if (t?.type === "FACTION" && t.factionName) assignedFactions.set(t.factionName, idx);
+    });
     for (let i = 0; i < numSleeves; i++) {
         let sleeve = sleeveInfo[i]; // For convenience, merge all sleeve stats/info into one object
         // Manage sleeve augmentations (if available)
@@ -477,7 +487,10 @@ async function mainLoop(ns) {
             const factionMatch = designatedTask.match(
                 /work for faction '([^']+)'/,
             );
-            if (factionMatch) assignedFactions.add(factionMatch[1]);
+            if (factionMatch) {
+                for (const [f, idx] of assignedFactions) if (idx === i) assignedFactions.delete(f);
+                assignedFactions.set(factionMatch[1], i);
+            }
         }
 
         // After picking sleeve tasks, take a note of the sleeve's health at the end of the prior loop so we can detect failures
@@ -514,6 +527,11 @@ async function mainLoop(ns) {
     }
 }
 
+/** Is this faction being worked by a sleeve other than sleeve i? */
+function takenByOtherSleeve(assignedFactions, faction, i) {
+    return assignedFactions.has(faction) && assignedFactions.get(faction) !== i;
+}
+
 async function pickSleeveTask(
     ns,
     playerInfo,
@@ -544,7 +562,7 @@ async function pickSleeveTask(
     // To time-balance between being useful and recovering from shock more quickly - sleeves have a random chance to be put
     // on shock recovery. To avoid frequently interrupting tasks that take a while to complete, only re-roll every so often.
     if (sleeve.shock > 0 && options["shock-recovery"] > 0) {
-        if (Date.now() - (lastRerollTime[i] || 0) < rerollTime) {
+        if (Date.now() - (lastRerollTime[i] || 0) >= rerollTime) {
             shockChance[i] = Math.random();
             lastRerollTime[i] = Date.now();
         }
@@ -628,7 +646,7 @@ async function pickSleeveTask(
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
         const faction = playerWorkInfo.factionName;
-        if (!assignedFactions.has(faction)) {
+        if (!takenByOtherSleeve(assignedFactions, faction, i)) {
             if (gangFactionName && faction === gangFactionName)
                 unsupportedFactionWork[faction] =
                     Date.now() + unsupportedFactionWorkCooldown;
@@ -663,10 +681,19 @@ async function pickSleeveTask(
             }
         }
     }
-    if (i != followPlayerSleeve) {
+    // Faction work for non-following sleeves comes after higher priorities: gang karma (homicide) and the
+    // Bladeburner contract sleeves (1-3). Otherwise joined factions would soak up every sleeve.
+    const needGangKarma =
+        !playerInGang &&
+        !options["disable-gang-homicide-priority"] &&
+        2 in ownedSourceFiles &&
+        ns.heart.break() > -54000;
+    const reservedForBladeburner = playerInBladeburner && i >= 1 && i <= 3;
+    if (i != followPlayerSleeve && !needGangKarma && !reservedForBladeburner) {
         const factionTargets = await getFactionWorkTargets(ns, playerInfo);
+        const joined = playerInfo.factions ?? [];
         const nextFaction = factionTargets.find(
-            (f) => !assignedFactions.has(f.name),
+            (f) => joined.includes(f.name) && !takenByOtherSleeve(assignedFactions, f.name, i),
         );
         if (nextFaction) {
             const faction = nextFaction.name;
@@ -808,10 +835,10 @@ async function pickSleeveTask(
     // Finally, do crime for Karma. Pick the best crime based on success chances
     var crime =
         options.crime ||
-        (await calculateCrimeChance(ns, sleeve, "Homicide")) >=
-            options["homicide-chance-threshold"]
+        ((await calculateCrimeChance(ns, sleeve, "Homicide")) >=
+        options["homicide-chance-threshold"]
             ? "Homicide"
-            : "Mug";
+            : "Mug");
     return await crimeTask(
         ns,
         crime,

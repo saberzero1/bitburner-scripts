@@ -1,0 +1,8 @@
+O3 {"budget":{"mainOffice":0.52,"supportOffices":0.52}}
+O3_nodummy {"budget":{"mainOffice":0.52,"supportOffices":0.52},"no-dummy-divisions":true}
+O3_seed0 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"support-seed":0}
+O3_seed2 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"support-seed":2}
+O3_supp05 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"support-scale":0.5}
+O3_int2 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"spend-interval":2}
+O3_frac07 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"spend-fraction":0.7}
+O3_r3 {"budget":{"mainOffice":0.52,"supportOffices":0.52},"investment-rounds":3}

@@ -1,0 +1,4 @@
+default {}
+divers50 {"diversification":0.5}
+budget95 {"buy-4s-budget":0.95}
+divers50_budget95 {"diversification":0.5,"buy-4s-budget":0.95}

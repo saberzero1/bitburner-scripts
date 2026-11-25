@@ -92,28 +92,35 @@ export async function main(ns) {
     );
 
     // 2. Pick dimensions (why not pick many!)
-    //const height = 6; //ns.stanek.giftHeight()
-    //const width = 6; //ns.stanek.giftWidth(); // NOTE: Width is always the same, or one more than height.
-    for (let height = 3; height <= 5; height++)
-        for (let width = height; width <= height + 1; width++) {
-            const [score, plan] = await planFragments(
-                ns,
-                width,
-                height,
-                statFrags,
-                boosterFrags,
+    // By default, plan for the current gift size (SF13 can make it 6-7+ rows). --height/--width override it;
+    // --all plans every size from 3 rows up to that height. Width is always the same as height, or one more.
+    const options = ns.flags([["height", 0], ["width", 0], ["all", false]]);
+    const maxHeight = options.height || ns.stanek.giftHeight();
+    const maxWidth = options.width || ns.stanek.giftWidth();
+    const sizes = [];
+    if (options.all) {
+        for (let height = 3; height <= maxHeight; height++)
+            for (let width = height; width <= Math.min(height + 1, maxWidth); width++) sizes.push([height, width]);
+    } else sizes.push([maxHeight, maxWidth]);
+    for (const [height, width] of sizes) {
+        const [score, plan] = await planFragments(
+            ns,
+            width,
+            height,
+            statFrags,
+            boosterFrags,
+        );
+        ns.tprint(score);
+        const strFragments = [];
+        // Output the layout so you can stick it in a database
+        for (const elem of [...plan.stats, ...plan.boosters])
+            strFragments.push(
+                `{"id":${elem.fragment.id},"x":${elem.x},"y":${elem.y},"rotation":${elem.rot}}`,
             );
-            ns.tprint(score);
-            const strFragments = [];
-            // Output the layout so you can stick it in a database
-            for (const elem of [...plan.stats, ...plan.boosters])
-                strFragments.push(
-                    `{"id":${elem.fragment.id},"x":${elem.x},"y":${elem.y},"rotation":${elem.rot}}`,
-                );
-            ns.tprint(
-                `\n{"height": ${height}, "width": ${width}, "fragments": [\n    ${strFragments.join(",\n    ")}\n]}`,
-            );
-        }
+        ns.tprint(
+            `\n{"height": ${height}, "width": ${width}, "fragments": [\n    ${strFragments.join(",\n    ")}\n]}`,
+        );
+    }
 }
 
 /** @param {NS} ns */

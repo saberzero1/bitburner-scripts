@@ -1,0 +1,12 @@
+d1 {}
+d2 {}
+res0a {"reserved-action-count":0}
+res0b {"reserved-action-count":0}
+res20a {"reserved-action-count":20}
+res20b {"reserved-action-count":20}
+res50a {"reserved-action-count":50}
+res50b {"reserved-action-count":50}
+res20_chaos100a {"reserved-action-count":20,"chaos-recovery-threshold":100}
+res20_chaos100b {"reserved-action-count":20,"chaos-recovery-threshold":100}
+res20_max50a {"reserved-action-count":20,"max-chaos":50}
+res20_max50b {"reserved-action-count":20,"max-chaos":50}

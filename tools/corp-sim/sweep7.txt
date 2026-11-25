@@ -1,0 +1,8 @@
+B_O2 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348}}
+B_O15 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.26,"supportOffices":0.26}}
+B_O25 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.435,"supportOffices":0.435}}
+B_O2_E05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348,"employeeStats":0.174}}
+B_O2_WA05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348,"wilson":0.043,"advert":0.043}}
+B_O2_E05_WA05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348,"employeeStats":0.174,"wilson":0.043,"advert":0.043}}
+B_O2_seed05 {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.348,"supportOffices":0.348},"support-seed":0.5}
+B_O2_main {"tea-below":3,"party-below":5,"party-max":500000,"interns":true,"budget":{"mainOffice":0.52,"supportOffices":0.174}}
